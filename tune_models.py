@@ -7,7 +7,8 @@ import os
 import itertools
 import json
 import lightgbm as lgb
-from optuna.storages import JournalStorage, JournalFileBackend
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import KNNImputer, SimpleImputer

@@ -8,7 +8,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, classification_report
-from optuna.storages import JournalStorage, JournalFileBackend
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend
 
 # Import the centralized logger
 from logging_utils import log
