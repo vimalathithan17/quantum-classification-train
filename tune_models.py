@@ -24,6 +24,9 @@ from qml_models import (
     ConditionalMulticlassQuantumClassifierDataReuploadingFS
 )
 
+# Directories configurable via environment
+SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
+
 def safe_load_parquet(file_path):
     """Loads a parquet file with increased thrift limits, returning None on failure."""
     if not os.path.exists(file_path):
@@ -139,7 +142,7 @@ def main():
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
     args = parser.parse_args()
 
-    df = safe_load_parquet(f'final_processed_datasets/data_{args.datatype}_.parquet')
+    df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
     if df is None: return
 
     X = df.drop(columns=['case_id', 'class'])

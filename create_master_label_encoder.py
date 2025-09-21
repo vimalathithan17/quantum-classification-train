@@ -4,10 +4,10 @@ import joblib
 from sklearn.preprocessing import LabelEncoder
 
 # --- Configuration ---
-# The directory containing all your source data files
-SOURCE_DIR = 'final_processed_datasets'
+# The directory containing all your source data files (configurable via env var SOURCE_DIR)
+SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
 # The directory where you will save your final models and outputs
-OUTPUT_DIR = 'master_label_encoder'
+OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'master_label_encoder')
 # The name of the column containing the categorical labels
 LABEL_COL = 'class'
 

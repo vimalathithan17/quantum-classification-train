@@ -12,10 +12,11 @@ from sklearn.impute import SimpleImputer
 from qml_models import ConditionalMulticlassQuantumClassifierDataReuploadingFS
 
 # --- Configuration ---
-SOURCE_DIR = 'final_processed_datasets'
-OUTPUT_DIR = 'base_learner_outputs_app2_reuploading'
-TUNING_RESULTS_DIR = 'tuning_results'
-ENCODER_DIR = 'master_label_encoder'
+# Directories (configurable via environment variables)
+SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
+OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'base_learner_outputs_app2_reuploading')
+TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
+ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 ID_COL = 'case_id'
 LABEL_COL = 'class'
 DATA_TYPES_TO_TRAIN = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
