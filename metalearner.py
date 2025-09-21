@@ -92,7 +92,7 @@ def assemble_meta_data(preds_dirs, indicator_file):
     
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes, verbose=False):
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     """Defines one trial for tuning the meta-learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
@@ -101,7 +101,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, verbose=False):
         'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
         'n_layers': trial.suggest_int('n_layers', 1, 6),
         'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True),
-        'steps': trial.suggest_int('steps', 50, 150, step=25)
+        'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25)
     }
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
@@ -111,7 +111,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, verbose=False):
         'learning_rate': params['learning_rate'], 
         'steps': params['steps'], 
         'n_classes': n_classes,
-        'verbose': verbose
+        'verbose': args.verbose
     }
     
     if params['qml_model'] == 'standard':
@@ -135,6 +135,8 @@ def main():
     parser.add_argument('--indicator_file', type=str, required=True, help="Path to the parquet file with indicator features and labels.")
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
     parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
+    parser.add_argument('--min_steps', type=int, default=50, help="Minimum training steps for tuning.")
+    parser.add_argument('--max_steps', type=int, default=150, help="Maximum training steps for tuning.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
@@ -160,7 +162,7 @@ def main():
         storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
         
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, verbose=args.verbose), n_trials=args.n_trials)
+        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")

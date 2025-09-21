@@ -84,6 +84,9 @@ Examples:
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging, tuning steps between 75 and 125
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --min_steps 75 --max_steps 125 --verbose
+
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
 ```
@@ -257,6 +260,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1 when not `SNV`).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
+	- `--min_steps` (int, default 50): Minimum training steps for tuning.
+	- `--max_steps` (int, default 100): Maximum training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
 
@@ -288,6 +293,10 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--encoder_dir` (str, default `master_label_encoder`): Directory containing `label_encoder.joblib`.
 	- `--tune` (flag): If provided, the script will run hyperparameter tuning (Optuna) for the meta-learner and write best params to the `--params_file`.
 	- `--params_file` (str, default `meta_learner_best_params.json`): JSON file to read/write best hyperparameters.
+	- `--mode` (str, default `train`): Operation mode, `train` or `tune`.
+	- `--n_trials` (int, default 50): Number of Optuna trials for tuning.
+	- `--min_steps` (int, default 50): Minimum training steps for tuning.
+	- `--max_steps` (int, default 150): Maximum training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 
 6) `inference.py`
@@ -300,3 +309,71 @@ Environment variables relevant to CLI behavior
 - `TUNING_RESULTS_DIR` — directory where tuning outputs are read/written (default `tuning_results`).
 - `ENCODER_DIR` — directory for the master `label_encoder.joblib` (default `master_label_encoder`).
 - `OUTPUT_DIR` — per-script output directory; most scripts provide a sensible default but will respect the env var when set.
+
+### Command-line arguments for `tune_models.py`
+
+| Argument | Type | Required | Default | Choices | Description |
+|---|---|---|---|---|---|
+| `--datatype` | str | Yes | - | - | Data type (e.g., `CNV`, `Meth`). |
+| `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
+| `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
+| `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
+| `--n_trials` | int | No | `30` | - | Number of Optuna trials. |
+| `--min_steps` | int | No | `50` | - | Minimum training steps for tuning. |
+| `--max_steps` | int | No | `100` | - | Maximum training steps for tuning. |
+| `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+
+### Example commands for `tune_models.py`
+
+```bash
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
+
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging, tuning steps between 75 and 125
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --min_steps 75 --max_steps 125 --verbose
+
+# Tune Approach 2 (reuploading) for Prot (30 trials)
+python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
+```
+
+### Command-line arguments for `metalearner.py`
+
+| Argument | Type | Required | Default | Choices | Description |
+|---|---|---|---|---|---|
+| `--preds_dir` | str | Yes | - | - | One or more directories with `train_oof_preds_*` and `test_preds_*` files. |
+| `--indicator_file` | str | No | `indicator_features.parquet` | - | Parquet file with indicator features and true `class` column. |
+| `--encoder_dir` | str | No | `master_label_encoder` | - | Directory with `label_encoder.joblib`. |
+| `--tune` | flag | No | `False` | - | Run hyperparameter tuning (Optuna) for the meta-learner. |
+| `--params_file` | str | No | `meta_learner_best_params.json` | - | JSON file to read/write best hyperparameters. |
+| `--mode` | str | No | `train` | `train`, `tune` | Operation mode. |
+| `--n_trials` | int | No | `50` | - | Number of Optuna trials for tuning. |
+| `--min_steps` | int | No | `50` | - | Minimum training steps for tuning. |
+| `--max_steps` | int | No | `150` | - | Maximum training steps for tuning. |
+| `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+
+### Example commands for `metalearner.py`
+
+```bash
+# Tune the meta-learner with 100 trials and verbose logging, tuning steps between 100 and 200
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode tune \
+    --n_trials 100 \
+    --min_steps 100 \
+    --max_steps 200 \
+    --verbose
+```
+
+## Available data types
+
+The following data types can be passed to the `--datatype` argument in the scripts:
+
+- `CNV`
+- `GeneExpr`
+- `Meth`
+- `Prot`
+- `SNV`
+- `miRNA`
+
+---

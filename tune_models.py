@@ -63,7 +63,7 @@ def objective(trial, args, X, y, n_classes):
     # Log suggested parameters
     params = {
         'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
-        'steps': trial.suggest_int('steps', 50, 100, step=25),
+        'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25),
         'n_qubits': trial.suggest_int('n_qubits', n_classes, 12),
         'n_layers': trial.suggest_int('n_layers', 1, 5)
     }
@@ -162,6 +162,8 @@ def main():
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
+    parser.add_argument('--min_steps', type=int, default=50, help="Minimum training steps for tuning.")
+    parser.add_argument('--max_steps', type=int, default=100, help="Maximum training steps for tuning.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
