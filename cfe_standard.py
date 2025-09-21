@@ -3,18 +3,20 @@ import os
 import joblib
 import json
 import numpy as np
+import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the corrected multiclass model
-from qml_models import ConditionalMulticlassQuantumClassifierDataReuploadingFS
+from qml_models import ConditionalMulticlassQuantumClassifierFS
 
 # --- Configuration ---
 # Directories (configurable via environment variables)
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
-OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'base_learner_outputs_app2_reuploading')
+OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'base_learner_outputs_app2_standard')
 TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
 ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 ID_COL = 'case_id'
@@ -55,15 +57,15 @@ for data_type in DATA_TYPES_TO_TRAIN:
     param_file_found = None
     search_pattern = f"_{data_type}_app2_"
     for filename in os.listdir(TUNING_RESULTS_DIR):
-        if search_pattern in filename and "_reuploading" in filename:
+        if search_pattern in filename and "_standard" in filename:
             param_file_found = os.path.join(TUNING_RESULTS_DIR, filename)
             break
     
     if not param_file_found:
-        print(f"\n--- No tuned parameter file found for {data_type} (Approach 2, Re-uploading). Skipping. ---")
+        print(f"\n--- No tuned parameter file found for {data_type} (Approach 2, Standard). Skipping. ---")
         continue
 
-    print(f"\n--- Training Base Learner for: {data_type} (Approach 2, Re-uploading) ---")
+    print(f"\n--- Training Base Learner for: {data_type} (Approach 2, Standard) ---")
     with open(param_file_found, 'r') as f:
         config = json.load(f)
 
@@ -75,28 +77,51 @@ for data_type in DATA_TYPES_TO_TRAIN:
     y = le.transform(y_categorical)
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    # Convert y back to pandas Series for easier indexing with iloc
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
 
     n_features = config['n_qubits']
-    
-    # --- Generate Out-of-Fold Predictions ---
+    if data_type == 'Meth':
+        print("  - Using advanced LightGBM feature selection for Meth data...")
+        # Use a more robust imputer for the selector
+        imputer_for_fs = KNNImputer(n_neighbors=5)
+        X_train_imputed = imputer_for_fs.fit_transform(X_train)
+        
+        # Use the powerful embedded method for final feature selection
+        selector = SelectFromModel(
+            lgb.LGBMClassifier(random_state=42), 
+            max_features=n_features # Use the tuned number of features
+        ).fit(X_train_imputed, y_train)
+        
+        final_selected_cols = X_train.columns[selector.get_support()]
+        # The rest of the script will now use these intelligently selected columns
+    else:
+        # For all other data types, we will select features inside the CV loop as before
+        final_selected_cols = None
+
+    # --- Generate Out-of-Fold Predictions Correctly ---
     print("  - Generating out-of-fold predictions...")
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-    oof_preds = np.zeros((len(X_train), n_classes))
+    oof_preds = np.zeros((len(X_train), n_classes)) # Correct shape for multiclass
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
         print(f"    - Processing Fold {fold + 1}/3...")
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-        imputer_for_fs = SimpleImputer(strategy='median')
-        X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
-        selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
-        selected_cols = X_train_fold.columns[selector.get_support()]
+        # 1. Feature selection INSIDE the fold
+        if final_selected_cols is not None: # We already selected features for Meth
+            selected_cols = final_selected_cols
+        else: # Use fast selection for other data types
+            imputer_for_fs = SimpleImputer(strategy='median')
+            X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
+            selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
+            selected_cols = X_train_fold.columns[selector.get_support()]
         
         X_train_fold_selected = X_train_fold[selected_cols]
         X_val_fold_selected = X_val_fold[selected_cols]
 
+        # 2. Prepare data tuple (mask, fill, scale) for this fold
         is_missing_train = X_train_fold_selected.isnull().astype(int).values
         X_train_filled = X_train_fold_selected.fillna(0.0).values
         is_missing_val = X_val_fold_selected.isnull().astype(int).values
@@ -107,13 +132,14 @@ for data_type in DATA_TYPES_TO_TRAIN:
         X_train_scaled = scaler.transform(X_train_filled)
         X_val_scaled = scaler.transform(X_val_filled)
         
-        model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
+        # 3. Train model on this fold and predict on the validation part
+        model = ConditionalMulticlassQuantumClassifierFS(
             n_qubits=n_features, n_layers=config['n_layers'], 
             steps=config['steps'], n_classes=n_classes
         )
         model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
         val_preds = model.predict_proba((X_val_scaled, is_missing_val))
-        oof_preds[val_idx] = val_preds
+        oof_preds[val_idx] = val_preds # Assign the full probability matrix
 
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
@@ -132,7 +158,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     final_scaler = get_scaler(config.get('scaler', 'MinMax'))
     X_train_scaled = final_scaler.fit_transform(X_train_filled)
     
-    final_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
+    final_model = ConditionalMulticlassQuantumClassifierFS(
         n_qubits=n_features, n_layers=config['n_layers'], 
         steps=config['steps'], n_classes=n_classes
     )
@@ -155,3 +181,32 @@ for data_type in DATA_TYPES_TO_TRAIN:
     joblib.dump(final_scaler, os.path.join(OUTPUT_DIR, f'scaler_{data_type}.joblib'))
     joblib.dump(final_model, os.path.join(OUTPUT_DIR, f'qml_model_{data_type}.joblib'))
     print(f"  - Saved final selector, scaler, and QML model for {data_type}.")
+
+    # --- Classification report on the hold-out test set ---
+    try:
+        test_preds_labels = np.argmax(test_preds, axis=1)
+        acc = accuracy_score(y_test, test_preds_labels)
+        print(f"  - Test Accuracy for {data_type}: {acc:.4f}")
+        print(f"  - Classification Report for {data_type}:")
+        print(classification_report(y_test, test_preds_labels, target_names=le.classes_))
+
+        # Confusion matrix (raw)
+        cm = confusion_matrix(y_test, test_preds_labels)
+        print(f"  - Confusion Matrix for {data_type} (rows=true, cols=pred):")
+        print(cm)
+
+        cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
+        cm_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}.csv')
+        cm_df.to_csv(cm_path)
+        print(f"  - Saved confusion matrix to {cm_path}")
+
+        # Normalized confusion matrix
+        with np.errstate(all='ignore'):
+            row_sums = cm.sum(axis=1, keepdims=True)
+            cm_norm = np.divide(cm, row_sums, where=(row_sums != 0))
+        cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
+        cmn_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}_normalized.csv')
+        cmn_df.to_csv(cmn_path)
+        print(f"  - Saved normalized confusion matrix to {cmn_path}")
+    except Exception as e:
+        print(f"Warning: Could not compute classification report or confusion matrix for {data_type}: {e}")

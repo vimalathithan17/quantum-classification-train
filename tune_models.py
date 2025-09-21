@@ -53,7 +53,7 @@ def objective(trial, args, X, y, n_classes):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
     scaler_choice = trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust'])
     scaler = get_scaler(scaler_choice)
-    steps = trial.suggest_int('steps', 30, 80, step=10)
+    steps = trial.suggest_int('steps', 50, 100, step=25)
     n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     scores = []
@@ -65,19 +65,17 @@ def objective(trial, args, X, y, n_classes):
             n_neighbors = trial.suggest_int('n_neighbors', 3, 9)
             selector = SelectFromModel(lgb.LGBMClassifier(random_state=42), max_features=select_features)
             steps_list.extend([('selector', selector), ('imputer', KNNImputer(n_neighbors=n_neighbors))])
-        elif args.datatype != 'SNV':
+        else:
             steps_list.append(('imputer', KNNImputer(n_neighbors=5)))
         
         steps_list.append(('scaler', scaler))
 
-        if args.datatype != 'SNV':
-            n_qubits = trial.suggest_int('n_qubits', n_classes, 12) # Qubits must be >= classes
-            if args.dim_reducer == 'pca':
-                steps_list.append(('dim_reducer', PCA(n_components=n_qubits)))
-            else:
-                steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=42)))
+
+        n_qubits = trial.suggest_int('n_qubits', n_classes, 12) # Qubits must be >= classes
+        if args.dim_reducer == 'pca':
+            steps_list.append(('dim_reducer', PCA(n_components=n_qubits)))
         else:
-            n_qubits = X.shape[1]
+            steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=42)))
 
         n_layers = trial.suggest_int('n_layers', 1, 5)
         if args.qml_model == 'standard':
@@ -138,7 +136,6 @@ def main():
     parser.add_argument('--approach', type=int, required=True, choices=[1, 2], help="1: Classical+QML, 2: Conditional QML")
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
-    parser.add_argument('--search_method', type=str, default='random', choices=['random', 'grid'], help="Tuning method")
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
     args = parser.parse_args()
 
@@ -158,15 +155,7 @@ def main():
     storage = JournalFileStorage("tuning_journal.log")
     study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
     
-    if args.search_method == 'grid':
-        param_grid = {'n_qubits': [n_classes, 8], 'n_layers': [2, 3], 'steps': [30], 'scaler': ['MinMax', 'Standard']}
-        keys, values = zip(*param_grid.items())
-        trial_list = [dict(zip(keys, combo)) for combo in itertools.product(*values)]
-        for params in trial_list:
-            study.enqueue_trial(params)
-        study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=len(trial_list))
-    else:
-        study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=args.n_trials)
+    study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=args.n_trials)
 
     print("\n--- Hyperparameter Tuning Complete ---")
     print("Best hyperparameters found:", study.best_params)
