@@ -7,6 +7,9 @@ import json
 import numpy as np
 import argparse
 
+# Import the centralized logger
+from logging_utils import log
+
 # --- Configuration ---
 ID_COL = 'case_id'
 LABEL_COL = 'class'
@@ -15,10 +18,14 @@ DATA_TYPES = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
 def safe_load_parquet(file_path):
     """Safely loads a parquet file, returning None if it doesn't exist."""
     if not os.path.exists(file_path):
-        print(f"  - WARNING: Data file not found at {file_path}. Treating as entirely missing.")
+        log.warning(f"Data file not found at {file_path}. Treating as entirely missing.")
         return None
     limit = 1 * 1024**3
-    return pd.read_parquet(file_path, thrift_string_size_limit=limit, thrift_container_size_limit=limit)
+    try:
+        return pd.read_parquet(file_path, thrift_string_size_limit=limit, thrift_container_size_limit=limit)
+    except Exception as e:
+        log.error(f"Error loading {file_path}: {e}")
+        return None
 
 def make_single_prediction(model_dir, new_patient_data_dir):
     """
@@ -31,16 +38,17 @@ def make_single_prediction(model_dir, new_patient_data_dir):
         with open(os.path.join(model_dir, 'meta_learner_columns.json'), 'r') as f:
             meta_columns_order = json.load(f)
         n_classes = len(le.classes_)
+        log.info("Successfully loaded global components (encoder, meta-learner, column order).")
     except FileNotFoundError as e:
-        print(f"FATAL ERROR: A required global file is missing from '{model_dir}'. Details: {e}")
+        log.critical(f"A required global file is missing from '{model_dir}'. Details: {e}")
         return None
 
     base_predictions_list = []
     is_missing_flags = {}
 
-    print("--- Generating predictions from base learners... ---")
+    log.info("--- Generating predictions from base learners... ---")
     for data_type in DATA_TYPES:
-        print(f"  - Processing {data_type}...")
+        log.info(f"  - Processing {data_type}...")
         patient_df = safe_load_parquet(os.path.join(new_patient_data_dir, f'data_{data_type}_.parquet'))
         
         # --- Check for missing data first ---
@@ -58,12 +66,12 @@ def make_single_prediction(model_dir, new_patient_data_dir):
 
             if os.path.exists(pipeline_path):
                 # --- Approach 1 Logic ---
-                # print(f"    - Found Approach 1 pipeline.")
+                log.info(f"    - Found Approach 1 pipeline for {data_type}.")
                 pipeline = joblib.load(pipeline_path)
                 prediction_proba = pipeline.predict_proba(X_new)
             elif os.path.exists(selector_path):
                 # --- Approach 2 Logic ---
-                # print(f"    - Found Approach 2 components.")
+                log.info(f"    - Found Approach 2 components for {data_type}.")
                 scaler = joblib.load(os.path.join(model_dir, f'scaler_{data_type}.joblib'))
                 qml_model = joblib.load(os.path.join(model_dir, f'qml_model_{data_type}.joblib'))
                 selector = joblib.load(selector_path)
@@ -77,7 +85,7 @@ def make_single_prediction(model_dir, new_patient_data_dir):
                 
                 prediction_proba = qml_model.predict_proba((X_scaled, is_missing_mask))
             else:
-                print(f"    - FATAL ERROR: No model files found for {data_type} in '{model_dir}'.")
+                log.critical(f"No model files found for {data_type} in '{model_dir}'. Cannot proceed.")
                 return None
             
             pred_df = pd.DataFrame(prediction_proba, columns=[f"pred_{data_type}_{cls}" for cls in le.classes_])
@@ -90,23 +98,35 @@ def make_single_prediction(model_dir, new_patient_data_dir):
         meta_features_df[flag] = value
 
     # --- Make the Final Prediction ---
-    print("\n--- Making final prediction with meta-learner... ---")
+    log.info("--- Making final prediction with meta-learner... ---")
     # Ensure columns are in the exact order the meta-learner was trained on
-    meta_features_df = meta_features_df[meta_columns_order]
+    try:
+        meta_features_df = meta_features_df[meta_columns_order]
+    except KeyError as e:
+        log.critical(f"A required column is missing for the meta-learner. Details: {e}")
+        log.critical(f"Required columns: {meta_columns_order}")
+        log.critical(f"Available columns: {meta_features_df.columns.tolist()}")
+        return None
     
     final_prediction_encoded = meta_learner.predict(meta_features_df.values)
     final_prediction_label = le.inverse_transform(final_prediction_encoded)
     
     return final_prediction_label[0]
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Unified inference script for the QML stacking ensemble.")
-    parser.add_argument('--model_dir', type=str, required=True, help="Path to the curated final model directory.")
-    parser.add_argument('--patient_data_dir', type=str, required=True, help="Path to the directory with the new patient's data files.")
+def main():
+    parser = argparse.ArgumentParser(description="Run inference on a new patient's data.")
+    parser.add_argument('--model_dir', type=str, required=True, help="Directory containing all trained models and components.")
+    parser.add_argument('--patient_data_dir', type=str, required=True, help="Directory containing the new patient's parquet files.")
     args = parser.parse_args()
 
+    log.info(f"Starting inference for patient data in '{args.patient_data_dir}' using models from '{args.model_dir}'.")
+    
     prediction = make_single_prediction(args.model_dir, args.patient_data_dir)
     
-    if prediction is not None:
-        print("\n--- INFERENCE COMPLETE ---")
-        print(f"Final Predicted Class: {prediction}")
+    if prediction:
+        log.info(f"\n--- Final Prediction ---")
+        log.info(f"The predicted class for the patient is: {prediction}")
+        log.info("------------------------")
+
+if __name__ == "__main__":
+    main()

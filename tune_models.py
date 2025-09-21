@@ -7,7 +7,7 @@ import os
 import itertools
 import json
 import lightgbm as lgb
-from optuna.storages import JournalFileStorage
+from optuna.storages import JournalStorage, JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import KNNImputer, SimpleImputer
@@ -15,6 +15,9 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif
 from umap import UMAP
+
+# Import the centralized logger
+from logging_utils import log
 
 # Ensure your corrected, multiclass 'qml_models.py' is in the same directory
 from qml_models import (
@@ -26,11 +29,14 @@ from qml_models import (
 
 # Directories configurable via environment
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
+TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
+TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
+
 
 def safe_load_parquet(file_path):
     """Loads a parquet file with increased thrift limits, returning None on failure."""
     if not os.path.exists(file_path):
-        print(f"Error: File not found at {file_path}")
+        log.error(f"File not found at {file_path}")
         return None
     limit = 1 * 1024**3
     try:
@@ -40,7 +46,7 @@ def safe_load_parquet(file_path):
             thrift_container_size_limit=limit
         )
     except Exception as e:
-        print(f"Error loading {file_path}: {e}")
+        log.error(f"Error loading {file_path}: {e}")
         return None
 
 def get_scaler(scaler_name):
@@ -127,7 +133,7 @@ def objective(trial, args, X, y, n_classes):
             scores.append(qml_model.score((X_val_scaled, is_missing_val), y_val.values))
 
     average_accuracy = np.mean(scores)
-    print(f"  - Average Accuracy for Trial {trial.number}: {average_accuracy:.4f}")
+    log.info(f"Trial {trial.number}: Average Accuracy = {average_accuracy:.4f}")
     return average_accuracy
 
 def main():
@@ -139,8 +145,12 @@ def main():
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
     args = parser.parse_args()
 
+    log.info(f"Starting hyperparameter tuning with arguments: {args}")
+
     df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
-    if df is None: return
+    if df is None: 
+        log.error("Failed to load data, exiting.")
+        return
 
     X = df.drop(columns=['case_id', 'class'])
     y_categorical = df['class']
@@ -149,23 +159,25 @@ def main():
     le = LabelEncoder()
     y = pd.Series(le.fit_transform(y_categorical), index=y_categorical.index)
     n_classes = len(le.classes_)
-    print(f"Detected {n_classes} classes: {list(le.classes_)}")
+    log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
 
     study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
-    storage = JournalFileStorage("tuning_journal.log")
+    log.info(f"Using study name: {study_name}")
+    log.info(f"Using journal file: {TUNING_JOURNAL_FILE}")
+
+    storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
     study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
     
     study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=args.n_trials)
 
-    print("\n--- Hyperparameter Tuning Complete ---")
-    print("Best hyperparameters found:", study.best_params)
+    log.info("--- Hyperparameter Tuning Complete ---")
+    log.info(f"Best hyperparameters found: {study.best_params}")
     
-    output_dir = 'tuning_results'
-    os.makedirs(output_dir, exist_ok=True)
-    params_file = os.path.join(output_dir, f'best_params_{study_name}.json')
+    os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
+    params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')
     with open(params_file, 'w') as f:
         json.dump(study.best_params, f, indent=4)
-    print(f"Saved best parameters to '{params_file}'")
+    log.info(f"Saved best parameters to '{params_file}'")
 
 if __name__ == "__main__":
     main()

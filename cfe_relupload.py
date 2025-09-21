@@ -6,9 +6,12 @@ import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import SelectKBest, f_classif, SelectFromModel
+from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# Import the centralized logger
+from logging_utils import log
 
 # Import the corrected multiclass model
 from qml_models import ConditionalMulticlassQuantumClassifierDataReuploadingFS
@@ -28,11 +31,18 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def safe_load_parquet(file_path):
     """Loads a parquet file with increased thrift limits."""
     limit = 1 * 1024**3
-    return pd.read_parquet(
-        file_path,
-        thrift_string_size_limit=limit,
-        thrift_container_size_limit=limit
-    )
+    try:
+        return pd.read_parquet(
+            file_path,
+            thrift_string_size_limit=limit,
+            thrift_container_size_limit=limit
+        )
+    except FileNotFoundError:
+        log.error(f"File not found at {file_path}")
+        return None
+    except Exception as e:
+        log.error(f"Error loading {file_path}: {e}")
+        return None
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
@@ -45,10 +55,10 @@ try:
     label_encoder_path = os.path.join(ENCODER_DIR, 'label_encoder.joblib')
     le = joblib.load(label_encoder_path)
     n_classes = len(le.classes_)
-    print(f"Master label encoder loaded. Found {n_classes} classes: {list(le.classes_)}")
+    log.info(f"Master label encoder loaded. Found {n_classes} classes: {list(le.classes_)}")
 except FileNotFoundError:
-    print(f"FATAL ERROR: Master label encoder not found at '{label_encoder_path}'.")
-    print("Please run the 'create_master_encoder.py' script first.")
+    log.critical(f"Master label encoder not found at '{label_encoder_path}'.")
+    log.critical("Please run the 'create_master_encoder.py' script first.")
     exit()
 
 # --- Main Training Loop ---
@@ -62,16 +72,19 @@ for data_type in DATA_TYPES_TO_TRAIN:
             break
     
     if not param_file_found:
-        print(f"\n--- No tuned parameter file found for {data_type} (Approach 2, Re-uploading). Skipping. ---")
+        log.warning(f"No tuned parameter file found for {data_type} (Approach 2, Re-uploading). Skipping.")
         continue
 
-    print(f"\n--- Training Base Learner for: {data_type} (Approach 2, Re-uploading) ---")
+    log.info(f"--- Training Base Learner for: {data_type} (Approach 2, Re-uploading) ---")
     with open(param_file_found, 'r') as f:
         config = json.load(f)
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
     df = safe_load_parquet(file_path)
+    if df is None:
+        continue
+        
     X = df.drop(columns=[ID_COL, LABEL_COL])
     y_categorical = df[LABEL_COL]
     y = le.transform(y_categorical)
@@ -82,7 +95,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     n_features = config['n_qubits']
 
     if data_type == 'Meth':
-        print("  - Using advanced LightGBM feature selection for Meth data...")
+        log.info("  - Using advanced LightGBM feature selection for Meth data...")
         # Use a more robust imputer for the selector
         imputer_for_fs = KNNImputer(n_neighbors=5)
         X_train_imputed = imputer_for_fs.fit_transform(X_train)
@@ -100,12 +113,12 @@ for data_type in DATA_TYPES_TO_TRAIN:
         final_selected_cols = None
 
     # --- Generate Out-of-Fold Predictions ---
-    print("  - Generating out-of-fold predictions...")
+    log.info("  - Generating out-of-fold predictions...")
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
     oof_preds = np.zeros((len(X_train), n_classes))
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
-        print(f"    - Processing Fold {fold + 1}/3...")
+        log.info(f"    - Processing Fold {fold + 1}/3...")
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
@@ -140,10 +153,10 @@ for data_type in DATA_TYPES_TO_TRAIN:
 
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
-    print("  - Saved out-of-fold training predictions.")
+    log.info("  - Saved out-of-fold training predictions.")
     
     # --- Train Final Model on Full Training Data ---
-    print("  - Training final model on full training data...")
+    log.info("  - Training final model on full training data...")
     imputer_for_fs = SimpleImputer(strategy='median')
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
     final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
@@ -162,7 +175,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
     # --- Generate Predictions on Test Set ---
-    print("  - Generating predictions on the hold-out test set...")
+    log.info("  - Generating predictions on the hold-out test set...")
     X_test_selected = X_test[final_selected_cols]
     is_missing_test = X_test_selected.isnull().astype(int).values
     X_test_filled = X_test_selected.fillna(0.0).values
@@ -171,31 +184,31 @@ for data_type in DATA_TYPES_TO_TRAIN:
     test_preds = final_model.predict_proba((X_test_scaled, is_missing_test))
     test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(test_preds, index=X_test.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
-    print("  - Saved test predictions.")
+    log.info("  - Saved test predictions.")
 
     # --- Save all components for inference ---
     joblib.dump(final_selector, os.path.join(OUTPUT_DIR, f'selector_{data_type}.joblib'))
     joblib.dump(final_scaler, os.path.join(OUTPUT_DIR, f'scaler_{data_type}.joblib'))
     joblib.dump(final_model, os.path.join(OUTPUT_DIR, f'qml_model_{data_type}.joblib'))
-    print(f"  - Saved final selector, scaler, and QML model for {data_type}.")
+    log.info(f"  - Saved final selector, scaler, and QML model for {data_type}.")
 
     # --- Classification report on the hold-out test set ---
     try:
         test_preds_labels = np.argmax(test_preds, axis=1)
         acc = accuracy_score(y_test, test_preds_labels)
-        print(f"  - Test Accuracy for {data_type}: {acc:.4f}")
-        print(f"  - Classification Report for {data_type}:")
-        print(classification_report(y_test, test_preds_labels, target_names=le.classes_))
+        log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
+        
+        report = classification_report(y_test, test_preds_labels, target_names=le.classes_)
+        log.info(f"Classification Report for {data_type}:\n{report}")
 
         # Confusion matrix (raw)
         cm = confusion_matrix(y_test, test_preds_labels)
-        print(f"  - Confusion Matrix for {data_type} (rows=true, cols=pred):")
-        print(cm)
+        log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
 
         cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
         cm_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}.csv')
         cm_df.to_csv(cm_path)
-        print(f"  - Saved confusion matrix to {cm_path}")
+        log.info(f"Saved confusion matrix to {cm_path}")
 
         # Normalized confusion matrix
         with np.errstate(all='ignore'):
@@ -204,6 +217,6 @@ for data_type in DATA_TYPES_TO_TRAIN:
         cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
         cmn_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}_normalized.csv')
         cmn_df.to_csv(cmn_path)
-        print(f"  - Saved normalized confusion matrix to {cmn_path}")
+        log.info(f"Saved normalized confusion matrix to {cmn_path}")
     except Exception as e:
-        print(f"Warning: Could not compute classification report or confusion matrix for {data_type}: {e}")
+        log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")
