@@ -58,9 +58,27 @@ def get_scaler(scaler_name):
 
 def objective(trial, args, X, y, n_classes):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
-    scaler_choice = trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust'])
-    scaler = get_scaler(scaler_choice)
-    steps = trial.suggest_int('steps', 50, 100, step=25)
+    log.info(f"--- Starting Trial {trial.number} ---")
+    
+    # Log suggested parameters
+    params = {
+        'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
+        'steps': trial.suggest_int('steps', 50, 100, step=25),
+        'n_qubits': trial.suggest_int('n_qubits', n_classes, 12),
+        'n_layers': trial.suggest_int('n_layers', 1, 5)
+    }
+
+    if args.approach == 1 and args.datatype == 'Meth':
+        params['select_features'] = trial.suggest_int('select_features', 500, 2000)
+        params['n_neighbors'] = trial.suggest_int('n_neighbors', 3, 9)
+
+    log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
+
+    scaler = get_scaler(params['scaler'])
+    steps = params['steps']
+    n_qubits = params['n_qubits']
+    n_layers = params['n_layers']
+    
     n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     scores = []
@@ -68,8 +86,8 @@ def objective(trial, args, X, y, n_classes):
     if args.approach == 1:
         steps_list = []
         if args.datatype == 'Meth':
-            select_features = trial.suggest_int('select_features', 500, 2000)
-            n_neighbors = trial.suggest_int('n_neighbors', 3, 9)
+            select_features = params['select_features']
+            n_neighbors = params['n_neighbors']
             selector = SelectFromModel(lgb.LGBMClassifier(random_state=42), max_features=select_features)
             steps_list.extend([('selector', selector), ('imputer', KNNImputer(n_neighbors=n_neighbors))])
         else:
@@ -77,37 +95,35 @@ def objective(trial, args, X, y, n_classes):
         
         steps_list.append(('scaler', scaler))
 
-
-        n_qubits = trial.suggest_int('n_qubits', n_classes, 12) # Qubits must be >= classes
         if args.dim_reducer == 'pca':
             steps_list.append(('dim_reducer', PCA(n_components=n_qubits)))
         else:
             steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=42)))
 
-        n_layers = trial.suggest_int('n_layers', 1, 5)
         if args.qml_model == 'standard':
-            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes)
+            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
         else: # reuploading
-            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes)
+            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
             
         pipeline = Pipeline(steps_list + [('qml', qml_model)])
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             pipeline.fit(X_train, y_train)
-            scores.append(pipeline.score(X_val, y_val))
+            score = pipeline.score(X_val, y_val)
+            scores.append(score)
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Completed with score {score:.4f}")
 
     elif args.approach == 2:
-        n_qubits = trial.suggest_int('n_qubits', n_classes, 12)
-        n_layers = trial.suggest_int('n_layers', 1, 5)
-        
         if args.qml_model == 'standard':
-            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes)
+            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
         else: # reuploading
-            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes)
+            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
@@ -131,10 +147,12 @@ def objective(trial, args, X, y, n_classes):
             X_val_scaled = scaler.transform(X_val_filled)
 
             qml_model.fit((X_train_scaled, is_missing_train), y_train.values)
-            scores.append(qml_model.score((X_val_scaled, is_missing_val), y_val.values))
+            score = qml_model.score((X_val_scaled, is_missing_val), y_val.values)
+            scores.append(score)
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Completed with score {score:.4f}")
 
     average_accuracy = np.mean(scores)
-    log.info(f"Trial {trial.number}: Average Accuracy = {average_accuracy:.4f}")
+    log.info(f"--- Trial {trial.number} Finished: Average Accuracy = {average_accuracy:.4f} ---")
     return average_accuracy
 
 def main():
@@ -144,6 +162,7 @@ def main():
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
+    parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
     log.info(f"Starting hyperparameter tuning with arguments: {args}")

@@ -81,8 +81,8 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials)
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
@@ -120,14 +120,14 @@ Run the appropriate script for each approach variant. The training scripts read 
 Examples (the repository contains multiple `approach` scripts; run the ones you need):
 
 ```bash
-# Approach 1 - Dimensionality Reduction Encoding (standard)
-python dre_standard.py
+# Approach 1 - Dimensionality Reduction Encoding (standard) with verbose logging
+python dre_standard.py --verbose
 
 # Approach 1 - Dimensionality Reduction Encoding (data reuploading)
 python dre_relupload.py
 
-# Approach 2 - Conditional Feature Encoding (standard)
-python cfe_standard.py
+# Approach 2 - Conditional Feature Encoding (standard) with verbose logging
+python cfe_standard.py --verbose
 
 # Approach 2 - Conditional Feature Encoding (data reuploading)
 python cfe_relupload.py
@@ -166,14 +166,14 @@ The meta-learner training script (`metalearner.py`) accepts one or more predicti
 Tune (optional):
 
 ```bash
-# Tune the meta-learner hyperparameters
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --tune
+# Tune the meta-learner hyperparameters with verbose logging
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --tune --verbose
 ```
 
 Train final meta-learner (uses `meta_learner_best_params.json` by default or writes `meta_learner_best_params.json` during tuning):
 
 ```bash
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --params_file meta_learner_best_params.json
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --params_file meta_learner_best_params.json --verbose
 ```
 
 Outputs:
@@ -257,11 +257,12 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1 when not `SNV`).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
+	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
 
 
 3) `dre_standard.py` and `dre_relupload.py`
-	- No explicit CLI arguments in current scripts — both read config from files/tuning results and from environment variables.
+	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -272,7 +273,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 
 
 4) `cfe_standard.py` and `cfe_relupload.py`
-	- No explicit CLI arguments in current scripts — both read config from files/tuning results and from environment variables.
+	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -287,6 +288,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--encoder_dir` (str, default `master_label_encoder`): Directory containing `label_encoder.joblib`.
 	- `--tune` (flag): If provided, the script will run hyperparameter tuning (Optuna) for the meta-learner and write best params to the `--params_file`.
 	- `--params_file` (str, default `meta_learner_best_params.json`): JSON file to read/write best hyperparameters.
+	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).

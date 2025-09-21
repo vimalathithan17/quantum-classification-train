@@ -2,9 +2,10 @@ import pandas as pd
 import os
 import joblib
 import json
+import argparse
 import lightgbm as lgb
 import numpy as np
-from sklearn.model_selection import train_test_split, cross_val_predict
+from sklearn.model_selection import train_test_split, cross_val_predict, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import KNNImputer
 from sklearn.decomposition import PCA
@@ -63,6 +64,11 @@ except FileNotFoundError:
     log.critical("Please run the 'create_master_label_encoder.py' script first.")
     exit()
 
+# --- Argument Parser ---
+parser = argparse.ArgumentParser(description="Train DRE Standard models.")
+parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+args = parser.parse_args()
+
 # --- Main Training Loop ---
 for data_type in DATA_TYPES_TO_TRAIN:
     # --- Find and Load the Tuned Hyperparameters ---
@@ -81,6 +87,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     log.info(f"--- Training Base Learner for: {data_type} (using params from {os.path.basename(param_file_found)}) ---")
     with open(param_file_found, 'r') as f:
         config = json.load(f)
+    log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -109,14 +116,14 @@ for data_type in DATA_TYPES_TO_TRAIN:
             ('imputer', KNNImputer(n_neighbors=config['n_neighbors'])),
             ('scaler', scaler),
             ('pca', PCA(n_components=config['n_qubits'])),
-            ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes))
+            ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
         ])
     elif data_type == 'SNV':
         log.info("  - Using simplified pipeline for SNV data...")
         n_snv_features = X_train.shape[1]
         pipeline = Pipeline([
             ('scaler', scaler),
-            ('qml', MulticlassQuantumClassifierDR(n_qubits=n_snv_features, n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes))
+            ('qml', MulticlassQuantumClassifierDR(n_qubits=n_snv_features, n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
         ])
     else: # For CNV, GeneExpr, miRNA, Prot
         log.info("  - Using standard pipeline for dense data...")
@@ -124,7 +131,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
             ('imputer', KNNImputer(n_neighbors=config.get('n_neighbors', 5))),
             ('scaler', scaler),
             ('pca', PCA(n_components=config['n_qubits'])),
-            ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes))
+            ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
         ])
         
     log.info("  - Fitting pipeline on the full training set...")
@@ -132,7 +139,8 @@ for data_type in DATA_TYPES_TO_TRAIN:
 
     # --- Generate and Save Multiclass Predictions ---
     log.info("  - Generating predictions...")
-    oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=3, method='predict_proba', n_jobs=-1)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=skf, method='predict_proba', n_jobs=-1)
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
     

@@ -69,7 +69,6 @@ def create_master_encoder():
     joblib.dump(master_encoder, MASTER_ENCODER_PATH)
     log.info(f"Success! Master Label Encoder saved to '{MASTER_ENCODER_PATH}'")
     log.info("This encoder can now be loaded and used by all other scripts.")
-    log.info("Example Mapping:")
     log.info(dict(zip(master_encoder.classes_, master_encoder.transform(master_encoder.classes_))))
 
 if __name__ == "__main__":

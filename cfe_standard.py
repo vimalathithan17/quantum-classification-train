@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import joblib
 import json
+import argparse
 import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
@@ -61,6 +62,11 @@ except FileNotFoundError:
     log.critical("Please run the 'create_master_label_encoder.py' script first.")
     exit()
 
+# --- Argument Parser ---
+parser = argparse.ArgumentParser(description="Train CFE Standard models.")
+parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+args = parser.parse_args()
+
 # --- Main Training Loop ---
 for data_type in DATA_TYPES_TO_TRAIN:
     # --- Find and Load Tuned Hyperparameters ---
@@ -78,6 +84,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     log.info(f"--- Training Base Learner for: {data_type} (Approach 2, Standard) ---")
     with open(param_file_found, 'r') as f:
         config = json.load(f)
+    log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -148,7 +155,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
         # 3. Train model on this fold and predict on the validation part
         model = ConditionalMulticlassQuantumClassifierFS(
             n_qubits=n_features, n_layers=config['n_layers'], 
-            steps=config['steps'], n_classes=n_classes
+            steps=config['steps'], n_classes=n_classes, verbose=args.verbose
         )
         model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
         val_preds = model.predict_proba((X_val_scaled, is_missing_val))
@@ -173,7 +180,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     
     final_model = ConditionalMulticlassQuantumClassifierFS(
         n_qubits=n_features, n_layers=config['n_layers'], 
-        steps=config['steps'], n_classes=n_classes
+        steps=config['steps'], n_classes=n_classes, verbose=args.verbose
     )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 

@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import joblib
 import json
+import argparse
 import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
@@ -58,8 +59,13 @@ try:
     log.info(f"Master label encoder loaded. Found {n_classes} classes: {list(le.classes_)}")
 except FileNotFoundError:
     log.critical(f"Master label encoder not found at '{label_encoder_path}'.")
-    log.critical("Please run the 'create_master_encoder.py' script first.")
+    log.critical("Please run the 'create_master_label_encoder.py' script first.")
     exit()
+
+# --- Argument Parser ---
+parser = argparse.ArgumentParser(description="Train CFE Data Re-uploading models.")
+parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+args = parser.parse_args()
 
 # --- Main Training Loop ---
 for data_type in DATA_TYPES_TO_TRAIN:
@@ -78,6 +84,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     log.info(f"--- Training Base Learner for: {data_type} (Approach 2, Re-uploading) ---")
     with open(param_file_found, 'r') as f:
         config = json.load(f)
+    log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -145,7 +152,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
         
         model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
             n_qubits=n_features, n_layers=config['n_layers'], 
-            steps=config['steps'], n_classes=n_classes
+            steps=config['steps'], n_classes=n_classes, verbose=args.verbose
         )
         model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
         val_preds = model.predict_proba((X_val_scaled, is_missing_val))
@@ -170,7 +177,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     
     final_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
         n_qubits=n_features, n_layers=config['n_layers'], 
-        steps=config['steps'], n_classes=n_classes
+        steps=config['steps'], n_classes=n_classes, verbose=args.verbose
     )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 

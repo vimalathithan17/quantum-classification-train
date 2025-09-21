@@ -3,16 +3,20 @@ from pennylane import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import accuracy_score
 
+# Import the centralized logger
+from logging_utils import log
+
 # --- Models for Approach 1 (Classical Preprocessing + QML) ---
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     """Multiclass VQC for pre-processed, dimensionally-reduced data."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
+        self.verbose = verbose
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -41,7 +45,11 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 # Use cross-entropy loss for multiclass
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
-            self.weights = opt.step(cost, self.weights)
+            
+            self.weights, current_loss = opt.step_and_cost(cost, self.weights)
+
+            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
         return self
 
     def predict_proba(self, X):
@@ -54,12 +62,13 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Multiclass VQC for pre-processed, dense data."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
+        self.verbose = verbose
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -87,7 +96,11 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
-            self.weights = opt.step(cost, self.weights)
+            
+            self.weights, current_loss = opt.step_and_cost(cost, self.weights)
+
+            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
         return self
 
     def predict_proba(self, X):
@@ -102,12 +115,13 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
 class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     """Conditional Multiclass QVC that expects pre-processed tuple input."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
+        self.verbose = verbose
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights_ansatz = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -142,7 +156,12 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
-            trainable_params = opt.step(cost, trainable_params)
+            
+            trainable_params, current_loss = opt.step_and_cost(cost, trainable_params)
+
+            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+
         self.weights_ansatz, self.weights_missing = trainable_params
         return self
 
@@ -160,12 +179,13 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 
 class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Conditional Multiclass QVC."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
+        self.verbose = verbose
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights_ansatz = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -201,7 +221,12 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
-            trainable_params = opt.step(cost, trainable_params)
+
+            trainable_params, current_loss = opt.step_and_cost(cost, trainable_params)
+
+            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+
         self.weights_ansatz, self.weights_missing = trainable_params
         return self
 

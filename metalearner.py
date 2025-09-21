@@ -92,28 +92,41 @@ def assemble_meta_data(preds_dirs, indicator_file):
     
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes):
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, verbose=False):
     """Defines one trial for tuning the meta-learner."""
-    qml_model_type = trial.suggest_categorical('qml_model', ['standard', 'reuploading'])
-    n_qubits = X_train.shape[1]
-    n_layers = trial.suggest_int('n_layers', 1, 6)
-    learning_rate = trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True)
-    steps = trial.suggest_int('steps', 50, 150, step=25)
+    log.info(f"--- Starting Trial {trial.number} ---")
     
+    # Log suggested parameters
+    params = {
+        'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
+        'n_layers': trial.suggest_int('n_layers', 1, 6),
+        'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True),
+        'steps': trial.suggest_int('steps', 50, 150, step=25)
+    }
+    log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
+
     model_params = {
-        'n_qubits': n_qubits, 'n_layers': n_layers, 
-        'learning_rate': learning_rate, 'steps': steps, 'n_classes': n_classes
+        'n_qubits': X_train.shape[1], 
+        'n_layers': params['n_layers'], 
+        'learning_rate': params['learning_rate'], 
+        'steps': params['steps'], 
+        'n_classes': n_classes,
+        'verbose': verbose
     }
     
-    if qml_model_type == 'standard':
+    if params['qml_model'] == 'standard':
         model = MulticlassQuantumClassifierDR(**model_params)
     else: # reuploading
         model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
     
+    log.info(f"Trial {trial.number}: Training {params['qml_model']} model...")
     model.fit(X_train.values, y_train.values)
+    
+    log.info(f"Trial {trial.number}: Evaluating...")
     predictions = model.predict(X_val.values)
     accuracy = accuracy_score(y_val.values, predictions)
-    log.info(f"Trial {trial.number}: Accuracy = {accuracy:.4f}")
+    
+    log.info(f"--- Trial {trial.number} Finished: Accuracy = {accuracy:.4f} ---")
     return accuracy
 
 def main():
@@ -122,6 +135,7 @@ def main():
     parser.add_argument('--indicator_file', type=str, required=True, help="Path to the parquet file with indicator features and labels.")
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
     parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
+    parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le = assemble_meta_data(args.preds_dir, args.indicator_file)
@@ -146,7 +160,7 @@ def main():
         storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
         
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes), n_trials=args.n_trials)
+        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, verbose=args.verbose), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
@@ -163,7 +177,7 @@ def main():
         try:
             with open(params_path, 'r') as f:
                 params = json.load(f)
-            log.info(f"Loaded best parameters from '{params_path}'")
+            log.info(f"Loaded best parameters from '{params_path}': {json.dumps(params, indent=2)}")
         except FileNotFoundError:
             log.warning(f"Best parameter file not found at '{params_path}'. Using default parameters.")
             # Define sensible defaults if tuning was skipped
@@ -175,7 +189,8 @@ def main():
             'n_layers': params['n_layers'],
             'learning_rate': params['learning_rate'],
             'steps': params['steps'],
-            'n_classes': n_classes
+            'n_classes': n_classes,
+            'verbose': args.verbose
         }
         
         if params['qml_model'] == 'standard':
@@ -183,7 +198,7 @@ def main():
         else:
             final_model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
 
-        log.info(f"Training with parameters: {params}")
+        log.info(f"Training final {params['qml_model']} model with parameters: {json.dumps(model_params, indent=2)}")
         final_model.fit(X_meta_train.values, y_meta_train.values)
         
         # Save the trained model
