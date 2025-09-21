@@ -8,7 +8,7 @@ import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif, SelectFromModel
-from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.impute import KNNImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the centralized logger
@@ -100,43 +100,37 @@ for data_type in DATA_TYPES_TO_TRAIN:
     # Convert y back to pandas Series for easier indexing with iloc
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
 
-    n_features = config['n_qubits']
-    if data_type == 'Meth':
-        log.info("  - Using advanced LightGBM feature selection for Meth data...")
-        # Use a more robust imputer for the selector
-        imputer_for_fs = KNNImputer(n_neighbors=5)
-        X_train_imputed = imputer_for_fs.fit_transform(X_train)
-        
-        # Use the powerful embedded method for final feature selection
-        selector = SelectFromModel(
-            lgb.LGBMClassifier(random_state=42), 
-            max_features=n_features # Use the tuned number of features
-        ).fit(X_train_imputed, y_train)
-        
-        final_selected_cols = X_train.columns[selector.get_support()]
-        # The rest of the script will now use these intelligently selected columns
-    else:
-        # For all other data types, we will select features inside the CV loop as before
-        final_selected_cols = None
-
     # --- Generate Out-of-Fold Predictions Correctly ---
     log.info("  - Generating out-of-fold predictions...")
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-    oof_preds = np.zeros((len(X_train), n_classes)) # Correct shape for multiclass
+    oof_preds = np.zeros((len(X_train), n_classes))
+    
+    # This will hold the feature columns selected for the final model
+    final_selected_cols = None 
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
         log.info(f"    - Processing Fold {fold + 1}/3...")
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-        # 1. Feature selection INSIDE the fold
-        if final_selected_cols is not None: # We already selected features for Meth
-            selected_cols = final_selected_cols
-        else: # Use fast selection for other data types
-            imputer_for_fs = SimpleImputer(strategy='median')
-            X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
+        # 1. Feature selection INSIDE the fold to prevent data leakage
+        imputer_for_fs = KNNImputer(n_neighbors=config.get('n_neighbors_imputer', 5))
+        X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
+
+        if data_type == 'Meth':
+            log.info("      - Using advanced LightGBM feature selection for Meth data...")
+            lgbm_selector = lgb.LGBMClassifier(
+                random_state=42, n_jobs=-1, feature_fraction=0.1,
+                bagging_fraction=0.8, bagging_freq=1, verbose=-1
+            )
+            selector = SelectFromModel(
+                lgbm_selector, max_features=n_features
+            ).fit(X_train_fold_imputed, y_train_fold)
+        else: # Use fast univariate selection for other data types
+            log.info("      - Using standard KBest feature selection...")
             selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
-            selected_cols = X_train_fold.columns[selector.get_support()]
+        
+        selected_cols = X_train_fold.columns[selector.get_support()]
         
         X_train_fold_selected = X_train_fold[selected_cols]
         X_val_fold_selected = X_val_fold[selected_cols]
@@ -159,7 +153,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
         )
         model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
         val_preds = model.predict_proba((X_val_scaled, is_missing_val))
-        oof_preds[val_idx] = val_preds # Assign the full probability matrix
+        oof_preds[val_idx] = val_preds
 
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
@@ -167,10 +161,26 @@ for data_type in DATA_TYPES_TO_TRAIN:
     
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
-    imputer_for_fs = SimpleImputer(strategy='median')
+    # Re-run feature selection on the full training data to determine the final feature set
+    imputer_for_fs = KNNImputer(n_neighbors=config.get('n_neighbors_imputer', 5))
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
-    final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
+
+    if data_type == 'Meth':
+        log.info("    - Using advanced LightGBM feature selection for final Meth model...")
+        lgbm_selector = lgb.LGBMClassifier(
+            random_state=42, n_jobs=-1, feature_fraction=0.1,
+            bagging_fraction=0.8, bagging_freq=1, verbose=-1
+        )
+        final_selector = SelectFromModel(
+            lgbm_selector, max_features=n_features
+        ).fit(X_train_imputed, y_train)
+    else:
+        log.info("    - Using standard KBest feature selection for final model...")
+        final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
+
     final_selected_cols = X_train.columns[final_selector.get_support()]
+    joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
+    log.info(f"    - Saved {len(final_selected_cols)} selected features for {data_type}.")
 
     X_train_selected = X_train[final_selected_cols]
     is_missing_train = X_train_selected.isnull().astype(int).values

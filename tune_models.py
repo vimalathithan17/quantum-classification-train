@@ -11,7 +11,7 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.impute import KNNImputer, SimpleImputer
+from sklearn.impute import KNNImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif
@@ -64,13 +64,13 @@ def objective(trial, args, X, y, n_classes):
     params = {
         'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
         'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25),
-        'n_qubits': trial.suggest_int('n_qubits', n_classes, 12),
-        'n_layers': trial.suggest_int('n_layers', 1, 5)
+        'n_qubits': trial.suggest_int('n_qubits', n_classes, 12, step=2),
+        'n_layers': trial.suggest_int('n_layers', 1, 5),
+        'n_neighbors': trial.suggest_int('n_neighbors', 3, 9,step=2)
     }
 
     if args.approach == 1 and args.datatype == 'Meth':
-        params['select_features'] = trial.suggest_int('select_features', 500, 2000)
-        params['n_neighbors'] = trial.suggest_int('n_neighbors', 3, 9)
+        params['select_features'] = trial.suggest_int('select_features', 500, 2000, step=250)
 
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
@@ -78,6 +78,7 @@ def objective(trial, args, X, y, n_classes):
     steps = params['steps']
     n_qubits = params['n_qubits']
     n_layers = params['n_layers']
+    n_neighbors = params['n_neighbors']
     
     n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -85,14 +86,19 @@ def objective(trial, args, X, y, n_classes):
 
     if args.approach == 1:
         steps_list = []
+        # For Meth data, add the feature selector to the pipeline
         if args.datatype == 'Meth':
+            log.info("  - Adding LightGBM feature selector to the pipeline for Meth trial...")
             select_features = params['select_features']
-            n_neighbors = params['n_neighbors']
-            selector = SelectFromModel(lgb.LGBMClassifier(random_state=42), max_features=select_features)
-            steps_list.extend([('selector', selector), ('imputer', KNNImputer(n_neighbors=n_neighbors))])
-        else:
-            steps_list.append(('imputer', KNNImputer(n_neighbors=5)))
-        
+            lgbm_selector = lgb.LGBMClassifier(
+                random_state=42, n_jobs=-1, feature_fraction=0.1,
+                bagging_fraction=0.8, bagging_freq=1, verbose=-1
+            )
+            selector = SelectFromModel(lgbm_selector, max_features=select_features)
+            steps_list.append(('selector', selector))
+
+        # Common steps for Approach 1
+        steps_list.append(('imputer', KNNImputer(n_neighbors=n_neighbors)))
         steps_list.append(('scaler', scaler))
 
         if args.dim_reducer == 'pca':
@@ -107,16 +113,19 @@ def objective(trial, args, X, y, n_classes):
             
         pipeline = Pipeline(steps_list + [('qml', qml_model)])
         
+        # Perform cross-validation on the entire pipeline
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            
             pipeline.fit(X_train, y_train)
             score = pipeline.score(X_val, y_val)
             scores.append(score)
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Completed with score {score:.4f}")
 
     elif args.approach == 2:
+         
         if args.qml_model == 'standard':
             qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
         else: # reuploading
@@ -128,7 +137,7 @@ def objective(trial, args, X, y, n_classes):
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
             # Perform fold-specific feature selection and preprocessing
-            temp_imputer = SimpleImputer(strategy='median')
+            temp_imputer = KNNImputer(n_neighbors=n_neighbors)
             X_train_imputed = temp_imputer.fit_transform(X_train)
             selector = SelectKBest(f_classif, k=n_qubits).fit(X_train_imputed, y_train)
             selected_cols = X_train.columns[selector.get_support()]

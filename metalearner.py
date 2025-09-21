@@ -18,7 +18,7 @@ from logging_utils import log
 from qml_models import MulticlassQuantumClassifierDR, MulticlassQuantumClassifierDataReuploadingDR
 
 # Environment-configurable directories
-ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_encoder')
+ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
 

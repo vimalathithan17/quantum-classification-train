@@ -62,21 +62,28 @@ def make_single_prediction(model_dir, new_patient_data_dir):
             
             # --- Auto-detect the model type (Approach 1 vs Approach 2) ---
             pipeline_path = os.path.join(model_dir, f'pipeline_{data_type}.joblib')
-            selector_path = os.path.join(model_dir, f'selector_{data_type}.joblib')
+            # For Approach 2, we check for the selected features file.
+            features_path = os.path.join(model_dir, f'selected_features_{data_type}.joblib')
 
             if os.path.exists(pipeline_path):
-                # --- Approach 1 Logic ---
+                # --- Approach 1 Logic (Pipeline-based) ---
                 log.info(f"    - Found Approach 1 pipeline for {data_type}.")
                 pipeline = joblib.load(pipeline_path)
                 prediction_proba = pipeline.predict_proba(X_new)
-            elif os.path.exists(selector_path):
-                # --- Approach 2 Logic ---
+            elif os.path.exists(features_path):
+                # --- Approach 2 Logic (Component-based) ---
                 log.info(f"    - Found Approach 2 components for {data_type}.")
                 scaler = joblib.load(os.path.join(model_dir, f'scaler_{data_type}.joblib'))
                 qml_model = joblib.load(os.path.join(model_dir, f'qml_model_{data_type}.joblib'))
-                selector = joblib.load(selector_path)
+                selected_cols = joblib.load(features_path)
                 
-                selected_cols = X_new.columns[selector.get_support()]
+                # Ensure all selected columns are present in the new data
+                if not all(col in X_new.columns for col in selected_cols):
+                    log.critical(f"New data for {data_type} is missing some columns required by the model.")
+                    missing_in_df = list(set(selected_cols) - set(X_new.columns))
+                    log.critical(f"Columns missing in input data: {missing_in_df}")
+                    return None
+
                 X_new_selected = X_new[selected_cols]
                 
                 is_missing_mask = X_new_selected.isnull().astype(int).values

@@ -118,13 +118,6 @@ for data_type in DATA_TYPES_TO_TRAIN:
             ('pca', PCA(n_components=config['n_qubits'])),
             ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
         ])
-    elif data_type == 'SNV':
-        log.info("  - Using simplified pipeline for SNV data...")
-        n_snv_features = X_train.shape[1]
-        pipeline = Pipeline([
-            ('scaler', scaler),
-            ('qml', MulticlassQuantumClassifierDR(n_qubits=n_snv_features, n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
-        ])
     else: # For CNV, GeneExpr, miRNA, Prot
         log.info("  - Using standard pipeline for dense data...")
         pipeline = Pipeline([
@@ -134,22 +127,26 @@ for data_type in DATA_TYPES_TO_TRAIN:
             ('qml', MulticlassQuantumClassifierDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
         ])
         
-    log.info("  - Fitting pipeline on the full training set...")
-    pipeline.fit(X_train, y_train)
-
     # --- Generate and Save Multiclass Predictions ---
-    log.info("  - Generating predictions...")
+    log.info("  - Generating OOF predictions with cross_val_predict...")
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    # Pass the unfitted pipeline to cross_val_predict. It handles fitting for each fold internally.
     oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=skf, method='predict_proba', n_jobs=-1)
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
+    log.info("  - OOF predictions generated and saved.")
+
+    # --- Train Final Model on Full Training Data and Predict on Test Set ---
+    log.info("  - Fitting final pipeline on the full training set...")
+    pipeline.fit(X_train, y_train)
     
+    log.info("  - Generating predictions on the hold-out test set...")
     test_preds = pipeline.predict_proba(X_test)
     test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
     pd.DataFrame(test_preds, index=X_test.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
     
     joblib.dump(pipeline, os.path.join(OUTPUT_DIR, f'pipeline_{data_type}.joblib'))
-    log.info(f"  - Saved predictions and final pipeline for {data_type}.")
+    log.info(f"  - Saved test predictions and final pipeline for {data_type}.")
 
     # --- Classification report and confusion matrix on the hold-out test set ---
     try:
