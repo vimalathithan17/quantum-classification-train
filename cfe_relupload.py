@@ -117,7 +117,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
             log.info("      - Using advanced LightGBM feature selection for Meth data...")
             lgbm_selector = lgb.LGBMClassifier(
                 random_state=42, n_jobs=-1, feature_fraction=0.1,
-                bagging_fraction=0.8, bagging_freq=1, verbose=-1
+                bagging_fraction=0.8, bagging_freq=1
             )
             selector = SelectFromModel(
                 lgbm_selector, max_features=n_features
@@ -165,7 +165,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
         log.info("    - Using advanced LightGBM feature selection for final Meth model...")
         lgbm_selector = lgb.LGBMClassifier(
             random_state=42, n_jobs=-1, feature_fraction=0.1,
-            bagging_fraction=0.8, bagging_freq=1, verbose=-1
+            bagging_fraction=0.8, bagging_freq=1
         )
         final_selector = SelectFromModel(
             lgbm_selector, max_features=n_features

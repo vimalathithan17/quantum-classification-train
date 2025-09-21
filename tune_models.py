@@ -92,7 +92,7 @@ def objective(trial, args, X, y, n_classes):
             select_features = params['select_features']
             lgbm_selector = lgb.LGBMClassifier(
                 random_state=42, n_jobs=-1, feature_fraction=0.1,
-                bagging_fraction=0.8, bagging_freq=1, verbose=-1
+                bagging_fraction=0.8, bagging_freq=1
             )
             selector = SelectFromModel(lgbm_selector, max_features=select_features)
             steps_list.append(('selector', selector))
