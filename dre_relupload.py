@@ -6,7 +6,7 @@ import argparse
 import numpy as np
 from sklearn.model_selection import train_test_split, cross_val_predict, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.impute import KNNImputer
+from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -109,7 +109,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     # --- Build the appropriate pipeline using TUNED params ---
     log.info("  - Using standard pipeline for all data types...")
     pipeline = Pipeline([
-        ('imputer', KNNImputer(n_neighbors=5)),
+        ('imputer', SimpleImputer(strategy='median')),
         ('scaler', scaler),
         ('pca', PCA(n_components=config['n_qubits'])),
         ('qml', MulticlassQuantumClassifierDataReuploadingDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))

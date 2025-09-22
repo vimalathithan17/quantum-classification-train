@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif, SelectFromModel
-from sklearn.impute import KNNImputer
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the centralized logger
@@ -115,7 +115,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
         # 1. Feature selection INSIDE the fold to prevent data leakage
-        imputer_for_fs = KNNImputer(n_neighbors=5)
+        imputer_for_fs = SimpleImputer(strategy='median')
         X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
 
         n_features = config.get('n_features', 10)
@@ -155,7 +155,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
     # Re-run feature selection on the full training data to determine the final feature set
-    imputer_for_fs = KNNImputer(n_neighbors=5)
+    imputer_for_fs = SimpleImputer(strategy='median')
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
 
     n_features = config.get('n_features', 10)

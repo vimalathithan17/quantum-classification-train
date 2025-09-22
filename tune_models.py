@@ -10,7 +10,7 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.impute import KNNImputer
+from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif
@@ -55,24 +55,23 @@ def get_scaler(scaler_name):
     if scaler_name == 'Standard': return StandardScaler()
     if scaler_name == 'Robust': return RobustScaler()
 
-def objective(trial, args, X, y, n_classes):
+def objective(trial, args, X, y, n_classes, min_qbits, max_qbits):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Log suggested parameters
     params = {
         'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
-        'n_qubits': trial.suggest_int('n_qubits', n_classes, 12, step=2),
-        'n_layers': trial.suggest_int('n_layers', 3, 5)
+        'n_qubits': trial.suggest_int('n_qubits', min_qbits, max_qbits, step=2),
+        'n_layers': trial.suggest_int('n_layers', args.min_layers, args.max_layers)
     }
 
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
     scaler = get_scaler(params['scaler'])
-    steps = 75  # Fixed number of steps for tuning
+    steps = args.steps  # Use steps from command-line arguments
     n_qubits = params['n_qubits']
     n_layers = params['n_layers']
-    n_neighbors = 5  # Fixed value
     
     n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -81,7 +80,7 @@ def objective(trial, args, X, y, n_classes):
     if args.approach == 1:
         steps_list = []
         # Common steps for Approach 1
-        steps_list.append(('imputer', KNNImputer(n_neighbors=n_neighbors)))
+        steps_list.append(('imputer', SimpleImputer(strategy='median')))
         steps_list.append(('scaler', scaler))
 
         if args.dim_reducer == 'pca':
@@ -120,7 +119,7 @@ def objective(trial, args, X, y, n_classes):
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
             # Perform fold-specific feature selection and preprocessing
-            temp_imputer = KNNImputer(n_neighbors=n_neighbors)
+            temp_imputer = SimpleImputer(strategy='median')
             X_train_imputed = temp_imputer.fit_transform(X_train)
             selector = SelectKBest(f_classif, k=n_qubits).fit(X_train_imputed, y_train)
             selected_cols = X_train.columns[selector.get_support()]
@@ -154,6 +153,11 @@ def main():
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
+    parser.add_argument('--min_qbits', type=int, default=None, help="Minimum number of qubits for tuning.")
+    parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
+    parser.add_argument('--min_layers', type=int, default=3, help="Minimum number of layers for tuning.")
+    parser.add_argument('--max_layers', type=int, default=5, help="Maximum number of layers for tuning.")
+    parser.add_argument('--steps', type=int, default=75, help="Number of training steps for tuning.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
@@ -173,6 +177,15 @@ def main():
     n_classes = len(le.classes_)
     log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
 
+    # Determine qubit search range
+    min_qbits = args.min_qbits if args.min_qbits is not None else n_classes
+    min_qbits = max(min_qbits, n_classes)
+    if min_qbits % 2 != 0:
+        min_qbits += 1
+    max_qbits = args.max_qbits
+    if max_qbits <= min_qbits:
+        max_qbits = min_qbits + 2
+
     study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
     log.info(f"Using study name: {study_name}")
     log.info(f"Using journal file: {TUNING_JOURNAL_FILE}")
@@ -181,16 +194,15 @@ def main():
     study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
     
     # Add fixed 'steps' to the study's user attributes
-    study.set_user_attr('steps', 75)
+    study.set_user_attr('steps', args.steps)
 
-    study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=args.n_trials)
+    study.optimize(lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits), n_trials=args.n_trials)
 
     log.info("--- Hyperparameter Tuning Complete ---")
     log.info(f"Best hyperparameters found: {study.best_params}")
     
     best_params = study.best_params
-    best_params['steps'] = 75
-    best_params['n_neighbors'] = 5
+    best_params['steps'] = args.steps
     
     os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
     params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')

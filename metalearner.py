@@ -100,9 +100,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     params = {
         'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
         'n_layers': trial.suggest_int('n_layers', 3, 6),
-        'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True),
-        'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25)
+        'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True)
     }
+    params['steps'] = 100  # Fixed number of steps for tuning
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
     model_params = {
@@ -135,8 +135,7 @@ def main():
     parser.add_argument('--indicator_file', type=str, required=True, help="Path to the parquet file with indicator features and labels.")
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
     parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
-    parser.add_argument('--min_steps', type=int, default=50, help="Minimum training steps for tuning.")
-    parser.add_argument('--max_steps', type=int, default=150, help="Maximum training steps for tuning.")
+    parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
@@ -184,6 +183,11 @@ def main():
             log.warning(f"Best parameter file not found at '{params_path}'. Using default parameters.")
             # Define sensible defaults if tuning was skipped
             params = {'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.05, 'steps': 100}
+
+        # Override steps if provided via command line
+        if args.override_steps:
+            params['steps'] = args.override_steps
+            log.info(f"Overriding training steps with: {args.override_steps}")
 
         # Prepare model with loaded or default parameters
         model_params = {

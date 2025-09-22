@@ -81,10 +81,7 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
-
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 75 steps)
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 100 steps)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
@@ -94,7 +91,7 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
-- The number of training steps for tuning is fixed at 75.
+- The number of training steps for tuning is fixed at 100.
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -261,8 +258,13 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1 when not `SNV`).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
+	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
+	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
+	- `--min_layers` (int, default 3): Minimum number of layers for tuning.
+	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
+	- `--steps` (int, default 75): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`. The tuning is performed with a fixed 75 steps and a fixed `n_neighbors` of 5 for the `KNNImputer`.
+	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`. The tuning uses a `SimpleImputer` with a median strategy.
 
 
 3) `dre_standard.py` and `dre_relupload.py`
@@ -290,14 +292,10 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 
 5) `metalearner.py`
 	- `--preds_dir` (one or more, required): One or more directories to search for `train_oof_preds_*` and `test_preds_*` files (use your curated `final_ensemble_predictions` directory).
-	- `--indicator_file` (str, default `indicator_features.parquet`): Path to a parquet file containing indicator features and the true `class` column for combining with meta-features.
-	- `--encoder_dir` (str, default `master_label_encoder`): Directory containing `label_encoder.joblib`.
-	- `--tune` (flag): If provided, the script will run hyperparameter tuning (Optuna) for the meta-learner and write best params to the `--params_file`.
-	- `--params_file` (str, default `meta_learner_best_params.json`): JSON file to read/write best hyperparameters.
+	- `--indicator_file` (str, required): Path to a parquet file containing indicator features and the true `class` column for combining with meta-features.
 	- `--mode` (str, default `train`): Operation mode, `train` or `tune`.
 	- `--n_trials` (int, default 50): Number of Optuna trials for tuning.
-	- `--min_steps` (int, default 50): Minimum training steps for tuning.
-	- `--max_steps` (int, default 150): Maximum training steps for tuning.
+    - `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 
 6) `inference.py`
@@ -320,6 +318,11 @@ Environment variables relevant to CLI behavior
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
 | `--n_trials` | int | No | `30` | - | Number of Optuna trials. |
+| `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
+| `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
+| `--min_layers` | int | No | `3` | - | Minimum number of layers for tuning. |
+| `--max_layers` | int | No | `5` | - | Maximum number of layers for tuning. |
+| `--steps` | int | No | `75` | - | Number of training steps for tuning. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 
 ### Example commands for `tune_models.py`
@@ -328,8 +331,8 @@ Environment variables relevant to CLI behavior
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 2 (reuploading) for Prot (30 trials)
-python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
+# Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
+python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6 --steps 100
 ```
 
 ### Command-line arguments for `metalearner.py`
