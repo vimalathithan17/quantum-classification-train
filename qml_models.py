@@ -148,21 +148,23 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
         opt = qml.AdamOptimizer(self.learning_rate)
-        trainable_params = [self.weights_ansatz, self.weights_missing]
+        
         for step in range(self.steps):
-            def cost(params):
-                w_ansatz, w_missing = params
+            # The cost function now takes the weights directly as arguments
+            def cost(w_ansatz, w_missing):
                 raw_predictions = np.array([qcircuit(f, m, w_ansatz, w_missing) for f, m in zip(X_scaled, is_missing_mask)])
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
             
-            trainable_params, current_loss = opt.step_and_cost(cost, trainable_params)
+            # Pass the weights to step_and_cost and receive them back as a tuple
+            (self.weights_ansatz, self.weights_missing), current_loss = opt.step_and_cost(
+                cost, self.weights_ansatz, self.weights_missing
+            )
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
                 log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
 
-        self.weights_ansatz, self.weights_missing = trainable_params
         return self
 
     def predict_proba(self, X):
@@ -213,21 +215,23 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
         opt = qml.AdamOptimizer(self.learning_rate)
-        trainable_params = [self.weights_ansatz, self.weights_missing]
+        
         for step in range(self.steps):
-            def cost(params):
-                w_ansatz, w_missing = params
+            # The cost function now takes the weights directly as arguments
+            def cost(w_ansatz, w_missing):
                 raw_predictions = np.array([qcircuit(f, m, w_ansatz, w_missing) for f, m in zip(X_scaled, is_missing_mask)])
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
 
-            trainable_params, current_loss = opt.step_and_cost(cost, trainable_params)
+            # Pass the weights to step_and_cost and receive them back as a tuple
+            (self.weights_ansatz, self.weights_missing), current_loss = opt.step_and_cost(
+                cost, self.weights_ansatz, self.weights_missing
+            )
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
                 log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
 
-        self.weights_ansatz, self.weights_missing = trainable_params
         return self
 
     def predict_proba(self, X):
