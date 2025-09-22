@@ -4,7 +4,6 @@ import joblib
 import json
 import argparse
 import numpy as np
-import lightgbm as lgb
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif, SelectFromModel
@@ -65,6 +64,7 @@ except FileNotFoundError:
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(description="Train CFE Standard models.")
 parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
@@ -85,6 +85,11 @@ for data_type in DATA_TYPES_TO_TRAIN:
     with open(param_file_found, 'r') as f:
         config = json.load(f)
     log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
+
+    # --- Override steps if provided ---
+    if args.override_steps:
+        config['steps'] = args.override_steps
+        log.info(f"Overriding training steps with: {args.override_steps}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -114,21 +119,13 @@ for data_type in DATA_TYPES_TO_TRAIN:
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
         # 1. Feature selection INSIDE the fold to prevent data leakage
-        imputer_for_fs = KNNImputer(n_neighbors=config.get('n_neighbors_imputer', 5))
+        imputer_for_fs = KNNImputer(n_neighbors=5)
         X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
 
-        if data_type == 'Meth':
-            log.info("      - Using advanced LightGBM feature selection for Meth data...")
-            lgbm_selector = lgb.LGBMClassifier(
-                random_state=42, n_jobs=-1, feature_fraction=0.1,
-                bagging_fraction=0.8, bagging_freq=1
-            )
-            selector = SelectFromModel(
-                lgbm_selector, max_features=n_features
-            ).fit(X_train_fold_imputed, y_train_fold)
-        else: # Use fast univariate selection for other data types
-            log.info("      - Using standard KBest feature selection...")
-            selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
+        n_features = config.get('n_features', 10) 
+
+        log.info("      - Using standard KBest feature selection...")
+        selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
         
         selected_cols = X_train_fold.columns[selector.get_support()]
         
@@ -162,23 +159,14 @@ for data_type in DATA_TYPES_TO_TRAIN:
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
     # Re-run feature selection on the full training data to determine the final feature set
-    imputer_for_fs = KNNImputer(n_neighbors=config.get('n_neighbors_imputer', 5))
+    imputer_for_fs = KNNImputer(n_neighbors=5)
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
 
-    if data_type == 'Meth':
-        log.info("    - Using advanced LightGBM feature selection for final Meth model...")
-        lgbm_selector = lgb.LGBMClassifier(
-            random_state=42, n_jobs=-1, feature_fraction=0.1,
-            bagging_fraction=0.8, bagging_freq=1
-        )
-        final_selector = SelectFromModel(
-            lgbm_selector, max_features=n_features
-        ).fit(X_train_imputed, y_train)
-    else:
-        log.info("    - Using standard KBest feature selection for final model...")
-        final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
-
-    final_selected_cols = X_train.columns[final_selector.get_support()]
+    n_features = config.get('n_features', 10)
+    log.info("    - Using standard KBest feature selection for final model...")
+    final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
+    
+    final_selected_cols = X.columns[final_selector.get_support()]
     joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
     log.info(f"    - Saved {len(final_selected_cols)} selected features for {data_type}.")
 

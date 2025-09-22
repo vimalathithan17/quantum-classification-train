@@ -133,18 +133,13 @@ The DRE approach requires us to distill thousands of features into a small, info
 * **PCA (Principal Component Analysis):** This was chosen as the **baseline** because it's a fast, linear, and widely understood technique. It works by finding the axes of maximum variance in the data. We use it to answer the question: "How well does a quantum model perform when fed features from a standard, linear classical pipeline?"
 * **UMAP (Uniform Manifold Approximation and Projection):** This was chosen as the **experimental alternative**. UMAP is a non-linear technique that assumes high-dimensional data lies on a lower-dimensional, curved manifold. The hypothesis is that the biological states in multi-omics data are not simple linear clusters but complex, intertwined manifolds. UMAP might be better at "unraveling" these structures into a set of features that are more meaningful for the quantum classifier.
 
-### **Feature Selection: `SelectKBest` vs. `SelectFromModel` (Approach 2 - CFE)**
-The CFE approach requires us to select a small subset of the best original features. The strategy for this selection changes depending on the context.
+### **Feature Selection: `SelectKBest` (Approach 2 - CFE)**
+The CFE approach requires us to select a small subset of the best original features.
 
 * **`SelectKBest` with `f_classif`:**
     * **What it is:** A simple, **univariate filter**. It scores each feature individually based on its statistical ANOVA F-value with the class labels and keeps the top "k".
-    * **Where it's used:** During the **hyperparameter tuning** phase in `tune_models.py` and for **all non-`Meth` data types** in the final training scripts (`cfe_*.py`).
-    * **Why:** It is extremely **fast**. Since feature selection must be performed inside every trial of the Optuna loop and for every fold of cross-validation, speed is essential to make the process computationally feasible.
-
-* **`SelectFromModel` with LightGBM:**
-    * **What it is:** A powerful, **embedded method**. It trains a full, gradient-boosted tree model (LightGBM) and selects features based on their importance to that model's predictive power. It can capture complex **interactions** between features that univariate filters would miss.
-    * **Where it's used:** Exclusively for the high-dimensional **`Meth` (Methylation) data type** during the **final training phase** in the `cfe_*.py` scripts.
-    * **Why:** At this stage, **accuracy is more important than speed**. Methylation data is notoriously sparse and high-dimensional, and its predictive signals often rely on interactions between features. Using a more intelligent selection method for the final model ensures it is as robust and accurate as possible.
+    * **Where it's used:** This method is used for all data types during both hyperparameter tuning and final training.
+    * **Why:** It is extremely **fast** and effective. Since feature selection must be performed inside every trial of the Optuna loop and for every fold of cross-validation, speed is essential. Using a consistent and fast method ensures that the process is computationally feasible and that the results are comparable across all data types.
 
 ### **The Ensemble: Why Stack?**
 The final architectural choice was to not rely on a single model but to build a **stacked ensemble**.

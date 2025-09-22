@@ -84,8 +84,8 @@ Examples:
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging, tuning steps between 75 and 125
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --min_steps 75 --max_steps 125 --verbose
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 75 steps)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
@@ -94,6 +94,7 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
+- The number of training steps for tuning is fixed at 75.
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -123,8 +124,8 @@ Run the appropriate script for each approach variant. The training scripts read 
 Examples (the repository contains multiple `approach` scripts; run the ones you need):
 
 ```bash
-# Approach 1 - Dimensionality Reduction Encoding (standard) with verbose logging
-python dre_standard.py --verbose
+# Approach 1 - Dimensionality Reduction Encoding (standard) with verbose logging and override steps
+python dre_standard.py --verbose --override_steps 100
 
 # Approach 1 - Dimensionality Reduction Encoding (data reuploading)
 python dre_relupload.py
@@ -132,8 +133,8 @@ python dre_relupload.py
 # Approach 2 - Conditional Feature Encoding (standard) with verbose logging
 python cfe_standard.py --verbose
 
-# Approach 2 - Conditional Feature Encoding (data reuploading)
-python cfe_relupload.py
+# Approach 2 - Conditional Feature Encoding (data reuploading) with override steps
+python cfe_relupload.py --override_steps 100
 ```
 
 Outputs (per data type):
@@ -260,14 +261,13 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1 when not `SNV`).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
-	- `--min_steps` (int, default 50): Minimum training steps for tuning.
-	- `--max_steps` (int, default 100): Maximum training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
+	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`. The tuning is performed with a fixed 75 steps and a fixed `n_neighbors` of 5 for the `KNNImputer`.
 
 
 3) `dre_standard.py` and `dre_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
+	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -279,6 +279,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 
 4) `cfe_standard.py` and `cfe_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
+	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -319,8 +320,6 @@ Environment variables relevant to CLI behavior
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
 | `--n_trials` | int | No | `30` | - | Number of Optuna trials. |
-| `--min_steps` | int | No | `50` | - | Minimum training steps for tuning. |
-| `--max_steps` | int | No | `100` | - | Maximum training steps for tuning. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 
 ### Example commands for `tune_models.py`
@@ -328,9 +327,6 @@ Environment variables relevant to CLI behavior
 ```bash
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
-
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging, tuning steps between 75 and 125
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --min_steps 75 --max_steps 125 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
@@ -364,16 +360,3 @@ python metalearner.py \
     --max_steps 200 \
     --verbose
 ```
-
-## Available data types
-
-The following data types can be passed to the `--datatype` argument in the scripts:
-
-- `CNV`
-- `GeneExpr`
-- `Meth`
-- `Prot`
-- `SNV`
-- `miRNA`
-
----

@@ -6,7 +6,6 @@ import argparse
 import os
 import itertools
 import json
-import lightgbm as lgb
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
@@ -63,22 +62,17 @@ def objective(trial, args, X, y, n_classes):
     # Log suggested parameters
     params = {
         'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
-        'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25),
         'n_qubits': trial.suggest_int('n_qubits', n_classes, 12, step=2),
-        'n_layers': trial.suggest_int('n_layers', 1, 5),
-        'n_neighbors': trial.suggest_int('n_neighbors', 3, 9,step=2)
+        'n_layers': trial.suggest_int('n_layers', 3, 5)
     }
-
-    if args.approach == 1 and args.datatype == 'Meth':
-        params['select_features'] = trial.suggest_int('select_features', 500, 2000, step=250)
 
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
     scaler = get_scaler(params['scaler'])
-    steps = params['steps']
+    steps = 75  # Fixed number of steps for tuning
     n_qubits = params['n_qubits']
     n_layers = params['n_layers']
-    n_neighbors = params['n_neighbors']
+    n_neighbors = 5  # Fixed value
     
     n_splits = 3
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -86,17 +80,6 @@ def objective(trial, args, X, y, n_classes):
 
     if args.approach == 1:
         steps_list = []
-        # For Meth data, add the feature selector to the pipeline
-        if args.datatype == 'Meth':
-            log.info("  - Adding LightGBM feature selector to the pipeline for Meth trial...")
-            select_features = params['select_features']
-            lgbm_selector = lgb.LGBMClassifier(
-                random_state=42, n_jobs=-1, feature_fraction=0.1,
-                bagging_fraction=0.8, bagging_freq=1
-            )
-            selector = SelectFromModel(lgbm_selector, max_features=select_features)
-            steps_list.append(('selector', selector))
-
         # Common steps for Approach 1
         steps_list.append(('imputer', KNNImputer(n_neighbors=n_neighbors)))
         steps_list.append(('scaler', scaler))
@@ -171,8 +154,6 @@ def main():
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
     parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
-    parser.add_argument('--min_steps', type=int, default=50, help="Minimum training steps for tuning.")
-    parser.add_argument('--max_steps', type=int, default=100, help="Maximum training steps for tuning.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
@@ -199,15 +180,22 @@ def main():
     storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
     study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
     
+    # Add fixed 'steps' to the study's user attributes
+    study.set_user_attr('steps', 75)
+
     study.optimize(lambda t: objective(t, args, X, y, n_classes), n_trials=args.n_trials)
 
     log.info("--- Hyperparameter Tuning Complete ---")
     log.info(f"Best hyperparameters found: {study.best_params}")
     
+    best_params = study.best_params
+    best_params['steps'] = 75
+    best_params['n_neighbors'] = 5
+    
     os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
     params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')
     with open(params_file, 'w') as f:
-        json.dump(study.best_params, f, indent=4)
+        json.dump(best_params, f, indent=4)
     log.info(f"Saved best parameters to '{params_file}'")
 
 if __name__ == "__main__":

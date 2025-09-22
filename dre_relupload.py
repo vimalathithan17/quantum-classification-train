@@ -3,14 +3,12 @@ import os
 import joblib
 import json
 import argparse
-import lightgbm as lgb
 import numpy as np
 from sklearn.model_selection import train_test_split, cross_val_predict, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import KNNImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the centralized logger
@@ -66,6 +64,7 @@ except FileNotFoundError:
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(description="Train DRE Data Re-uploading models.")
 parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
@@ -87,6 +86,11 @@ for data_type in DATA_TYPES_TO_TRAIN:
         config = json.load(f)
     log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
 
+    # --- Override steps if provided ---
+    if args.override_steps:
+        config['steps'] = args.override_steps
+        log.info(f"Overriding training steps with: {args.override_steps}")
+
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
     df = safe_load_parquet(file_path)
@@ -103,27 +107,13 @@ for data_type in DATA_TYPES_TO_TRAIN:
     scaler = get_scaler(config.get('scaler', 'MinMax'))
 
     # --- Build the appropriate pipeline using TUNED params ---
-    if data_type == 'Meth':
-        log.info("  - Using advanced pipeline for Meth data...")
-        selector = SelectFromModel(
-            lgb.LGBMClassifier(random_state=42, n_jobs=-1), 
-            max_features=config['select_features']
-        )
-        pipeline = Pipeline([
-            ('selector', selector),
-            ('imputer', KNNImputer(n_neighbors=config['n_neighbors'])),
-            ('scaler', scaler),
-            ('pca', PCA(n_components=config['n_qubits'])),
-            ('qml', MulticlassQuantumClassifierDataReuploadingDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
-        ])
-    else: # For CNV, GeneExpr, miRNA, Prot
-        log.info("  - Using standard pipeline for dense data...")
-        pipeline = Pipeline([
-            ('imputer', KNNImputer(n_neighbors=config.get('n_neighbors', 5))),
-            ('scaler', scaler),
-            ('pca', PCA(n_components=config['n_qubits'])),
-            ('qml', MulticlassQuantumClassifierDataReuploadingDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
-        ])
+    log.info("  - Using standard pipeline for all data types...")
+    pipeline = Pipeline([
+        ('imputer', KNNImputer(n_neighbors=5)),
+        ('scaler', scaler),
+        ('pca', PCA(n_components=config['n_qubits'])),
+        ('qml', MulticlassQuantumClassifierDataReuploadingDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
+    ])
     # --- Generate and Save Multiclass Predictions ---
     log.info("  - Generating OOF predictions with cross_val_predict...")
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)

@@ -99,7 +99,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     # Log suggested parameters
     params = {
         'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
-        'n_layers': trial.suggest_int('n_layers', 1, 6),
+        'n_layers': trial.suggest_int('n_layers', 3, 6),
         'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True),
         'steps': trial.suggest_int('steps', args.min_steps, args.max_steps, step=25)
     }
