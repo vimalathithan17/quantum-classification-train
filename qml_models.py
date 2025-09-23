@@ -78,7 +78,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         def qcircuit(inputs, weights):
             for layer in range(self.n_layers):
                 qml.AngleEmbedding(inputs, wires=range(self.n_qubits))
-                qml.BasicEntanglerLayers(weights[layer], wires=range(self.n_qubits))
+                qml.BasicEntanglerLayers(weights[layer:layer+1], wires=range(self.n_qubits))
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_classes)]
         return qcircuit
 
@@ -197,12 +197,14 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         @qml.qnode(self.dev, interface='autograd')
         def qcircuit(features, is_missing_mask, weights_ansatz, weights_missing):
             for layer in range(self.n_layers):
+                # Data encoding
                 for i in range(self.n_qubits):
                     if is_missing_mask[i] == 1:
                         qml.RY(weights_missing[layer, i], wires=i)
                     else:
                         qml.RY(features[i] * np.pi, wires=i)
-                qml.BasicEntanglerLayers(weights_ansatz[layer], wires=range(self.n_qubits))
+                # Trainable ansatz
+                qml.BasicEntanglerLayers(weights_ansatz[layer:layer+1], wires=range(self.n_qubits))
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_classes)]
         return qcircuit
 
