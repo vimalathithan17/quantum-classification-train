@@ -6,7 +6,7 @@ import joblib
 import json
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.metrics import accuracy_score, classification_report
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
@@ -21,6 +21,13 @@ from qml_models import MulticlassQuantumClassifierDR, MulticlassQuantumClassifie
 ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
+
+
+def get_scaler(scaler_name):
+    """Returns a scaler object from a string name."""
+    if scaler_name == 'MinMax': return MinMaxScaler()
+    if scaler_name == 'Standard': return StandardScaler()
+    if scaler_name == 'Robust': return RobustScaler()
 
 
 def assemble_meta_data(preds_dirs, indicator_file):
@@ -92,18 +99,24 @@ def assemble_meta_data(preds_dirs, indicator_file):
     
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, scaler_options):
     """Defines one trial for tuning the meta-learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Log suggested parameters
     params = {
+        'scaler': trial.suggest_categorical('scaler', scaler_options),
         'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
         'n_layers': trial.suggest_int('n_layers', 3, 6),
         'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True)
     }
     params['steps'] = 100  # Fixed number of steps for tuning
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
+
+    # Create and fit the scaler
+    scaler = get_scaler(params['scaler'])
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
 
     model_params = {
         'n_qubits': X_train.shape[1], 
@@ -120,10 +133,10 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
         model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
     
     log.info(f"Trial {trial.number}: Training {params['qml_model']} model...")
-    model.fit(X_train.values, y_train.values)
+    model.fit(X_train_scaled, y_train.values)
     
     log.info(f"Trial {trial.number}: Evaluating...")
-    predictions = model.predict(X_val.values)
+    predictions = model.predict(X_val_scaled)
     accuracy = accuracy_score(y_val.values, predictions)
     
     log.info(f"--- Trial {trial.number} Finished: Accuracy = {accuracy:.4f} ---")
@@ -136,6 +149,7 @@ def main():
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
     parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
     parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
+    parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
@@ -152,6 +166,14 @@ def main():
     if args.mode == 'tune':
         log.info(f"--- Starting Hyperparameter Tuning for Meta-Learner ({args.n_trials} trials) ---")
         
+        # --- Scaler selection logic ---
+        scaler_map = {'s': 'Standard', 'm': 'MinMax', 'r': 'Robust'}
+        scaler_options = [scaler_map[char] for char in args.scalers if char in scaler_map]
+        if not scaler_options:
+            log.error("No valid scalers specified. Use 's', 'm', or 'r'. Exiting.")
+            return
+        log.info(f"Using scalers: {scaler_options}")
+
         # Split training data for validation during tuning
         X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
             X_meta_train, y_meta_train, test_size=0.25, random_state=42, stratify=y_meta_train
@@ -161,7 +183,7 @@ def main():
         storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
         
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args), n_trials=args.n_trials)
+        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args, scaler_options), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
@@ -182,12 +204,17 @@ def main():
         except FileNotFoundError:
             log.warning(f"Best parameter file not found at '{params_path}'. Using default parameters.")
             # Define sensible defaults if tuning was skipped
-            params = {'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.05, 'steps': 100}
+            params = {'scaler': 'Standard', 'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.05, 'steps': 100}
 
         # Override steps if provided via command line
         if args.override_steps:
             params['steps'] = args.override_steps
             log.info(f"Overriding training steps with: {args.override_steps}")
+
+        # Create and fit the scaler on the full training data
+        scaler = get_scaler(params.get('scaler', 'Standard'))
+        log.info(f"Using scaler: {params.get('scaler', 'Standard')}")
+        X_meta_train_scaled = scaler.fit_transform(X_meta_train)
 
         # Prepare model with loaded or default parameters
         model_params = {
@@ -205,16 +232,21 @@ def main():
             final_model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
 
         log.info(f"Training final {params['qml_model']} model with parameters: {json.dumps(model_params, indent=2)}")
-        final_model.fit(X_meta_train.values, y_meta_train.values)
+        final_model.fit(X_meta_train_scaled, y_meta_train.values)
         
-        # Save the trained model
+        # Save the trained model and scaler
         model_path = os.path.join(OUTPUT_DIR, 'metalearner_model.joblib')
         joblib.dump(final_model, model_path)
         log.info(f"Final meta-learner model saved to '{model_path}'")
+        
+        scaler_path = os.path.join(OUTPUT_DIR, 'metalearner_scaler.joblib')
+        joblib.dump(scaler, scaler_path)
+        log.info(f"Final meta-learner scaler saved to '{scaler_path}'")
 
         # Evaluate and save final predictions
         log.info("--- Evaluating on Test Set ---")
-        test_predictions = final_model.predict(X_meta_test.values)
+        X_meta_test_scaled = scaler.transform(X_meta_test)
+        test_predictions = final_model.predict(X_meta_test_scaled)
         test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
 

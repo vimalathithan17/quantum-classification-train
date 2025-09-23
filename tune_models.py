@@ -55,13 +55,13 @@ def get_scaler(scaler_name):
     if scaler_name == 'Standard': return StandardScaler()
     if scaler_name == 'Robust': return RobustScaler()
 
-def objective(trial, args, X, y, n_classes, min_qbits, max_qbits):
+def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Log suggested parameters
     params = {
-        'scaler': trial.suggest_categorical('scaler', ['MinMax', 'Standard', 'Robust']),
+        'scaler': trial.suggest_categorical('scaler', scaler_options),
         'n_qubits': trial.suggest_int('n_qubits', min_qbits, max_qbits, step=2),
         'n_layers': trial.suggest_int('n_layers', args.min_layers, args.max_layers)
     }
@@ -158,10 +158,19 @@ def main():
     parser.add_argument('--min_layers', type=int, default=3, help="Minimum number of layers for tuning.")
     parser.add_argument('--max_layers', type=int, default=5, help="Maximum number of layers for tuning.")
     parser.add_argument('--steps', type=int, default=75, help="Number of training steps for tuning.")
+    parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
 
     log.info(f"Starting hyperparameter tuning with arguments: {args}")
+
+    # --- Scaler selection logic ---
+    scaler_map = {'s': 'Standard', 'm': 'MinMax', 'r': 'Robust'}
+    scaler_options = [scaler_map[char] for char in args.scalers if char in scaler_map]
+    if not scaler_options:
+        log.error("No valid scalers specified. Use 's', 'm', or 'r'. Exiting.")
+        return
+    log.info(f"Using scalers: {scaler_options}")
 
     df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
     if df is None: 
@@ -196,7 +205,7 @@ def main():
     # Add fixed 'steps' to the study's user attributes
     study.set_user_attr('steps', args.steps)
 
-    study.optimize(lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits), n_trials=args.n_trials)
+    study.optimize(lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits, scaler_options), n_trials=args.n_trials)
 
     log.info("--- Hyperparameter Tuning Complete ---")
     log.info(f"Best hyperparameters found: {study.best_params}")

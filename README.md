@@ -255,8 +255,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 2) `tune_models.py`
 	- `--datatype` (str, required): Data type to tune (e.g., `CNV`, `Meth`, `Prot`).
 	- `--approach` (int, required): `1` or `2` selecting Approach 1 (Dimensionality Reduction Encoding) or Approach 2 (Conditional Feature Encoding).
-	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1 when not `SNV`).
+	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
+	- `--scalers` (str, default `smr`): String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
 	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
 	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
