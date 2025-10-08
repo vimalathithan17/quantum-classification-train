@@ -13,7 +13,8 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, La
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif
+from sklearn.feature_selection import SelectFromModel
+from lightgbm import LGBMClassifier
 from umap import UMAP
 
 # Import the centralized logger
@@ -118,21 +119,33 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
-            # Perform fold-specific feature selection and preprocessing
+            # Perform fold-specific feature selection and preprocessing using LightGBM importances
             temp_imputer = SimpleImputer(strategy='median')
             X_train_imputed = temp_imputer.fit_transform(X_train)
-            selector = SelectKBest(f_classif, k=n_qubits).fit(X_train_imputed, y_train)
-            selected_cols = X_train.columns[selector.get_support()]
-            
+
+            # Scale the data *before* feature selection
+            scaler.fit(X_train_imputed)
+            X_train_scaled_for_selection = scaler.transform(X_train_imputed)
+
+            # Fit a LightGBM classifier to compute feature importances and pick top-k
+            lgb = LGBMClassifier(n_estimators=200, random_state=42)
+            # Guard: if the number of features is less than requested, pick all
+            actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
+            lgb.fit(X_train_scaled_for_selection, y_train)
+            importances = lgb.feature_importances_
+            top_idx = np.argsort(importances)[-actual_k:][::-1]
+            selected_cols = X_train.columns[top_idx]
+
             X_train_selected = X_train[selected_cols]
             X_val_selected = X_val[selected_cols]
 
-            # Prepare the data tuple (mask, fill, and scale) correctly
+            # Prepare the data tuple (mask, fill, scale) correctly for the model
             is_missing_train = X_train_selected.isnull().astype(int).values
             X_train_filled = X_train_selected.fillna(0.0).values
             is_missing_val = X_val_selected.isnull().astype(int).values
             X_val_filled = X_val_selected.fillna(0.0).values
-            
+
+            # Re-fit the scaler on the *selected* training data before transforming
             scaler.fit(X_train_filled)
             X_train_scaled = scaler.transform(X_train_filled)
             X_val_scaled = scaler.transform(X_val_filled)

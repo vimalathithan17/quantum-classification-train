@@ -6,7 +6,8 @@ import argparse
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.feature_selection import SelectKBest, f_classif, SelectFromModel
+from sklearn.feature_selection import SelectFromModel
+from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
@@ -118,19 +119,26 @@ for data_type in DATA_TYPES_TO_TRAIN:
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-        # 1. Feature selection INSIDE the fold to prevent data leakage
-        imputer_for_fs = SimpleImputer(strategy='median')
-        X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
+    # 1. Feature selection INSIDE the fold to prevent data leakage
+    imputer_for_fs = SimpleImputer(strategy='median')
+    X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
 
-        n_features = config.get('n_features', 10) 
+    n_features = config.get('n_features', 10)
 
-        log.info("      - Using standard KBest feature selection...")
-        selector = SelectKBest(f_classif, k=n_features).fit(X_train_fold_imputed, y_train_fold)
-        
-        selected_cols = X_train_fold.columns[selector.get_support()]
-        
-        X_train_fold_selected = X_train_fold[selected_cols]
-        X_val_fold_selected = X_val_fold[selected_cols]
+    log.info("      - Using LightGBM importance-based selection...")
+    scaler = get_scaler(config.get('scaler', 'MinMax'))
+    scaler.fit(X_train_fold_imputed)
+    X_train_fold_scaled = scaler.transform(X_train_fold_imputed)
+
+    lgb = LGBMClassifier(n_estimators=200, random_state=42)
+    actual_k = min(n_features, X_train_fold_scaled.shape[1])
+    lgb.fit(X_train_fold_scaled, y_train_fold)
+    importances = lgb.feature_importances_
+    top_idx = np.argsort(importances)[-actual_k:][::-1]
+    selected_cols = X_train_fold.columns[top_idx]
+
+    X_train_fold_selected = X_train_fold[selected_cols]
+    X_val_fold_selected = X_val_fold[selected_cols]
 
         # 2. Prepare data tuple (mask, fill, scale) for this fold
         is_missing_train = X_train_fold_selected.isnull().astype(int).values
@@ -163,10 +171,17 @@ for data_type in DATA_TYPES_TO_TRAIN:
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
 
     n_features = config.get('n_features', 10)
-    log.info("    - Using standard KBest feature selection for final model...")
-    final_selector = SelectKBest(f_classif, k=n_features).fit(X_train_imputed, y_train)
-    
-    final_selected_cols = X.columns[final_selector.get_support()]
+    log.info("    - Using LightGBM importance-based selection for final model...")
+    scaler_for_fs = get_scaler(config.get('scaler', 'MinMax'))
+    scaler_for_fs.fit(X_train_imputed)
+    X_train_scaled_for_selection = scaler_for_fs.transform(X_train_imputed)
+
+    lgb_final = LGBMClassifier(n_estimators=200, random_state=42)
+    actual_k = min(n_features, X_train_scaled_for_selection.shape[1])
+    lgb_final.fit(X_train_scaled_for_selection, y_train)
+    importances = lgb_final.feature_importances_
+    top_idx = np.argsort(importances)[-actual_k:][::-1]
+    final_selected_cols = X.columns[top_idx]
     joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
     log.info(f"    - Saved {len(final_selected_cols)} selected features for {data_type}.")
 

@@ -242,9 +242,9 @@ This repository provides two families of base-learner designs. The mapping below
 	- `dre_standard.py` — DRE with classical dimensionality reduction (PCA or UMAP) followed by a standard QML classifier.
 	- `dre_relupload.py` — DRE using data re-uploading QML circuits for datasets where re-uploading is beneficial.
 
-- Approach 2 — Conditional Feature Encoding (CFE)
+-- Approach 2 — Conditional Feature Encoding (CFE)
 	- `cfe_standard.py` — CFE where the QML model is conditioned on a selected subset of features (standard QML circuit).
-	- `cfe_relupload.py` — CFE using data re-uploading QML circuits and fold-wise feature selection.
+	- `cfe_relupload.py` — CFE using data re-uploading QML circuits and fold-wise feature selection (LightGBM importance-based selection).
 
 Below are the CLI arguments for each script (if not listed, script uses defaults):
 
@@ -265,7 +265,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
 	- `--steps` (int, default 75): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`. The tuning uses a `SimpleImputer` with a median strategy.
+	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
+	- Note: For Approach 2 (Conditional Feature Encoding) feature selection is performed using a LightGBM classifier to compute feature importances; the top-k important features (k = number of qubits) are selected per fold and for the final model. `SelectKBest` is no longer used for Approach 2.
 
 
 3) `dre_standard.py` and `dre_relupload.py`
