@@ -13,7 +13,6 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, La
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel
 from lightgbm import LGBMClassifier
 from umap import UMAP
 
@@ -172,7 +171,7 @@ def main():
     parser.add_argument('--n_trials', type=int, default=9, help="Number of Optuna trials for random search")
     parser.add_argument('--min_qbits', type=int, default=None, help="Minimum number of qubits for tuning.")
     parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
-    parser.add_argument('--min_layers', type=int, default=3, help="Minimum number of layers for tuning.")
+    parser.add_argument('--min_layers', type=int, default=2, help="Minimum number of layers for tuning.")
     parser.add_argument('--max_layers', type=int, default=5, help="Maximum number of layers for tuning.")
     parser.add_argument('--steps', type=int, default=75, help="Number of training steps for tuning.")
     parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")

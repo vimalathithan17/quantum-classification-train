@@ -133,13 +133,13 @@ The DRE approach requires us to distill thousands of features into a small, info
 * **PCA (Principal Component Analysis):** This was chosen as the **baseline** because it's a fast, linear, and widely understood technique. It works by finding the axes of maximum variance in the data. We use it to answer the question: "How well does a quantum model perform when fed features from a standard, linear classical pipeline?"
 * **UMAP (Uniform Manifold Approximation and Projection):** This was chosen as the **experimental alternative**. UMAP is a non-linear technique that assumes high-dimensional data lies on a lower-dimensional, curved manifold. The hypothesis is that the biological states in multi-omics data are not simple linear clusters but complex, intertwined manifolds. UMAP might be better at "unraveling" these structures into a set of features that are more meaningful for the quantum classifier.
 
-### **Feature Selection: `SelectKBest` (Approach 2 - CFE)**
+### **Feature Selection: LightGBM importance (Approach 2 - CFE)**
 The CFE approach requires us to select a small subset of the best original features.
 
-* **`SelectKBest` with `f_classif`:**
-    * **What it is:** A simple, **univariate filter**. It scores each feature individually based on its statistical ANOVA F-value with the class labels and keeps the top "k".
-    * **Where it's used:** This method is used for all data types during both hyperparameter tuning and final training.
-    * **Why:** It is extremely **fast** and effective. Since feature selection must be performed inside every trial of the Optuna loop and for every fold of cross-validation, speed is essential. Using a consistent and fast method ensures that the process is computationally feasible and that the results are comparable across all data types.
+* **LightGBM importance-based selection:**
+    * **What it is:** A tree-based method using a LightGBM classifier trained on the (scaled) training fold. Feature importances from the trained model are used to rank features, and the top-k features are selected (k is typically the number of qubits).
+    * **Where it's used:** This method is used for Approach 2 (CFE) during both hyperparameter tuning and final training. The selection is performed per fold and a final model selection is computed on the full training set.
+    * **Why:** LightGBM's tree-based importances are robust to constant features and don't rely on ANOVA assumptions. They also tend to provide useful multivariate signals that can be more informative than purely univariate scores, while still being fast when configured with fewer trees and feature subsampling.
 
 ### **The Ensemble: Why Stack?**
 The final architectural choice was to not rely on a single model but to build a **stacked ensemble**.

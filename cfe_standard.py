@@ -6,7 +6,6 @@ import argparse
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
-from sklearn.feature_selection import SelectFromModel
 from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -214,7 +213,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     log.info("  - Saved test predictions.")
 
     # --- Save all components for inference ---
-    joblib.dump(final_selector, os.path.join(OUTPUT_DIR, f'selector_{data_type}.joblib'))
+    joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selector_{data_type}.joblib'))
     joblib.dump(final_scaler, os.path.join(OUTPUT_DIR, f'scaler_{data_type}.joblib'))
     joblib.dump(final_model, os.path.join(OUTPUT_DIR, f'qml_model_{data_type}.joblib'))
     log.info(f"  - Saved final selector, scaler, and QML model for {data_type}.")

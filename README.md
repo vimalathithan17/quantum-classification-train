@@ -261,7 +261,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--n_trials` (int, default 30): Number of Optuna trials to run.
 	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
 	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
-	- `--min_layers` (int, default 3): Minimum number of layers for tuning.
+	- `--min_layers` (int, default 2): Minimum number of layers for tuning.
 	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
 	- `--steps` (int, default 75): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
@@ -322,7 +322,7 @@ Environment variables relevant to CLI behavior
 | `--n_trials` | int | No | `30` | - | Number of Optuna trials. |
 | `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
-| `--min_layers` | int | No | `3` | - | Minimum number of layers for tuning. |
+| `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
 | `--max_layers` | int | No | `5` | - | Maximum number of layers for tuning. |
 | `--steps` | int | No | `75` | - | Number of training steps for tuning. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
