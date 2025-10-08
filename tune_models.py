@@ -128,13 +128,17 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             X_train_scaled_for_selection = scaler.transform(X_train_imputed)
 
             # Fit a LightGBM classifier to compute feature importances and pick top-k
-            lgb = LGBMClassifier(n_estimators=200, random_state=42)
+            # Use a lightweight LightGBM configuration: fewer trees, feature subsampling
+            lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7, 
+                                 n_jobs=1, random_state=42, verbosity=-1)
             # Guard: if the number of features is less than requested, pick all
             actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
             lgb.fit(X_train_scaled_for_selection, y_train)
             importances = lgb.feature_importances_
             top_idx = np.argsort(importances)[-actual_k:][::-1]
             selected_cols = X_train.columns[top_idx]
+            # Log selected features for this fold (Approach 2)
+            log.info(f"    - Selected features (fold {fold+1}): {list(selected_cols)}")
 
             X_train_selected = X_train[selected_cols]
             X_val_selected = X_val[selected_cols]
@@ -165,7 +169,7 @@ def main():
     parser.add_argument('--approach', type=int, required=True, choices=[1, 2], help="1: Classical+QML, 2: Conditional QML")
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
-    parser.add_argument('--n_trials', type=int, default=30, help="Number of Optuna trials for random search")
+    parser.add_argument('--n_trials', type=int, default=9, help="Number of Optuna trials for random search")
     parser.add_argument('--min_qbits', type=int, default=None, help="Minimum number of qubits for tuning.")
     parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
     parser.add_argument('--min_layers', type=int, default=3, help="Minimum number of layers for tuning.")
