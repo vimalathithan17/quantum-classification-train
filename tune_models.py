@@ -4,7 +4,6 @@ import numpy as np
 import optuna
 import argparse
 import os
-import itertools
 import json
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
@@ -31,6 +30,7 @@ from qml_models import (
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
 TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
+RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
 
 
 def safe_load_parquet(file_path):
@@ -51,9 +51,16 @@ def safe_load_parquet(file_path):
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
-    if scaler_name == 'MinMax': return MinMaxScaler()
-    if scaler_name == 'Standard': return StandardScaler()
-    if scaler_name == 'Robust': return RobustScaler()
+    if not scaler_name:
+        return MinMaxScaler()
+    s = scaler_name.strip().lower()
+    if s in ('m', 'minmax', 'min_max', 'minmaxscaler'):
+        return MinMaxScaler()
+    if s in ('s', 'standard', 'standardscaler'):
+        return StandardScaler()
+    if s in ('r', 'robust', 'robustscaler'):
+        return RobustScaler()
+    return MinMaxScaler()
 
 def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
@@ -74,7 +81,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     n_layers = params['n_layers']
     
     n_splits = 3
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_STATE)
     scores = []
 
     if args.approach == 1:
@@ -86,7 +93,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
         if args.dim_reducer == 'pca':
             steps_list.append(('dim_reducer', PCA(n_components=n_qubits)))
         else:
-            steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=42)))
+            steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=RANDOM_STATE)))
 
         if args.qml_model == 'standard':
             qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose)
@@ -129,7 +136,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             # Fit a LightGBM classifier to compute feature importances and pick top-k
             # Use a lightweight LightGBM configuration: fewer trees, feature subsampling
             lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7, 
-                                 n_jobs=1, random_state=42, verbosity=-1)
+                                 n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
             # Guard: if the number of features is less than requested, pick all
             actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
             lgb.fit(X_train_scaled_for_selection, y_train)

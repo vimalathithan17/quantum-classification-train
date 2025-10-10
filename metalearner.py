@@ -4,9 +4,8 @@ import argparse
 import optuna
 import joblib
 import json
-import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler, RobustScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.metrics import accuracy_score, classification_report
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
@@ -21,13 +20,21 @@ from qml_models import MulticlassQuantumClassifierDR, MulticlassQuantumClassifie
 ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
+RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
 
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
-    if scaler_name == 'MinMax': return MinMaxScaler()
-    if scaler_name == 'Standard': return StandardScaler()
-    if scaler_name == 'Robust': return RobustScaler()
+    if not scaler_name:
+        return MinMaxScaler()
+    s = scaler_name.strip().lower()
+    if s in ('m', 'minmax', 'min_max', 'minmaxscaler'):
+        return MinMaxScaler()
+    if s in ('s', 'standard', 'standardscaler'):
+        return StandardScaler()
+    if s in ('r', 'robust', 'robustscaler'):
+        return RobustScaler()
+    return MinMaxScaler()
 
 
 def assemble_meta_data(preds_dirs, indicator_file):
@@ -176,7 +183,7 @@ def main():
 
         # Split training data for validation during tuning
         X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-            X_meta_train, y_meta_train, test_size=0.25, random_state=42, stratify=y_meta_train
+            X_meta_train, y_meta_train, test_size=0.25, random_state=RANDOM_STATE, stratify=y_meta_train
         )
         
         study_name = 'qml_metalearner_tuning'

@@ -5,7 +5,7 @@ import json
 import argparse
 import numpy as np
 from sklearn.model_selection import train_test_split, cross_val_predict, StratifiedKFold
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -26,6 +26,7 @@ ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 ID_COL = 'case_id'
 LABEL_COL = 'class'
 DATA_TYPES_TO_TRAIN = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
+RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -47,9 +48,16 @@ def safe_load_parquet(file_path):
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
-    if scaler_name == 'MinMax': return MinMaxScaler()
-    if scaler_name == 'Standard': return StandardScaler()
-    if scaler_name == 'Robust': return RobustScaler()
+    if not scaler_name:
+        return MinMaxScaler()
+    s = scaler_name.strip().lower()
+    if s in ('m', 'minmax', 'min_max', 'minmaxscaler'):
+        return MinMaxScaler()
+    if s in ('s', 'standard', 'standardscaler'):
+        return StandardScaler()
+    if s in ('r', 'robust', 'robustscaler'):
+        return RobustScaler()
+    return MinMaxScaler()
 
 # --- Load the master label encoder ---
 try:
@@ -65,6 +73,10 @@ except FileNotFoundError:
 parser = argparse.ArgumentParser(description="Train DRE Data Re-uploading models.")
 parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
 parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
+parser.add_argument('--n_qbits', type=int, default=None, help="Override number of qubits to use for training/pipeline.")
+parser.add_argument('--n_layers', type=int, default=None, help="Override number of layers for QML ansatz.")
+parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
+parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
@@ -85,11 +97,22 @@ for data_type in DATA_TYPES_TO_TRAIN:
     with open(param_file_found, 'r') as f:
         config = json.load(f)
     log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
-
-    # --- Override steps if provided ---
+    # --- Override tuned params with command-line arguments if provided ---
     if args.override_steps:
         config['steps'] = args.override_steps
-        log.info(f"Overriding training steps with: {args.override_steps}")
+        log.info(f"Overriding tuning steps with: {args.override_steps}")
+    if args.steps is not None:
+        config['steps'] = args.steps
+        log.info(f"Overriding steps with CLI: {args.steps}")
+    if args.n_qbits is not None:
+        config['n_qubits'] = args.n_qbits
+        log.info(f"Overriding n_qubits with CLI: {args.n_qbits}")
+    if args.n_layers is not None:
+        config['n_layers'] = args.n_layers
+        log.info(f"Overriding n_layers with CLI: {args.n_layers}")
+    if args.scaler is not None:
+        config['scaler'] = args.scaler
+        log.info(f"Overriding scaler with CLI: {args.scaler}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -97,13 +120,16 @@ for data_type in DATA_TYPES_TO_TRAIN:
     if df is None:
         continue
         
-    X = df.drop(columns=[ID_COL, LABEL_COL])
+    # Ensure deterministic ordering by sorting on case_id and set the index
+    df = df.sort_values(ID_COL).set_index(ID_COL)
+    X = df.drop(columns=[LABEL_COL])
     y_categorical = df[LABEL_COL]
     
-    # Use the master encoder to transform labels
-    y = le.transform(y_categorical)
+    # Use the pre-loaded master encoder to transform labels
+    y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    # Deterministic train/test split using the shared RANDOM_STATE
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=RANDOM_STATE, stratify=y)
     scaler = get_scaler(config.get('scaler', 'MinMax'))
 
     # --- Build the appropriate pipeline using TUNED params ---
@@ -116,7 +142,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     ])
     # --- Generate and Save Multiclass Predictions ---
     log.info("  - Generating OOF predictions with cross_val_predict...")
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
     # Pass the unfitted pipeline to cross_val_predict. It handles fitting for each fold internally.
     oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=skf, method='predict_proba', n_jobs=-1)
     oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]

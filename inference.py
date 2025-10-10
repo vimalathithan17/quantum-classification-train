@@ -131,7 +131,7 @@ def main():
     prediction = make_single_prediction(args.model_dir, args.patient_data_dir)
     
     if prediction:
-        log.info(f"\n--- Final Prediction ---")
+        log.info("\n--- Final Prediction ---")
         log.info(f"The predicted class for the patient is: {prediction}")
         log.info("------------------------")
 

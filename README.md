@@ -81,7 +81,7 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 100 steps)
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 75 steps)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
@@ -91,7 +91,7 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
-- The number of training steps for tuning is fixed at 100.
+- The number of training steps for tuning is fixed at 75.
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -132,6 +132,19 @@ python cfe_standard.py --verbose
 
 # Approach 2 - Conditional Feature Encoding (data reuploading) with override steps
 python cfe_relupload.py --override_steps 100
+
+You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:
+
+- `--n_qbits` (int): override number of qubits / selected features used by the model/pipeline.
+- `--n_layers` (int): override number of ansatz layers for QML circuits.
+- `--steps` (int): override number of training steps.
+- `--scaler` (str): override scaler selection using shorthand: `s` (Standard), `m` (MinMax), `r` (Robust); full names are also accepted.
+
+Example (override several params):
+
+```bash
+python dre_standard.py --n_qbits 8 --n_layers 4 --steps 150 --scaler m --verbose
+```
 ```
 
 Outputs (per data type):
@@ -272,6 +285,10 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 3) `dre_standard.py` and `dre_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
+	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
+	- `--n_layers` (int, optional): Override number of ansatz layers for the QML model.
+	- `--steps` (int, optional): Override the number of training steps used for QML training.
+	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -284,6 +301,10 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 4) `cfe_standard.py` and `cfe_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
+	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
+	- `--n_layers` (int, optional): Override the number of ansatz layers for the QML model.
+	- `--steps` (int, optional): Override the number of training steps used for QML training.
+	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -319,7 +340,7 @@ Environment variables relevant to CLI behavior
 | `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
-| `--n_trials` | int | No | `30` | - | Number of Optuna trials. |
+| `--n_trials` | int | No | `9` | - | Number of Optuna trials. |
 | `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
 | `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
@@ -334,7 +355,7 @@ Environment variables relevant to CLI behavior
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
-python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6 --steps 100
+python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6 --steps 75
 ```
 
 ### Command-line arguments for `metalearner.py`

@@ -5,7 +5,7 @@ import json
 import argparse
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -25,6 +25,7 @@ ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 ID_COL = 'case_id'
 LABEL_COL = 'class'
 DATA_TYPES_TO_TRAIN = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
+RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -46,9 +47,16 @@ def safe_load_parquet(file_path):
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
-    if scaler_name == 'MinMax': return MinMaxScaler()
-    if scaler_name == 'Standard': return StandardScaler()
-    if scaler_name == 'Robust': return RobustScaler()
+    if not scaler_name:
+        return MinMaxScaler()
+    s = scaler_name.strip().lower()
+    if s in ('m', 'minmax', 'min_max', 'minmaxscaler'):
+        return MinMaxScaler()
+    if s in ('s', 'standard', 'standardscaler'):
+        return StandardScaler()
+    if s in ('r', 'robust', 'robustscaler'):
+        return RobustScaler()
+    return MinMaxScaler()
 
 # --- Load the master label encoder ---
 try:
@@ -65,6 +73,10 @@ except FileNotFoundError:
 parser = argparse.ArgumentParser(description="Train CFE Data Re-uploading models.")
 parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
 parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
+parser.add_argument('--n_qbits', type=int, default=None, help="Override number of qubits to use for training/pipeline.")
+parser.add_argument('--n_layers', type=int, default=None, help="Override number of layers for QML ansatz.")
+parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
+parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
@@ -86,10 +98,22 @@ for data_type in DATA_TYPES_TO_TRAIN:
         config = json.load(f)
     log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
 
-    # --- Override steps if provided ---
+    # --- Override tuned params with command-line arguments if provided ---
     if args.override_steps:
         config['steps'] = args.override_steps
-        log.info(f"Overriding training steps with: {args.override_steps}")
+        log.info(f"Overriding tuning steps with: {args.override_steps}")
+    if args.steps is not None:
+        config['steps'] = args.steps
+        log.info(f"Overriding steps with CLI: {args.steps}")
+    if args.n_qbits is not None:
+        config['n_qubits'] = args.n_qbits
+        log.info(f"Overriding n_qubits with CLI: {args.n_qbits}")
+    if args.n_layers is not None:
+        config['n_layers'] = args.n_layers
+        log.info(f"Overriding n_layers with CLI: {args.n_layers}")
+    if args.scaler is not None:
+        config['scaler'] = args.scaler
+        log.info(f"Overriding scaler with CLI: {args.scaler}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -97,16 +121,18 @@ for data_type in DATA_TYPES_TO_TRAIN:
     if df is None:
         continue
         
-    X = df.drop(columns=[ID_COL, LABEL_COL])
+    # Ensure deterministic ordering and indexing by case_id
+    df = df.sort_values(ID_COL).set_index(ID_COL)
+    X = df.drop(columns=[LABEL_COL])
     y_categorical = df[LABEL_COL]
-    y = le.transform(y_categorical)
+    y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=RANDOM_STATE, stratify=y)
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
 
     # --- Generate Out-of-Fold Predictions Correctly ---
     log.info("  - Generating out-of-fold predictions...")
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
     oof_preds = np.zeros((len(X_train), n_classes))
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
@@ -127,7 +153,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
 
         # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
         lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
-                     n_jobs=1, random_state=42, verbosity=-1)
+                             n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
         actual_k = min(n_features, X_train_fold_scaled.shape[1])
         lgb.fit(X_train_fold_scaled, y_train_fold)
         importances = lgb.feature_importances_
@@ -174,7 +200,7 @@ for data_type in DATA_TYPES_TO_TRAIN:
     X_train_scaled_for_selection = scaler_for_fs.transform(X_train_imputed)
 
     lgb_final = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
-                               n_jobs=1, random_state=42, verbosity=-1)
+                               n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
     actual_k = min(n_features, X_train_scaled_for_selection.shape[1])
     lgb_final.fit(X_train_scaled_for_selection, y_train)
     importances = lgb_final.feature_importances_
