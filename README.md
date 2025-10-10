@@ -140,6 +140,14 @@ You can override tuned parameters directly from the command line when running th
 - `--steps` (int): override number of training steps.
 - `--scaler` (str): override scaler selection using shorthand: `s` (Standard), `m` (MinMax), `r` (Robust); full names are also accepted.
 
+You can also limit which data types are trained in a run by passing `--datatypes` followed by one or more data type names. This overrides the internal `DATA_TYPES_TO_TRAIN` list.
+
+Example (train only CNV and Prot):
+
+```bash
+python dre_standard.py --datatypes CNV Prot --verbose
+```
+
 Example (override several params):
 
 ```bash
@@ -286,6 +294,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
+	- `--datatypes` (str..., optional): Space-separated list of datatypes to train (overrides default `DATA_TYPES_TO_TRAIN`). Example: `--datatypes CNV Prot`.
 	- `--n_layers` (int, optional): Override number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
@@ -302,6 +311,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
+	- `--datatypes` (str..., optional): Space-separated list of datatypes to train (overrides default `DATA_TYPES_TO_TRAIN`). Example: `--datatypes CNV Prot`.
 	- `--n_layers` (int, optional): Override the number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.

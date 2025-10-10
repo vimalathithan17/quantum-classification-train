@@ -79,10 +79,13 @@ parser.add_argument('--n_qbits', type=int, default=None, help="Override number o
 parser.add_argument('--n_layers', type=int, default=None, help="Override number of layers for QML ansatz.")
 parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
+parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
-for data_type in DATA_TYPES_TO_TRAIN:
+data_types = args.datatypes if args.datatypes is not None else DATA_TYPES_TO_TRAIN
+
+for data_type in data_types:
     # --- Find and Load the Tuned Hyperparameters ---
     param_file_found = None
     # Make the search more specific to avoid ambiguity
