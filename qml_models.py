@@ -34,6 +34,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return e_x / e_x.sum(axis=0)
 
     def fit(self, X, y):
+        # Store the classes seen during fit (required by sklearn)
+        self.classes_ = np.unique(y)
+        
         qcircuit = self._get_circuit()
         y_one_hot = np.eye(self.n_classes)[y]
         opt = qml.AdamOptimizer(self.learning_rate)
@@ -87,6 +90,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         return e_x / e_x.sum(axis=0)
 
     def fit(self, X, y):
+        # Store the classes seen during fit (required by sklearn)
+        self.classes_ = np.unique(y)
+        
         qcircuit = self._get_circuit()
         y_one_hot = np.eye(self.n_classes)[y]
         opt = qml.AdamOptimizer(self.learning_rate)
@@ -144,6 +150,9 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return e_x / e_x.sum(axis=0)
 
     def fit(self, X, y):
+        # Store the classes seen during fit (required by sklearn)
+        self.classes_ = np.unique(y)
+        
         X_scaled, is_missing_mask = X
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
@@ -213,6 +222,9 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         return e_x / e_x.sum(axis=0)
 
     def fit(self, X, y):
+        # Store the classes seen during fit (required by sklearn)
+        self.classes_ = np.unique(y)
+        
         X_scaled, is_missing_mask = X
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
