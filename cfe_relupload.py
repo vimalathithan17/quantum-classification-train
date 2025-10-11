@@ -269,11 +269,11 @@ for data_type in data_types:
         acc = accuracy_score(y_test, test_preds_labels)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
-        report = classification_report(y_test, test_preds_labels, target_names=le.classes_)
+        report = classification_report(y_test, test_preds_labels, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
         # Confusion matrix (raw)
-        cm = confusion_matrix(y_test, test_preds_labels)
+        cm = confusion_matrix(y_test, test_preds_labels, labels=list(range(n_classes)))
         log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
 
         cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)

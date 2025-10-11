@@ -191,11 +191,11 @@ for data_type in data_types:
         acc = accuracy_score(y_test, y_test_pred)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
-        report = classification_report(y_test, y_test_pred, target_names=le.classes_)
+        report = classification_report(y_test, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
         # Confusion matrix (raw)
-        cm = confusion_matrix(y_test, y_test_pred)
+        cm = confusion_matrix(y_test, y_test_pred, labels=list(range(n_classes)))
         log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
 
         # Save confusion matrix as CSV with class labels
