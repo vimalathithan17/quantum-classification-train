@@ -78,7 +78,6 @@ parser.add_argument('--n_layers', type=int, default=None, help="Override number 
 parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
-parser.add_argument('--n_features', type=int, default=None, help="Override number of features to select (for CFE approaches).")
 parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
 args = parser.parse_args()
 
@@ -122,7 +121,7 @@ for data_type in data_types:
     if args.n_qbits is not None:
         config['n_qubits'] = args.n_qbits
     elif 'n_qubits' not in config:
-        config['n_qubits'] = n_classes  # default to number of classes
+        config['n_qubits'] = 10  # default for CFE approaches
         log.info(f"Using default n_qubits: {config['n_qubits']}")
     
     if args.n_layers is not None:
@@ -137,13 +136,7 @@ for data_type in data_types:
         config['scaler'] = 'MinMax'  # default
         log.info(f"Using default scaler: {config['scaler']}")
     
-    if args.n_features is not None:
-        config['n_features'] = args.n_features
-    elif 'n_features' not in config:
-        config['n_features'] = 10  # default for CFE approaches
-        log.info(f"Using default n_features: {config['n_features']}")
-    
-    log.info(f"Final parameters - n_features: {config['n_features']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
+    log.info(f"Final parameters - n_qubits: {config['n_qubits']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
@@ -178,7 +171,7 @@ for data_type in data_types:
         imputer_for_fs = SimpleImputer(strategy='median')
         X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
 
-        n_features = config.get('n_features', 10)
+        n_qubits = config.get('n_qubits', 10)
 
         log.info("      - Using LightGBM importance-based selection...")
         scaler = get_scaler(config.get('scaler', 'MinMax'))
@@ -188,7 +181,7 @@ for data_type in data_types:
         # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
         lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                              n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-        actual_k = min(n_features, X_train_fold_scaled.shape[1])
+        actual_k = min(n_qubits, X_train_fold_scaled.shape[1])
         lgb.fit(X_train_fold_scaled, y_train_fold)
         importances = lgb.feature_importances_
         top_idx = np.argsort(importances)[-actual_k:][::-1]
@@ -210,7 +203,7 @@ for data_type in data_types:
 
         # 3. Train model on this fold and predict on the validation part
         model = ConditionalMulticlassQuantumClassifierFS(
-            n_qubits=n_features, n_layers=config['n_layers'], 
+            n_qubits=n_qubits, n_layers=config['n_layers'], 
             steps=config['steps'], n_classes=n_classes, verbose=args.verbose
         )
         model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
@@ -227,7 +220,7 @@ for data_type in data_types:
     imputer_for_fs = SimpleImputer(strategy='median')
     X_train_imputed = imputer_for_fs.fit_transform(X_train)
 
-    n_features = config.get('n_features', 10)
+    n_qubits = config.get('n_qubits', 10)
     log.info("    - Using LightGBM importance-based selection for final model...")
     scaler_for_fs = get_scaler(config.get('scaler', 'MinMax'))
     scaler_for_fs.fit(X_train_imputed)
@@ -235,7 +228,7 @@ for data_type in data_types:
 
     lgb_final = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                                n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-    actual_k = min(n_features, X_train_scaled_for_selection.shape[1])
+    actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
     lgb_final.fit(X_train_scaled_for_selection, y_train)
     importances = lgb_final.feature_importances_
     top_idx = np.argsort(importances)[-actual_k:][::-1]
@@ -251,7 +244,7 @@ for data_type in data_types:
     X_train_scaled = final_scaler.fit_transform(X_train_filled)
     
     final_model = ConditionalMulticlassQuantumClassifierFS(
-        n_qubits=n_features, n_layers=config['n_layers'], 
+        n_qubits=n_qubits, n_layers=config['n_layers'], 
         steps=config['steps'], n_classes=n_classes, verbose=args.verbose
     )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
