@@ -208,7 +208,7 @@ python metalearner.py --preds_dir final_ensemble_predictions --indicator_file in
 ```
 
 Notes:
-- If tuning was run, the script loads parameters from `meta_learner_outputs/best_metalearner_params.json`
+- If tuning was run, the script loads parameters from `final_model_and_predictions/best_metalearner_params.json`
 - If no tuned parameters exist, the script uses sensible defaults
 
 Outputs (saved to `final_model_and_predictions/` by default):
@@ -354,7 +354,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--scalers` (str, default 'smr'): String indicating which scalers to try during tuning (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `meta_learner_outputs/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features, and saves the model and metadata to `meta_learner_outputs/`.
+	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features, and saves the model and metadata to `final_model_and_predictions/`.
 
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
