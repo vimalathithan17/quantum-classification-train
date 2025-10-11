@@ -78,44 +78,65 @@ parser.add_argument('--n_layers', type=int, default=None, help="Override number 
 parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
+parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
 data_types = args.datatypes if args.datatypes is not None else DATA_TYPES_TO_TRAIN
 
 for data_type in data_types:
-    # --- Find and Load Tuned Hyperparameters ---
+    # --- Find and Load Tuned Hyperparameters (if not skipping) ---
+    config = {}
     param_file_found = None
-    for filename in os.listdir(TUNING_RESULTS_DIR):
-        if f"_{data_type}_" in filename and "_app1_" in filename and "_reuploading" in filename:
-            param_file_found = os.path.join(TUNING_RESULTS_DIR, filename)
-            break
     
-    if not param_file_found:
-        log.warning(f"No tuned parameter file found for {data_type} with re-uploading. Skipping.")
-        continue
-
-    log.info(f"--- Training Base Learner for: {data_type} (Data Re-uploading) ---")
-    log.info(f"    (using params from {os.path.basename(param_file_found)})")
-    with open(param_file_found, 'r') as f:
-        config = json.load(f)
-    log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
-    # --- Override tuned params with command-line arguments if provided ---
-    if args.override_steps:
-        config['steps'] = args.override_steps
-        log.info(f"Overriding tuning steps with: {args.override_steps}")
+    if not args.skip_tuning:
+        if os.path.exists(TUNING_RESULTS_DIR):
+            for filename in os.listdir(TUNING_RESULTS_DIR):
+                if f"_{data_type}_" in filename and "_app1_" in filename and "_reuploading" in filename:
+                    param_file_found = os.path.join(TUNING_RESULTS_DIR, filename)
+                    break
+        
+        if param_file_found:
+            log.info(f"--- Training Base Learner for: {data_type} (Data Re-uploading) ---")
+            log.info(f"    (using params from {os.path.basename(param_file_found)})")
+            with open(param_file_found, 'r') as f:
+                config = json.load(f)
+            log.info(f"Loaded parameters: {json.dumps(config, indent=2)}")
+        else:
+            log.warning(f"No tuned parameter file found for {data_type} with re-uploading. Using CLI args or defaults.")
+    else:
+        log.info(f"--- Training Base Learner for: {data_type} (Data Re-uploading, skipping tuned params) ---")
+    
+    # --- Set parameters from CLI arguments or use defaults ---
     if args.steps is not None:
         config['steps'] = args.steps
-        log.info(f"Overriding steps with CLI: {args.steps}")
+    elif 'steps' not in config:
+        config['steps'] = 100  # default
+        log.info(f"Using default steps: {config['steps']}")
+    
+    if args.override_steps:
+        config['steps'] = args.override_steps
+        log.info(f"Overriding steps with: {args.override_steps}")
+    
     if args.n_qbits is not None:
         config['n_qubits'] = args.n_qbits
-        log.info(f"Overriding n_qubits with CLI: {args.n_qbits}")
+    elif 'n_qubits' not in config:
+        config['n_qubits'] = n_classes  # default to number of classes
+        log.info(f"Using default n_qubits: {config['n_qubits']}")
+    
     if args.n_layers is not None:
         config['n_layers'] = args.n_layers
-        log.info(f"Overriding n_layers with CLI: {args.n_layers}")
+    elif 'n_layers' not in config:
+        config['n_layers'] = 3  # default
+        log.info(f"Using default n_layers: {config['n_layers']}")
+    
     if args.scaler is not None:
         config['scaler'] = args.scaler
-        log.info(f"Overriding scaler with CLI: {args.scaler}")
+    elif 'scaler' not in config:
+        config['scaler'] = 'MinMax'  # default
+        log.info(f"Using default scaler: {config['scaler']}")
+    
+    log.info(f"Final parameters - n_qubits: {config['n_qubits']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
 
     # --- Load Data and Encode Labels ---
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
