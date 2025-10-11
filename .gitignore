@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data and model outputs (common patterns)
+*.parquet
+*.joblib
+*.pkl
+*.csv
+*.json.log
+*.log
+
+# Project-specific output directories (uncomment if you want to exclude)
+# final_processed_datasets/
+# tuning_results/
+# base_learner_outputs_*/
+# master_label_encoder/
+# final_ensemble_predictions/
+# final_model_deployment/
