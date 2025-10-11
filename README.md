@@ -18,10 +18,11 @@ project_root/
 ├── base_learner_outputs_app2_standard/
 ├── base_learner_outputs_app2_reuploading/
 ├── final_ensemble_predictions/   # User-curated best-of predictions for meta-learner
+├── final_model_and_predictions/  # Output: meta-learner models (default OUTPUT_DIR for metalearner.py)
+│   ├── metalearner_model.joblib
+│   ├── metalearner_scaler.joblib
+│   └── best_metalearner_params.json (if tuning was run)
 ├── final_model_deployment/       # User-created directory containing final models for inference
-├── meta_learner_final.joblib
-├── meta_learner_columns.json
-├── meta_learner_best_params.json
 ├── create_master_label_encoder.py
 ├── tune_models.py
 ├── dre_standard.py                      # Approach 1: Dimensionality Reduction Encoding (standard)
@@ -132,13 +133,16 @@ python cfe_standard.py --verbose
 
 # Approach 2 - Conditional Feature Encoding (data reuploading) with override steps
 python cfe_relupload.py --override_steps 100
+```
 
 You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:
 
 - `--n_qbits` (int): override number of qubits / selected features used by the model/pipeline.
 - `--n_layers` (int): override number of ansatz layers for QML circuits.
 - `--steps` (int): override number of training steps.
+- `--override_steps` (int): override number of training steps (same as --steps, kept for backward compatibility).
 - `--scaler` (str): override scaler selection using shorthand: `s` (Standard), `m` (MinMax), `r` (Robust); full names are also accepted.
+- `--skip_tuning` (flag): skip loading tuned parameters entirely and use command-line arguments or defaults instead.
 
 You can also limit which data types are trained in a run by passing `--datatypes` followed by one or more data type names. This overrides the internal `DATA_TYPES_TO_TRAIN` list.
 
@@ -153,6 +157,11 @@ Example (override several params):
 ```bash
 python dre_standard.py --n_qbits 8 --n_layers 4 --steps 150 --scaler m --verbose
 ```
+
+Example (skip tuning and use only CLI arguments):
+
+```bash
+python dre_standard.py --skip_tuning --n_qbits 10 --n_layers 3 --steps 100 --scaler s --verbose
 ```
 
 Outputs (per data type):
@@ -189,32 +198,44 @@ Tune (optional):
 
 ```bash
 # Tune the meta-learner hyperparameters with verbose logging
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --tune --verbose
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --n_trials 50 --verbose
 ```
 
-Train final meta-learner (uses `meta_learner_best_params.json` by default or writes `meta_learner_best_params.json` during tuning):
+Train final meta-learner (uses best parameters from tuning if available):
 
 ```bash
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --params_file meta_learner_best_params.json --verbose
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --verbose
 ```
 
-Outputs:
-- `meta_learner_final.joblib`
-- `meta_learner_columns.json` (exact column order used for training)
+Notes:
+- If tuning was run, the script loads parameters from `final_model_and_predictions/best_metalearner_params.json`
+- If no tuned parameters exist, the script uses sensible defaults
+
+Outputs (saved to `final_model_and_predictions/` by default):
+- `metalearner_model.joblib`
+- `metalearner_scaler.joblib`
+- `best_metalearner_params.json` (if tuning was run)
+
+Note: The default OUTPUT_DIR for metalearner.py is `final_model_and_predictions`. For inference, you'll need to manually copy/rename files to match what `inference.py` expects (see Step 6).
 
 ### 6) Prepare deployment directory and run inference on a new patient
 
 Create a deployment directory and copy the meta-learner artifacts and the base models you want to use for inference.
+
+**Important Note on File Naming:** The `inference.py` script expects specific file names that differ from what `metalearner.py` produces. You need to copy/rename files as shown below:
 
 Example:
 
 ```bash
 mkdir -p final_model_deployment
 
-# Meta learner + metadata
-cp meta_learner_final.joblib final_model_deployment/
-cp meta_learner_columns.json final_model_deployment/
+# Meta learner + metadata (note the file renaming)
+cp final_model_and_predictions/metalearner_model.joblib final_model_deployment/meta_learner_final.joblib
 cp master_label_encoder/label_encoder.joblib final_model_deployment/
+
+# You also need to create meta_learner_columns.json manually with the column order
+# This file should contain a JSON array of the column names in the exact order used during training
+# Example content: ["pred_CNV_BRCA", "pred_CNV_LUAD", ..., "is_missing_CNV", ...]
 
 # Copy selected base learner artifacts (examples):
 cp base_learner_outputs_app1_standard/pipeline_CNV.joblib final_model_deployment/
@@ -298,8 +319,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--n_layers` (int, optional): Override number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
+	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
-		- Look for tuned params in `TUNING_RESULTS_DIR`.
+		- Look for tuned params in `TUNING_RESULTS_DIR` (unless `--skip_tuning` is used).
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
 		- Train the pipeline (PCA/UMAP + QML) and save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv` in script-specific `OUTPUT_DIR`.
@@ -315,8 +337,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--n_layers` (int, optional): Override the number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
+	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
-		- Look for tuned params in `TUNING_RESULTS_DIR`.
+		- Look for tuned params in `TUNING_RESULTS_DIR` (unless `--skip_tuning` is used).
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
 		- Run fold-wise feature selection and train QML models. Save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv`.
@@ -328,13 +351,16 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--indicator_file` (str, required): Path to a parquet file containing indicator features and the true `class` column for combining with meta-features.
 	- `--mode` (str, default `train`): Operation mode, `train` or `tune`.
 	- `--n_trials` (int, default 50): Number of Optuna trials for tuning.
-    - `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
+	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
+	- `--scalers` (str, default 'smr'): String indicating which scalers to try during tuning (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
+	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features, and saves the model and metadata to `final_model_and_predictions/`.
 
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
 	- `--patient_data_dir` (str, required): Path to a directory containing per-data-type parquet files named `data_<datatype>_.parquet` for the new patient. Missing files are tolerated (treated as missing data).
 	- Behavior: The script will detect whether a base-learner is saved as a `pipeline_{datatype}.joblib` (Approach 1) or as `selector_{datatype}.joblib` plus `scaler_...` and `qml_model_...` (Approach 2) and will combine base-learner predictions into meta-features and call the meta-learner to predict the final class.
+	- Note: Due to a naming mismatch between what metalearner.py saves and what inference.py expects, you need to rename `metalearner_model.joblib` to `meta_learner_final.joblib` and manually create `meta_learner_columns.json` (see Step 6 above).
 
 Environment variables relevant to CLI behavior
 - `SOURCE_DIR` — directory where all `data_<datatype>_.parquet` files are read from (default `final_processed_datasets`).
@@ -356,6 +382,7 @@ Environment variables relevant to CLI behavior
 | `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
 | `--max_layers` | int | No | `5` | - | Maximum number of layers for tuning. |
 | `--steps` | int | No | `75` | - | Number of training steps for tuning. |
+| `--scalers` | str | No | `smr` | - | String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 
 ### Example commands for `tune_models.py`
@@ -372,27 +399,37 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 
 | Argument | Type | Required | Default | Choices | Description |
 |---|---|---|---|---|---|
-| `--preds_dir` | str | Yes | - | - | One or more directories with `train_oof_preds_*` and `test_preds_*` files. |
-| `--indicator_file` | str | No | `indicator_features.parquet` | - | Parquet file with indicator features and true `class` column. |
-| `--encoder_dir` | str | No | `master_label_encoder` | - | Directory with `label_encoder.joblib`. |
-| `--tune` | flag | No | `False` | - | Run hyperparameter tuning (Optuna) for the meta-learner. |
-| `--params_file` | str | No | `meta_learner_best_params.json` | - | JSON file to read/write best hyperparameters. |
+| `--preds_dir` | str (multiple) | Yes | - | - | One or more directories with `train_oof_preds_*` and `test_preds_*` files. |
+| `--indicator_file` | str | Yes | - | - | Parquet file with indicator features and true `class` column. |
 | `--mode` | str | No | `train` | `train`, `tune` | Operation mode. |
 | `--n_trials` | int | No | `50` | - | Number of Optuna trials for tuning. |
-| `--min_steps` | int | No | `50` | - | Minimum training steps for tuning. |
-| `--max_steps` | int | No | `150` | - | Maximum training steps for tuning. |
+| `--override_steps` | int | No | `None` | - | Override the number of training steps from the tuned parameters. |
+| `--scalers` | str | No | `smr` | - | String indicating which scalers to try during tuning (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 
 ### Example commands for `metalearner.py`
 
 ```bash
-# Tune the meta-learner with 100 trials and verbose logging, tuning steps between 100 and 200
+# Tune the meta-learner with 100 trials and verbose logging
 python metalearner.py \
     --preds_dir final_ensemble_predictions \
     --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode tune \
     --n_trials 100 \
-    --min_steps 100 \
-    --max_steps 200 \
+    --verbose
+
+# Train the meta-learner using tuned parameters (or defaults if tuning wasn't run)
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --verbose
+
+# Train the meta-learner with override steps
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --override_steps 150 \
     --verbose
 ```
