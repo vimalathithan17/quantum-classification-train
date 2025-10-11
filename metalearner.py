@@ -258,7 +258,7 @@ def main():
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
 
         # Generate and print classification report
-        report = classification_report(y_meta_test.values, test_predictions, target_names=le.classes_)
+        report = classification_report(y_meta_test.values, test_predictions, labels=list(range(n_classes)), target_names=le.classes_)
         log.info("Classification Report:\n" + report)
 
         # Save predictions to a file
