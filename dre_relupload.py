@@ -79,6 +79,9 @@ parser.add_argument('--steps', type=int, default=None, help="Override the number
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
 parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
+parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
+parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
+parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
 args = parser.parse_args()
 
 # --- Main Training Loop ---
@@ -158,11 +161,25 @@ for data_type in data_types:
 
     # --- Build the appropriate pipeline using TUNED params ---
     log.info("  - Using standard pipeline for all data types...")
+    
+    # Create checkpoint directory for this data type
+    checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
+    
     pipeline = Pipeline([
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', scaler),
         ('pca', PCA(n_components=config['n_qubits'])),
-        ('qml', MulticlassQuantumClassifierDataReuploadingDR(n_qubits=config['n_qubits'], n_layers=config['n_layers'], steps=config['steps'], n_classes=n_classes, verbose=args.verbose))
+        ('qml', MulticlassQuantumClassifierDataReuploadingDR(
+            n_qubits=config['n_qubits'], 
+            n_layers=config['n_layers'], 
+            steps=config['steps'], 
+            n_classes=n_classes, 
+            verbose=args.verbose,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_frequency=args.checkpoint_frequency,
+            keep_last_n=args.keep_last_n,
+            max_training_time=args.max_training_time
+        ))
     ])
     # --- Generate and Save Multiclass Predictions ---
     log.info("  - Generating OOF predictions with cross_val_predict...")
