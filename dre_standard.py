@@ -81,6 +81,7 @@ parser.add_argument('--steps', type=int, default=None, help="Override the number
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
 parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
+parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation and only train final model on full training set.")
 parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
 parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
 parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
@@ -187,17 +188,25 @@ for data_type in data_types:
     ])
         
     # --- Generate and Save Multiclass Predictions ---
-    log.info("  - Generating OOF predictions with cross_val_predict...")
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
-    # Pass the unfitted pipeline to cross_val_predict. It handles fitting for each fold internally.
-    oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=skf, method='predict_proba', n_jobs=-1)
-    oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
-    pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
-    log.info("  - OOF predictions generated and saved.")
+    if not args.skip_cross_validation:
+        log.info("  - Generating OOF predictions with cross_val_predict...")
+        skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
+        # Pass the unfitted pipeline to cross_val_predict. It handles fitting for each fold internally.
+        oof_preds = cross_val_predict(pipeline, X_train, y_train, cv=skf, method='predict_proba', n_jobs=-1)
+        oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
+        pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
+        log.info("  - OOF predictions generated and saved.")
+    else:
+        log.info("  - Skipping cross-validation as requested.")
 
     # --- Train Final Model on Full Training Data and Predict on Test Set ---
     log.info("  - Fitting final pipeline on the full training set...")
     pipeline.fit(X_train, y_train)
+    
+    # Log best weights step if available
+    qml_model = pipeline.named_steps['qml']
+    if hasattr(qml_model, 'best_step') and hasattr(qml_model, 'best_loss'):
+        log.info(f"  - Best weights were obtained at step {qml_model.best_step} with loss: {qml_model.best_loss:.4f}")
     
     log.info("  - Generating predictions on the hold-out test set...")
     test_preds = pipeline.predict_proba(X_test)

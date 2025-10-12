@@ -30,6 +30,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
         self.best_weights = None
         self.best_loss = float('inf')
+        self.best_step = 0
         self.checkpoint_history = []
 
     def _get_circuit(self):
@@ -73,6 +74,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             if current_loss < self.best_loss:
                 self.best_loss = current_loss
                 self.best_weights = self.weights.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
@@ -108,7 +110,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Load best weights
         if self.best_weights is not None:
             self.weights = self.best_weights
-            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+            log.info(f"  [QML Training] Loaded best weights from step {self.best_step} with loss: {self.best_loss:.4f}")
         
         return self
 
@@ -139,6 +141,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
         self.best_weights = None
         self.best_loss = float('inf')
+        self.best_step = 0
         self.checkpoint_history = []
 
     def _get_circuit(self):
@@ -181,6 +184,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             if current_loss < self.best_loss:
                 self.best_loss = current_loss
                 self.best_weights = self.weights.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
@@ -216,7 +220,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         # Load best weights
         if self.best_weights is not None:
             self.weights = self.best_weights
-            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+            log.info(f"  [QML Training] Loaded best weights from step {self.best_step} with loss: {self.best_loss:.4f}")
         
         return self
 
@@ -251,6 +255,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.best_weights_ansatz = None
         self.best_weights_missing = None
         self.best_loss = float('inf')
+        self.best_step = 0
         self.checkpoint_history = []
 
     def _get_circuit(self):
@@ -302,6 +307,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 self.best_loss = current_loss
                 self.best_weights_ansatz = self.weights_ansatz.copy()
                 self.best_weights_missing = self.weights_missing.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights_ansatz': self.best_weights_ansatz, 
@@ -342,7 +348,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         if self.best_weights_ansatz is not None:
             self.weights_ansatz = self.best_weights_ansatz
             self.weights_missing = self.best_weights_missing
-            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+            log.info(f"  [QML Training] Loaded best weights from step {self.best_step} with loss: {self.best_loss:.4f}")
 
         return self
 
@@ -379,6 +385,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.best_weights_ansatz = None
         self.best_weights_missing = None
         self.best_loss = float('inf')
+        self.best_step = 0
         self.checkpoint_history = []
 
     def _get_circuit(self):
@@ -433,6 +440,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                 self.best_loss = current_loss
                 self.best_weights_ansatz = self.weights_ansatz.copy()
                 self.best_weights_missing = self.weights_missing.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights_ansatz': self.best_weights_ansatz, 
@@ -473,7 +481,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         if self.best_weights_ansatz is not None:
             self.weights_ansatz = self.best_weights_ansatz
             self.weights_missing = self.best_weights_missing
-            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+            log.info(f"  [QML Training] Loaded best weights from step {self.best_step} with loss: {self.best_loss:.4f}")
 
         return self
 
