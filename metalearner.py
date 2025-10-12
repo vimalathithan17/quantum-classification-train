@@ -158,6 +158,9 @@ def main():
     parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
     parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+    parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
+    parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
+    parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
     args = parser.parse_args()
 
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le = assemble_meta_data(args.preds_dir, args.indicator_file)
@@ -224,13 +227,18 @@ def main():
         X_meta_train_scaled = scaler.fit_transform(X_meta_train)
 
         # Prepare model with loaded or default parameters
+        checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if args.max_training_time else None
         model_params = {
             'n_qubits': X_meta_train.shape[1],
             'n_layers': params['n_layers'],
             'learning_rate': params['learning_rate'],
             'steps': params['steps'],
             'n_classes': n_classes,
-            'verbose': args.verbose
+            'verbose': args.verbose,
+            'checkpoint_dir': checkpoint_dir,
+            'checkpoint_frequency': args.checkpoint_frequency,
+            'keep_last_n': args.keep_last_n,
+            'max_training_time': args.max_training_time
         }
         
         if params['qml_model'] == 'standard':

@@ -143,6 +143,11 @@ You can override tuned parameters directly from the command line when running th
 - `--override_steps` (int): override number of training steps (same as --steps, kept for backward compatibility).
 - `--scaler` (str): override scaler selection using shorthand: `s` (Standard), `m` (MinMax), `r` (Robust); full names are also accepted.
 - `--skip_tuning` (flag): skip loading tuned parameters entirely and use command-line arguments or defaults instead.
+- `--max_training_time` (float): maximum training time in hours. When specified, training continues until this time limit is reached instead of using a fixed number of steps. This enables "smart steps" training where the model trains for a specified duration rather than a fixed number of epochs.
+- `--checkpoint_frequency` (int, default 50): save a checkpoint every N training steps for recovery and analysis.
+- `--keep_last_n` (int, default 3): keep only the last N checkpoints to save disk space (older checkpoints are automatically deleted).
+
+**Note on checkpointing and best model selection:** All training scripts now automatically track the best model based on training loss. When `--max_training_time` is specified, checkpoints are saved periodically to `checkpoints_{datatype}/` subdirectories. The best model weights are always saved and automatically loaded at the end of training, ensuring you get the best performing model regardless of whether training ends naturally or due to time limits.
 
 You can also limit which data types are trained in a run by passing `--datatypes` followed by one or more data type names. This overrides the internal `DATA_TYPES_TO_TRAIN` list.
 
@@ -164,10 +169,21 @@ Example (skip tuning and use only CLI arguments):
 python dre_standard.py --skip_tuning --n_qbits 10 --n_layers 3 --steps 100 --scaler s --verbose
 ```
 
+Example (time-based training for 11 hours with checkpointing):
+
+```bash
+# Train for up to 11 hours instead of a fixed number of steps
+python dre_standard.py --max_training_time 11 --checkpoint_frequency 50 --keep_last_n 3 --verbose
+
+# Train only specific data types with time-based training
+python cfe_relupload.py --datatypes CNV Prot --max_training_time 11 --verbose
+```
+
 Outputs (per data type):
 - `train_oof_preds_<datatype>.csv` (used to train meta-learner)
 - `test_preds_<datatype>.csv`
 - model artifacts: `pipeline_<datatype>.joblib` or `selector_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
+- checkpoints (when using `--max_training_time`): `checkpoints_<datatype>/best_weights.joblib` and `checkpoints_<datatype>/checkpoint_step_*.joblib`
 
 ### 4) Curate the "best-of" predictions for the meta-learner
 
@@ -205,11 +221,15 @@ Train final meta-learner (uses best parameters from tuning if available):
 
 ```bash
 python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --verbose
+
+# Or with time-based training for extended optimization
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --max_training_time 11 --verbose
 ```
 
 Notes:
 - If tuning was run, the script loads parameters from `final_model_and_predictions/best_metalearner_params.json`
 - If no tuned parameters exist, the script uses sensible defaults
+- When `--max_training_time` is used, checkpoints are saved to `final_model_and_predictions/checkpoints_metalearner/`
 
 Outputs (saved to `final_model_and_predictions/` by default):
 - `metalearner_model.joblib`
@@ -320,13 +340,18 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
+	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
+	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR` (unless `--skip_tuning` is used).
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
-		- Train the pipeline (PCA/UMAP + QML) and save:
+		- Train the pipeline (PCA/UMAP + QML) with automatic best model selection and optional checkpointing.
+		- Save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv` in script-specific `OUTPUT_DIR`.
 			- Test predictions: `test_preds_{datatype}.csv`.
 			- Model artifacts: `pipeline_{datatype}.joblib`.
+			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 
 4) `cfe_standard.py` and `cfe_relupload.py`
@@ -338,13 +363,18 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
+	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
+	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR` (unless `--skip_tuning` is used).
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
-		- Run fold-wise feature selection and train QML models. Save:
+		- Run fold-wise feature selection and train QML models with automatic best model selection and optional checkpointing.
+		- Save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv`.
 			- Test predictions: `test_preds_{datatype}.csv`.
 			- Model artifacts: `selector_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib`.
+			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 5) `metalearner.py`
 	- `--preds_dir` (one or more, required): One or more directories to search for `train_oof_preds_*` and `test_preds_*` files (use your curated `final_ensemble_predictions` directory).
@@ -354,7 +384,10 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--scalers` (str, default 'smr'): String indicating which scalers to try during tuning (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features, and saves the model and metadata to `final_model_and_predictions/`.
+	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
+	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
+	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
+	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features with automatic best model selection and optional checkpointing, and saves the model and metadata to `final_model_and_predictions/`.
 
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
