@@ -80,10 +80,16 @@ parser.add_argument('--scaler', type=str, default=None, help="Override scaler ch
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
 parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
 parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation and only train final model on full training set.")
+parser.add_argument('--cv_only', action='store_true', help="Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training).")
 parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
 parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
 parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
 args = parser.parse_args()
+
+# Validate mutually exclusive arguments
+if args.skip_cross_validation and args.cv_only:
+    log.critical("Error: --skip_cross_validation and --cv_only are mutually exclusive. Choose one or neither.")
+    exit(1)
 
 # --- Main Training Loop ---
 data_types = args.datatypes if args.datatypes is not None else DATA_TYPES_TO_TRAIN
@@ -222,6 +228,12 @@ for data_type in data_types:
     else:
         log.info("  - Skipping cross-validation as requested.")
     
+    # If cv_only is set, skip final training and move to next data type
+    if args.cv_only:
+        log.info("  - Skipping final training as --cv_only was specified.")
+        log.info(f"--- Completed OOF prediction generation for {data_type} ---")
+        continue
+
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
     # Re-run feature selection on the full training data to determine the final feature set
