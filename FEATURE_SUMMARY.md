@@ -1,9 +1,10 @@
 # New Features: Cross-Validation Control and Best Weight Step Tracking
 
 ## Overview
-This update adds two key features to improve training flexibility and transparency:
+This update adds key features to improve training flexibility and transparency:
 1. Option to skip cross-validation during training
-2. Logging of the training step at which best weights were obtained
+2. Option to perform only cross-validation and skip final training (for meta-learner OOF prediction generation)
+3. Logging of the training step at which best weights were obtained
 
 ## Feature 1: Skip Cross-Validation
 
@@ -48,6 +49,46 @@ When `--skip_cross_validation` is used:
 - Only the final model training on the full training set is performed
 - Training time is significantly reduced (approximately 3x faster as 3-fold CV is skipped)
 - Test predictions and final model are still generated and saved
+
+## Feature 1b: CV Only Mode
+
+### Purpose
+Allow users to perform only cross-validation to generate out-of-fold (OOF) predictions without the expensive final model training step. This is useful for:
+- Generating OOF predictions specifically for meta-learner training
+- Quick iteration when you only need training set predictions
+- Reducing training time when final models aren't needed
+
+### Usage
+Add the `--cv_only` flag to any training script:
+
+```bash
+# Generate only OOF predictions in DRE standard training
+python dre_standard.py --datatypes CNV --cv_only --verbose
+
+# Generate only OOF predictions in DRE reuploading training
+python dre_relupload.py --datatypes CNV --cv_only --verbose
+
+# Generate only OOF predictions in CFE standard training
+python cfe_standard.py --datatypes CNV --cv_only --verbose
+
+# Generate only OOF predictions in CFE reuploading training
+python cfe_relupload.py --datatypes CNV --cv_only --verbose
+```
+
+### Affected Scripts
+- `dre_standard.py`
+- `dre_relupload.py`
+- `cfe_standard.py`
+- `cfe_relupload.py`
+
+### Behavior
+When `--cv_only` is used:
+- Cross-validation is performed and OOF predictions are generated
+- Final model training on the full training set is skipped
+- Test predictions are not generated
+- Final model artifacts (pipeline, scaler, etc.) are not saved
+- Training time is significantly reduced (approximately 3x faster as final training is skipped)
+- **Note:** `--cv_only` and `--skip_cross_validation` are mutually exclusive and cannot be used together
 
 ## Feature 2: Best Weight Step Tracking
 
@@ -99,7 +140,20 @@ python dre_standard.py \
     --verbose
 ```
 
-### Example 2: Time-Based Training with Step Tracking
+### Example 2: Generate Only OOF Predictions for Meta-Learner
+```bash
+python dre_standard.py \
+    --datatypes CNV GeneExpr \
+    --cv_only \
+    --steps 50 \
+    --verbose
+```
+This will:
+- Perform 3-fold cross-validation
+- Generate and save OOF predictions
+- Skip final model training (saving ~33% of total time)
+
+### Example 3: Time-Based Training with Step Tracking
 ```bash
 python dre_standard.py \
     --datatypes CNV \
@@ -112,7 +166,7 @@ This will:
 - Save checkpoints every 10 steps
 - Log the best weight step at the end
 
-### Example 3: Quick Metalearner Training
+### Example 4: Quick Metalearner Training
 ```bash
 python metalearner.py \
     --preds_dir final_ensemble_predictions \
@@ -126,7 +180,8 @@ python metalearner.py \
 ## Benefits
 
 ### Time Savings
-- Skipping 3-fold cross-validation reduces training time by ~66%
+- Skipping 3-fold cross-validation reduces training time by ~66% (use `--skip_cross_validation`)
+- Performing only cross-validation reduces training time by ~33% (use `--cv_only`)
 - Useful for rapid prototyping and debugging
 
 ### Transparency
@@ -146,4 +201,8 @@ python metalearner.py \
 
 3. **Backward Compatibility**: All existing training scripts continue to work without modification. Cross-validation is performed by default unless explicitly skipped.
 
-4. **Output Files**: When cross-validation is skipped, OOF prediction files (`train_oof_preds_*.csv`) are not generated, but all other outputs (final model, test predictions, confusion matrices) are created normally.
+4. **Output Files**: 
+   - When `--skip_cross_validation` is used, OOF prediction files (`train_oof_preds_*.csv`) are not generated, but all other outputs (final model, test predictions, confusion matrices) are created normally.
+   - When `--cv_only` is used, only OOF prediction files (`train_oof_preds_*.csv`) are generated. Final models, test predictions, and confusion matrices are not created.
+
+5. **Mutually Exclusive Flags**: The `--skip_cross_validation` and `--cv_only` flags are mutually exclusive. Using both will result in an error.
