@@ -340,6 +340,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--skip_cross_validation` (flag, optional): Skip cross-validation and only train final model on full training set (skips OOF prediction generation).
+	- `--cv_only` (flag, optional): Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training). Mutually exclusive with `--skip_cross_validation`.
 	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
 	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
 	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
@@ -348,9 +350,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
 		- Train the pipeline (PCA/UMAP + QML) with automatic best model selection and optional checkpointing.
 		- Save:
-			- OOF predictions: `train_oof_preds_{datatype}.csv` in script-specific `OUTPUT_DIR`.
-			- Test predictions: `test_preds_{datatype}.csv`.
-			- Model artifacts: `pipeline_{datatype}.joblib`.
+			- OOF predictions: `train_oof_preds_{datatype}.csv` in script-specific `OUTPUT_DIR` (unless `--skip_cross_validation` is used).
+			- Test predictions: `test_preds_{datatype}.csv` (unless `--cv_only` is used).
+			- Model artifacts: `pipeline_{datatype}.joblib` (unless `--cv_only` is used).
 			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 
@@ -363,6 +365,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
 	- `--skip_tuning` (flag, optional): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--skip_cross_validation` (flag, optional): Skip cross-validation and only train final model on full training set (skips OOF prediction generation).
+	- `--cv_only` (flag, optional): Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training). Mutually exclusive with `--skip_cross_validation`.
 	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
 	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
 	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
@@ -371,9 +375,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
 		- Run fold-wise feature selection and train QML models with automatic best model selection and optional checkpointing.
 		- Save:
-			- OOF predictions: `train_oof_preds_{datatype}.csv`.
-			- Test predictions: `test_preds_{datatype}.csv`.
-			- Model artifacts: `selector_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib`.
+			- OOF predictions: `train_oof_preds_{datatype}.csv` (unless `--skip_cross_validation` is used).
+			- Test predictions: `test_preds_{datatype}.csv` (unless `--cv_only` is used).
+			- Model artifacts: `selector_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib` (unless `--cv_only` is used).
 			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 5) `metalearner.py`
