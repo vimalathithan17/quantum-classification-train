@@ -158,6 +158,7 @@ def main():
     parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
     parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
+    parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation during tuning (use simple train/val split).")
     parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
     parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
     parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
@@ -248,6 +249,10 @@ def main():
 
         log.info(f"Training final {params['qml_model']} model with parameters: {json.dumps(model_params, indent=2)}")
         final_model.fit(X_meta_train_scaled, y_meta_train.values)
+        
+        # Log best weights step if available
+        if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
+            log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
         
         # Save the trained model and scaler
         model_path = os.path.join(OUTPUT_DIR, 'metalearner_model.joblib')

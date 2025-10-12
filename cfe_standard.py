@@ -79,6 +79,7 @@ parser.add_argument('--steps', type=int, default=None, help="Override the number
 parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
 parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
 parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
+parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation and only train final model on full training set.")
 parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
 parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
 parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
@@ -158,14 +159,15 @@ for data_type in data_types:
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
 
     # --- Generate Out-of-Fold Predictions Correctly ---
-    log.info("  - Generating out-of-fold predictions...")
-    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
-    oof_preds = np.zeros((len(X_train), n_classes))
-    
-    # This will hold the feature columns selected for the final model
-    final_selected_cols = None 
-    
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
+    if not args.skip_cross_validation:
+        log.info("  - Generating out-of-fold predictions...")
+        skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
+        oof_preds = np.zeros((len(X_train), n_classes))
+        
+        # This will hold the feature columns selected for the final model
+        final_selected_cols = None 
+        
+        for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
         log.info(f"    - Processing Fold {fold + 1}/3...")
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
         y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
@@ -218,9 +220,11 @@ for data_type in data_types:
         val_preds = model.predict_proba((X_val_scaled, is_missing_val))
         oof_preds[val_idx] = val_preds
 
-    oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
-    pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
-    log.info("  - Saved out-of-fold training predictions.")
+        oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
+        pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
+        log.info("  - Saved out-of-fold training predictions.")
+    else:
+        log.info("  - Skipping cross-validation as requested.")
     
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
@@ -261,6 +265,10 @@ for data_type in data_types:
         max_training_time=args.max_training_time
     )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
+
+    # Log best weights step if available
+    if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
+        log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
 
     # --- Generate Predictions on Test Set ---
     log.info("  - Generating predictions on the hold-out test set...")
