@@ -2,6 +2,9 @@ import pennylane as qml
 from pennylane import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import accuracy_score
+import os
+import joblib
+import time
 
 # Import the centralized logger
 from logging_utils import log
@@ -10,16 +13,24 @@ from logging_utils import log
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     """Multiclass VQC for pre-processed, dimensionally-reduced data."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False, 
+                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
         self.verbose = verbose
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_frequency = checkpoint_frequency
+        self.keep_last_n = keep_last_n
+        self.max_training_time = max_training_time
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
+        self.best_weights = None
+        self.best_loss = float('inf')
+        self.checkpoint_history = []
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -37,11 +48,18 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
+        if self.checkpoint_dir:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
         qcircuit = self._get_circuit()
         y_one_hot = np.eye(self.n_classes)[y]
         opt = qml.AdamOptimizer(self.learning_rate)
         
-        for step in range(self.steps):
+        start_time = time.time()
+        step = 0
+        
+        # Dynamic steps based on max_training_time or fixed steps
+        while True:
             def cost(weights):
                 raw_predictions = np.array([qcircuit(x, weights) for x in X])
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
@@ -50,9 +68,48 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 return loss
             
             self.weights, current_loss = opt.step_and_cost(cost, self.weights)
+            
+            # Track best model
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.best_weights = self.weights.copy()
+                if self.checkpoint_dir:
+                    best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
+                    joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
+            
+            # Save checkpoint periodically
+            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_step_{step}.joblib')
+                joblib.dump({'weights': self.weights, 'loss': current_loss, 'step': step}, checkpoint_path)
+                self.checkpoint_history.append(checkpoint_path)
+                
+                # Keep only last N checkpoints
+                if len(self.checkpoint_history) > self.keep_last_n:
+                    old_checkpoint = self.checkpoint_history.pop(0)
+                    if os.path.exists(old_checkpoint):
+                        os.remove(old_checkpoint)
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
-                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+                elapsed = time.time() - start_time
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f} - Best Loss: {self.best_loss:.4f} - Time: {elapsed:.1f}s")
+            
+            step += 1
+            
+            # Check stopping conditions
+            if self.max_training_time:
+                elapsed_hours = (time.time() - start_time) / 3600
+                if elapsed_hours >= self.max_training_time:
+                    log.info(f"  [QML Training] Reached max training time of {self.max_training_time:.2f} hours at step {step}")
+                    break
+            else:
+                if step >= self.steps:
+                    break
+        
+        # Load best weights
+        if self.best_weights is not None:
+            self.weights = self.best_weights
+            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+        
         return self
 
     def predict_proba(self, X):
@@ -65,16 +122,24 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Multiclass VQC for pre-processed, dense data."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
+                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
         self.verbose = verbose
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_frequency = checkpoint_frequency
+        self.keep_last_n = keep_last_n
+        self.max_training_time = max_training_time
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
+        self.best_weights = None
+        self.best_loss = float('inf')
+        self.checkpoint_history = []
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -93,10 +158,17 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
+        if self.checkpoint_dir:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
         qcircuit = self._get_circuit()
         y_one_hot = np.eye(self.n_classes)[y]
         opt = qml.AdamOptimizer(self.learning_rate)
-        for step in range(self.steps):
+        
+        start_time = time.time()
+        step = 0
+        
+        while True:
             def cost(weights):
                 raw_predictions = np.array([qcircuit(x, weights) for x in X])
                 probabilities = np.array([self._softmax(p) for p in raw_predictions])
@@ -104,9 +176,48 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                 return loss
             
             self.weights, current_loss = opt.step_and_cost(cost, self.weights)
+            
+            # Track best model
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.best_weights = self.weights.copy()
+                if self.checkpoint_dir:
+                    best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
+                    joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
+            
+            # Save checkpoint periodically
+            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_step_{step}.joblib')
+                joblib.dump({'weights': self.weights, 'loss': current_loss, 'step': step}, checkpoint_path)
+                self.checkpoint_history.append(checkpoint_path)
+                
+                # Keep only last N checkpoints
+                if len(self.checkpoint_history) > self.keep_last_n:
+                    old_checkpoint = self.checkpoint_history.pop(0)
+                    if os.path.exists(old_checkpoint):
+                        os.remove(old_checkpoint)
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
-                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+                elapsed = time.time() - start_time
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f} - Best Loss: {self.best_loss:.4f} - Time: {elapsed:.1f}s")
+            
+            step += 1
+            
+            # Check stopping conditions
+            if self.max_training_time:
+                elapsed_hours = (time.time() - start_time) / 3600
+                if elapsed_hours >= self.max_training_time:
+                    log.info(f"  [QML Training] Reached max training time of {self.max_training_time:.2f} hours at step {step}")
+                    break
+            else:
+                if step >= self.steps:
+                    break
+        
+        # Load best weights
+        if self.best_weights is not None:
+            self.weights = self.best_weights
+            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
+        
         return self
 
     def predict_proba(self, X):
@@ -121,17 +232,26 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
 class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     """Conditional Multiclass QVC that expects pre-processed tuple input."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
+                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
         self.verbose = verbose
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_frequency = checkpoint_frequency
+        self.keep_last_n = keep_last_n
+        self.max_training_time = max_training_time
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights_ansatz = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
         self.weights_missing = np.random.uniform(0, 2 * np.pi, self.n_qubits, requires_grad=True)
+        self.best_weights_ansatz = None
+        self.best_weights_missing = None
+        self.best_loss = float('inf')
+        self.checkpoint_history = []
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -153,12 +273,18 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
+        if self.checkpoint_dir:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
         X_scaled, is_missing_mask = X
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
         opt = qml.AdamOptimizer(self.learning_rate)
         
-        for step in range(self.steps):
+        start_time = time.time()
+        step = 0
+        
+        while True:
             # The cost function now takes the weights directly as arguments
             def cost(w_ansatz, w_missing):
                 raw_predictions = np.array([qcircuit(f, m, w_ansatz, w_missing) for f, m in zip(X_scaled, is_missing_mask)])
@@ -170,9 +296,53 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
             (self.weights_ansatz, self.weights_missing), current_loss = opt.step_and_cost(
                 cost, self.weights_ansatz, self.weights_missing
             )
+            
+            # Track best model
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.best_weights_ansatz = self.weights_ansatz.copy()
+                self.best_weights_missing = self.weights_missing.copy()
+                if self.checkpoint_dir:
+                    best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
+                    joblib.dump({'weights_ansatz': self.best_weights_ansatz, 
+                                'weights_missing': self.best_weights_missing,
+                                'loss': self.best_loss, 'step': step}, best_path)
+            
+            # Save checkpoint periodically
+            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_step_{step}.joblib')
+                joblib.dump({'weights_ansatz': self.weights_ansatz,
+                            'weights_missing': self.weights_missing,
+                            'loss': current_loss, 'step': step}, checkpoint_path)
+                self.checkpoint_history.append(checkpoint_path)
+                
+                # Keep only last N checkpoints
+                if len(self.checkpoint_history) > self.keep_last_n:
+                    old_checkpoint = self.checkpoint_history.pop(0)
+                    if os.path.exists(old_checkpoint):
+                        os.remove(old_checkpoint)
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
-                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+                elapsed = time.time() - start_time
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f} - Best Loss: {self.best_loss:.4f} - Time: {elapsed:.1f}s")
+
+            step += 1
+            
+            # Check stopping conditions
+            if self.max_training_time:
+                elapsed_hours = (time.time() - start_time) / 3600
+                if elapsed_hours >= self.max_training_time:
+                    log.info(f"  [QML Training] Reached max training time of {self.max_training_time:.2f} hours at step {step}")
+                    break
+            else:
+                if step >= self.steps:
+                    break
+        
+        # Load best weights
+        if self.best_weights_ansatz is not None:
+            self.weights_ansatz = self.best_weights_ansatz
+            self.weights_missing = self.best_weights_missing
+            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
 
         return self
 
@@ -190,17 +360,26 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 
 class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Conditional Multiclass QVC."""
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False):
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
+                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
         self.learning_rate = learning_rate
         self.steps = steps
         self.verbose = verbose
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_frequency = checkpoint_frequency
+        self.keep_last_n = keep_last_n
+        self.max_training_time = max_training_time
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights_ansatz = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
         self.weights_missing = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
+        self.best_weights_ansatz = None
+        self.best_weights_missing = None
+        self.best_loss = float('inf')
+        self.checkpoint_history = []
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -225,12 +404,18 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
+        if self.checkpoint_dir:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
         X_scaled, is_missing_mask = X
         y_one_hot = np.eye(self.n_classes)[y]
         qcircuit = self._get_circuit()
         opt = qml.AdamOptimizer(self.learning_rate)
         
-        for step in range(self.steps):
+        start_time = time.time()
+        step = 0
+        
+        while True:
             # The cost function now takes the weights directly as arguments
             def cost(w_ansatz, w_missing):
                 raw_predictions = np.array([qcircuit(f, m, w_ansatz, w_missing) for f, m in zip(X_scaled, is_missing_mask)])
@@ -242,9 +427,53 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             (self.weights_ansatz, self.weights_missing), current_loss = opt.step_and_cost(
                 cost, self.weights_ansatz, self.weights_missing
             )
+            
+            # Track best model
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.best_weights_ansatz = self.weights_ansatz.copy()
+                self.best_weights_missing = self.weights_missing.copy()
+                if self.checkpoint_dir:
+                    best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
+                    joblib.dump({'weights_ansatz': self.best_weights_ansatz, 
+                                'weights_missing': self.best_weights_missing,
+                                'loss': self.best_loss, 'step': step}, best_path)
+            
+            # Save checkpoint periodically
+            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_step_{step}.joblib')
+                joblib.dump({'weights_ansatz': self.weights_ansatz,
+                            'weights_missing': self.weights_missing,
+                            'loss': current_loss, 'step': step}, checkpoint_path)
+                self.checkpoint_history.append(checkpoint_path)
+                
+                # Keep only last N checkpoints
+                if len(self.checkpoint_history) > self.keep_last_n:
+                    old_checkpoint = self.checkpoint_history.pop(0)
+                    if os.path.exists(old_checkpoint):
+                        os.remove(old_checkpoint)
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
-                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}")
+                elapsed = time.time() - start_time
+                log.info(f"  [QML Training] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f} - Best Loss: {self.best_loss:.4f} - Time: {elapsed:.1f}s")
+
+            step += 1
+            
+            # Check stopping conditions
+            if self.max_training_time:
+                elapsed_hours = (time.time() - start_time) / 3600
+                if elapsed_hours >= self.max_training_time:
+                    log.info(f"  [QML Training] Reached max training time of {self.max_training_time:.2f} hours at step {step}")
+                    break
+            else:
+                if step >= self.steps:
+                    break
+        
+        # Load best weights
+        if self.best_weights_ansatz is not None:
+            self.weights_ansatz = self.best_weights_ansatz
+            self.weights_missing = self.best_weights_missing
+            log.info(f"  [QML Training] Loaded best weights with loss: {self.best_loss:.4f}")
 
         return self
 
