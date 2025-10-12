@@ -74,6 +74,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             if current_loss < self.best_loss:
                 self.best_loss = current_loss
                 self.best_weights = self.weights.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
@@ -183,6 +184,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             if current_loss < self.best_loss:
                 self.best_loss = current_loss
                 self.best_weights = self.weights.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
@@ -305,6 +307,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 self.best_loss = current_loss
                 self.best_weights_ansatz = self.weights_ansatz.copy()
                 self.best_weights_missing = self.weights_missing.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights_ansatz': self.best_weights_ansatz, 
@@ -437,6 +440,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                 self.best_loss = current_loss
                 self.best_weights_ansatz = self.weights_ansatz.copy()
                 self.best_weights_missing = self.weights_missing.copy()
+                self.best_step = step
                 if self.checkpoint_dir:
                     best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
                     joblib.dump({'weights_ansatz': self.best_weights_ansatz, 

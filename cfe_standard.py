@@ -168,57 +168,57 @@ for data_type in data_types:
         final_selected_cols = None 
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
-        log.info(f"    - Processing Fold {fold + 1}/3...")
-        X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
-        y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
+            log.info(f"    - Processing Fold {fold + 1}/3...")
+            X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
+            y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-        # 1. Feature selection INSIDE the fold to prevent data leakage
-        imputer_for_fs = SimpleImputer(strategy='median')
-        X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
+            # 1. Feature selection INSIDE the fold to prevent data leakage
+            imputer_for_fs = SimpleImputer(strategy='median')
+            X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
 
-        n_qubits = config.get('n_qubits', 10)
+            n_qubits = config.get('n_qubits', 10)
 
-        log.info("      - Using LightGBM importance-based selection...")
-        scaler = get_scaler(config.get('scaler', 'MinMax'))
-        scaler.fit(X_train_fold_imputed)
-        X_train_fold_scaled = scaler.transform(X_train_fold_imputed)
+            log.info("      - Using LightGBM importance-based selection...")
+            scaler = get_scaler(config.get('scaler', 'MinMax'))
+            scaler.fit(X_train_fold_imputed)
+            X_train_fold_scaled = scaler.transform(X_train_fold_imputed)
 
-        # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
-        lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
-                             n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-        actual_k = min(n_qubits, X_train_fold_scaled.shape[1])
-        lgb.fit(X_train_fold_scaled, y_train_fold)
-        importances = lgb.feature_importances_
-        top_idx = np.argsort(importances)[-actual_k:][::-1]
-        selected_cols = X_train_fold.columns[top_idx]
+            # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
+            lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
+                                 n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
+            actual_k = min(n_qubits, X_train_fold_scaled.shape[1])
+            lgb.fit(X_train_fold_scaled, y_train_fold)
+            importances = lgb.feature_importances_
+            top_idx = np.argsort(importances)[-actual_k:][::-1]
+            selected_cols = X_train_fold.columns[top_idx]
 
-        X_train_fold_selected = X_train_fold[selected_cols]
-        X_val_fold_selected = X_val_fold[selected_cols]
+            X_train_fold_selected = X_train_fold[selected_cols]
+            X_val_fold_selected = X_val_fold[selected_cols]
 
-        # 2. Prepare data tuple (mask, fill, scale) for this fold
-        is_missing_train = X_train_fold_selected.isnull().astype(int).values
-        X_train_filled = X_train_fold_selected.fillna(0.0).values
-        is_missing_val = X_val_fold_selected.isnull().astype(int).values
-        X_val_filled = X_val_fold_selected.fillna(0.0).values
+            # 2. Prepare data tuple (mask, fill, scale) for this fold
+            is_missing_train = X_train_fold_selected.isnull().astype(int).values
+            X_train_filled = X_train_fold_selected.fillna(0.0).values
+            is_missing_val = X_val_fold_selected.isnull().astype(int).values
+            X_val_filled = X_val_fold_selected.fillna(0.0).values
 
-        scaler = get_scaler(config.get('scaler', 'MinMax'))
-        scaler.fit(X_train_filled)
-        X_train_scaled = scaler.transform(X_train_filled)
-        X_val_scaled = scaler.transform(X_val_filled)
+            scaler = get_scaler(config.get('scaler', 'MinMax'))
+            scaler.fit(X_train_filled)
+            X_train_scaled = scaler.transform(X_train_filled)
+            X_val_scaled = scaler.transform(X_val_filled)
 
-        # 3. Train model on this fold and predict on the validation part
-        checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if args.max_training_time else None
-        model = ConditionalMulticlassQuantumClassifierFS(
-            n_qubits=n_qubits, n_layers=config['n_layers'], 
-            steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
-            checkpoint_dir=checkpoint_dir,
-            checkpoint_frequency=args.checkpoint_frequency,
-            keep_last_n=args.keep_last_n,
-            max_training_time=args.max_training_time
-        )
-        model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
-        val_preds = model.predict_proba((X_val_scaled, is_missing_val))
-        oof_preds[val_idx] = val_preds
+            # 3. Train model on this fold and predict on the validation part
+            checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if args.max_training_time else None
+            model = ConditionalMulticlassQuantumClassifierFS(
+                n_qubits=n_qubits, n_layers=config['n_layers'], 
+                steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_frequency=args.checkpoint_frequency,
+                keep_last_n=args.keep_last_n,
+                max_training_time=args.max_training_time
+            )
+            model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
+            val_preds = model.predict_proba((X_val_scaled, is_missing_val))
+            oof_preds[val_idx] = val_preds
 
         oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
         pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
