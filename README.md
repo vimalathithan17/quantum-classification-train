@@ -2,6 +2,250 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## ✨ New Features (Latest Update)
+
+- **Classical Readout Heads**: All quantum classifiers now include configurable classical neural network readout heads (hidden_size, activation)
+- **Checkpoint & Resume**: Full checkpoint/resume support with optimizer state persistence
+- **Enhanced Metrics**: Per-epoch logging of accuracy, precision, recall, F1 (macro/weighted), per-class specificity, confusion matrices
+- **Visualization**: Automatic generation of loss and metric plots (PNG) and epoch history (CSV)
+- **Stratified Splits**: Default 80/20 stratified train/test splits with optional validation splits
+- **Unified Training Script**: `scripts/train.py` with comprehensive CLI arguments
+- **Optuna Nested CV**: `scripts/optuna_nested_cv.py` for robust hyperparameter tuning with SQLite storage
+- **Custom Adam Optimizer**: Serializable optimizer supporting checkpoint resume
+- **Smoke Tests**: Automated testing in `tests/test_smoke.py`
+
+---
+
+## Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/vimalathithan17/quantum-classification-train.git
+cd quantum-classification-train
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+## Requirements
+
+See `requirements.txt` for full dependencies:
+- pennylane>=0.30.0
+- numpy, pandas, scikit-learn, joblib
+- optuna>=3.0.0 (for hyperparameter tuning)
+- matplotlib, seaborn (for visualization)
+- umap-learn, lightgbm (for dimensionality reduction and feature selection)
+
+---
+
+## Quick Start Guide
+
+### 1. Unified Training Script (Recommended)
+
+The new unified training script provides a simple interface to train quantum classifiers with all features:
+
+```bash
+# Basic training with defaults (80/20 split, checkpointing, metrics)
+python scripts/train.py \
+    --data_file final_processed_datasets/data_CNV_.parquet \
+    --output_dir trained_models/cnv_model \
+    --n_qubits 8 \
+    --n_layers 3 \
+    --steps 100 \
+    --verbose
+
+# Training with custom settings
+python scripts/train.py \
+    --data_file final_processed_datasets/data_Prot_.parquet \
+    --output_dir trained_models/prot_model \
+    --n_qubits 10 \
+    --n_layers 4 \
+    --hidden_size 32 \
+    --activation relu \
+    --steps 200 \
+    --learning_rate 0.05 \
+    --test_size 0.2 \
+    --val_size 0.1 \
+    --checkpoint_dir checkpoints/prot \
+    --resume_mode auto \
+    --metric f1_weighted \
+    --verbose
+
+# Resume training from checkpoint
+python scripts/train.py \
+    --data_file final_processed_datasets/data_CNV_.parquet \
+    --output_dir trained_models/cnv_model \
+    --checkpoint_dir checkpoints/cnv \
+    --resume_mode best \
+    --steps 200 \
+    --verbose
+```
+
+**Key Arguments:**
+- `--data_file`: Path to parquet data file (must contain 'class' column)
+- `--output_dir`: Directory for saving trained models
+- `--n_qubits`: Number of qubits (default: 8)
+- `--n_layers`: Number of ansatz layers (default: 3)
+- `--hidden_size`: Hidden layer size for readout head (default: 16)
+- `--activation`: Activation function: tanh or relu (default: tanh)
+- `--steps`: Training steps (default: 100)
+- `--test_size`: Test set fraction (default: 0.2 for 80/20 split)
+- `--val_size`: Validation set fraction from training set (default: 0.1)
+- `--checkpoint_dir`: Directory for checkpoints
+- `--resume_mode`: Resume mode: auto/latest/best/none (default: auto)
+- `--metric`: Selection metric for best model (default: f1_weighted)
+- `--verbose`: Enable verbose logging
+
+### 2. Optuna Nested Cross-Validation
+
+For robust model selection and hyperparameter tuning:
+
+```bash
+# Run nested CV with default settings (5 outer folds, 3 inner folds)
+python scripts/optuna_nested_cv.py \
+    --data_file final_processed_datasets/data_CNV_.parquet \
+    --output_dir optuna_results/cnv_nested_cv \
+    --study_name cnv_quantum_cv \
+    --n_trials 20 \
+    --outer_folds 5 \
+    --verbose
+
+# Custom nested CV configuration
+python scripts/optuna_nested_cv.py \
+    --data_file final_processed_datasets/data_Prot_.parquet \
+    --output_dir optuna_results/prot_nested_cv \
+    --study_name prot_quantum_cv \
+    --db_path ./optuna_studies.db \
+    --n_qubits 10 \
+    --min_layers 2 \
+    --max_layers 6 \
+    --n_trials 30 \
+    --outer_folds 5 \
+    --verbose
+```
+
+The script will:
+- Run outer K-fold CV (default: 5 folds)
+- For each outer fold, perform inner CV optimization with Optuna (default: 3 folds, 20 trials)
+- Train final model with best hyperparameters on each outer fold
+- Save results to SQLite database (`optuna_studies.db`)
+- Generate summary CSV and plots
+
+**Outputs:**
+- `nested_cv_summary.csv`: Performance metrics for all outer folds
+- `model_fold_*.joblib`: Trained model for each outer fold
+- `optimization_history.png`: Optuna optimization history plot
+- `param_importances.png`: Hyperparameter importance plot
+
+---
+
+---
+
+## Advanced Features
+
+### Checkpoint & Resume
+
+All training supports checkpointing and resume:
+
+```bash
+# Train with checkpointing
+python scripts/train.py \
+    --data_file data.parquet \
+    --checkpoint_dir checkpoints/my_model \
+    --checkpoint_frequency 10 \
+    --steps 200
+
+# Resume from best checkpoint
+python scripts/train.py \
+    --data_file data.parquet \
+    --checkpoint_dir checkpoints/my_model \
+    --resume_mode best \
+    --steps 300
+
+# Resume from latest checkpoint
+python scripts/train.py \
+    --data_file data.parquet \
+    --checkpoint_dir checkpoints/my_model \
+    --resume_mode latest \
+    --steps 300
+```
+
+**Resume Modes:**
+- `auto`: Load best checkpoint if exists, else latest (default)
+- `best`: Load best checkpoint (based on validation metric)
+- `latest`: Load most recent checkpoint
+- `none`: Start training from scratch
+
+**What's Saved:**
+- Quantum circuit parameters
+- Classical readout head parameters
+- Optimizer state (m, v, t)
+- Training step
+- Loss and metrics
+- Random number generator state
+
+If optimizer state is missing on resume, the system automatically:
+1. Reinitializes the optimizer
+2. Reduces learning rate by 0.1x
+3. Applies short warmup period
+
+### Metrics & Visualization
+
+Every training run automatically logs:
+
+**Per-Epoch Metrics:**
+- Accuracy
+- Precision (macro and weighted)
+- Recall (macro and weighted)
+- F1 score (macro and weighted)
+- Per-class specificity
+- Confusion matrix
+- Training loss
+
+**Outputs:**
+- `epoch_history.csv`: Complete metrics for all epochs
+- `loss_plot.png`: Loss curve over training
+- `metrics_plot.png`: Accuracy, F1, precision, recall over training
+
+**Checkpoint Directory Structure:**
+```
+checkpoints/
+├── best_checkpoint.joblib       # Best model checkpoint
+├── latest_checkpoint.joblib     # Most recent checkpoint
+├── checkpoint_step_*.joblib     # Periodic checkpoints
+├── epoch_history.csv            # Metrics history
+├── loss_plot.png                # Loss visualization
+└── metrics_plot.png             # Metrics visualization
+```
+
+### Classical Readout Heads
+
+All quantum classifiers now include a classical neural network readout head:
+
+```
+Quantum Circuit → [hidden_layer with activation] → output_layer
+```
+
+**Configuration:**
+- `hidden_size`: Size of hidden layer (default: 16)
+- `activation`: 'tanh' or 'relu' (default: 'tanh')
+
+The readout head is trained jointly with quantum parameters and improves classification performance by adding non-linear expressivity.
+
+### Validation Splits
+
+Create a validation set for monitoring overfitting:
+
+```bash
+python scripts/train.py \
+    --data_file data.parquet \
+    --test_size 0.2 \      # 80% train+val, 20% test
+    --val_size 0.1 \       # 10% of train+val for validation
+    --metric f1_weighted   # Use weighted F1 for model selection
+```
+
+The best model is selected based on the validation metric (or training metric if no validation set).
+
 ---
 
 ## Directory layout (recommended)
