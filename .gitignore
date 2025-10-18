@@ -58,3 +58,16 @@ venv.bak/
 # master_label_encoder/
 # final_ensemble_predictions/
 # final_model_deployment/
+
+# Checkpoints and training outputs
+checkpoints*/
+trained_models/
+optuna_results/
+optuna_studies.db
+*.png
+epoch_history.csv
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
