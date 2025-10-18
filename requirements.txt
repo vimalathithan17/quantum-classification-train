@@ -1,0 +1,20 @@
+# Core dependencies
+pennylane>=0.30.0
+numpy>=1.23.0
+pandas>=1.5.0
+scikit-learn>=1.2.0
+joblib>=1.2.0
+
+# Optimization and hyperparameter tuning
+optuna>=3.0.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.12.0
+
+# Dimensionality reduction and feature selection
+umap-learn>=0.5.0
+lightgbm>=3.3.0
+
+# Data handling
+pyarrow>=10.0.0

@@ -5,16 +5,117 @@ from sklearn.metrics import accuracy_score
 import os
 import joblib
 import time
+from typing import Optional, Dict, Any, Tuple
 
 # Import the centralized logger
 from logging_utils import log
 
+# Import custom utilities
+from utils.optim_adam import SerializableAdam
+from utils.io_checkpoint import save_checkpoint, load_checkpoint
+from utils.metrics import compute_epoch_metrics, save_epoch_history, save_metrics_plots
+
+
+# --- Classical Readout Head ---
+
+class ClassicalReadoutHead:
+    """
+    Classical neural network readout head for quantum circuit outputs.
+    Applies: quantum_output -> hidden_layer -> output_layer
+    """
+    
+    def __init__(self, input_size: int, output_size: int, 
+                 hidden_size: int = 16, activation: str = 'tanh'):
+        """
+        Initialize classical readout head.
+        
+        Args:
+            input_size: Size of quantum circuit output
+            output_size: Number of output classes
+            hidden_size: Size of hidden layer (default: 16)
+            activation: Activation function 'tanh' or 'relu' (default: 'tanh')
+        """
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.activation = activation
+        
+        # Initialize weights
+        self.w1 = np.random.randn(input_size, hidden_size) * 0.1
+        self.b1 = np.zeros(hidden_size)
+        self.w2 = np.random.randn(hidden_size, output_size) * 0.1
+        self.b2 = np.zeros(output_size)
+        
+        # Make weights trainable
+        self.w1 = np.array(self.w1, requires_grad=True)
+        self.b1 = np.array(self.b1, requires_grad=True)
+        self.w2 = np.array(self.w2, requires_grad=True)
+        self.b2 = np.array(self.b2, requires_grad=True)
+    
+    def forward(self, x, w1, b1, w2, b2):
+        """
+        Forward pass through readout head.
+        
+        Args:
+            x: Input from quantum circuit (array)
+            w1, b1, w2, b2: Weight parameters
+            
+        Returns:
+            Output logits
+        """
+        # Hidden layer
+        hidden = np.dot(x, w1) + b1
+        
+        # Apply activation
+        if self.activation == 'relu':
+            hidden = np.maximum(0, hidden)
+        else:  # tanh
+            hidden = np.tanh(hidden)
+        
+        # Output layer
+        output = np.dot(hidden, w2) + b2
+        return output
+    
+    def get_params(self) -> Tuple:
+        """Get current parameters as tuple."""
+        return (self.w1, self.b1, self.w2, self.b2)
+    
+    def set_params(self, params: Tuple) -> None:
+        """Set parameters from tuple."""
+        self.w1, self.b1, self.w2, self.b2 = params
+    
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Get state dictionary for serialization."""
+        return {
+            'w1': self.w1,
+            'b1': self.b1,
+            'w2': self.w2,
+            'b2': self.b2,
+            'input_size': self.input_size,
+            'output_size': self.output_size,
+            'hidden_size': self.hidden_size,
+            'activation': self.activation
+        }
+    
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Load state from dictionary."""
+        self.w1 = state_dict['w1']
+        self.b1 = state_dict['b1']
+        self.w2 = state_dict['w2']
+        self.b2 = state_dict['b2']
+        self.input_size = state_dict['input_size']
+        self.output_size = state_dict['output_size']
+        self.hidden_size = state_dict['hidden_size']
+        self.activation = state_dict['activation']
+
+
 # --- Models for Approach 1 (Classical Preprocessing + QML) ---
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
-    """Multiclass VQC for pre-processed, dimensionally-reduced data."""
+    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout head."""
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False, 
-                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None):
+                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
+                 hidden_size=16, activation='tanh', resume_mode='auto'):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -25,13 +126,20 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.checkpoint_frequency = checkpoint_frequency
         self.keep_last_n = keep_last_n
         self.max_training_time = max_training_time
+        self.hidden_size = hidden_size
+        self.activation = activation
+        self.resume_mode = resume_mode
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
+        self.readout_head = ClassicalReadoutHead(self.n_classes, self.n_classes, hidden_size, activation)
+        self.optimizer = None
         self.best_weights = None
+        self.best_readout_params = None
         self.best_loss = float('inf')
         self.best_step = 0
         self.checkpoint_history = []
+        self.epoch_history = []
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -49,47 +157,105 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
+        # Try to resume from checkpoint
+        start_step = 0
+        if self.checkpoint_dir and self.resume_mode != 'none':
+            checkpoint = load_checkpoint(self.checkpoint_dir, self.resume_mode)
+            if checkpoint:
+                log.info(f"Resuming from checkpoint (mode: {self.resume_mode})")
+                self.weights = checkpoint['quantum_params']
+                if checkpoint.get('classical_params'):
+                    self.readout_head.load_state_dict(checkpoint['classical_params'])
+                start_step = checkpoint.get('step', 0) + 1
+                self.best_loss = checkpoint.get('loss', float('inf'))
+                
+                # Restore optimizer state if available
+                if checkpoint.get('optimizer_state'):
+                    self.optimizer = SerializableAdam(self.learning_rate)
+                    self.optimizer.set_state(checkpoint['optimizer_state'])
+                    log.info("Restored optimizer state from checkpoint")
+                else:
+                    # Reinitialize optimizer with reduced LR and warmup
+                    log.warning("Optimizer state not found in checkpoint - reinitializing with 0.1x LR")
+                    self.optimizer = SerializableAdam(self.learning_rate * 0.1)
+        
+        if self.optimizer is None:
+            self.optimizer = SerializableAdam(self.learning_rate)
+        
         if self.checkpoint_dir:
             os.makedirs(self.checkpoint_dir, exist_ok=True)
         
         qcircuit = self._get_circuit()
         y_one_hot = np.eye(self.n_classes)[y]
-        opt = qml.AdamOptimizer(self.learning_rate)
         
         start_time = time.time()
-        step = 0
+        step = start_step
         
         # Dynamic steps based on max_training_time or fixed steps
         while True:
-            def cost(weights):
-                raw_predictions = np.array([qcircuit(x, weights) for x in X])
-                probabilities = np.array([self._softmax(p) for p in raw_predictions])
-                # Use cross-entropy loss for multiclass
+            def cost(*params):
+                # params = (weights, w1, b1, w2, b2)
+                weights = params[0]
+                readout_params = params[1:]
+                
+                # Get quantum outputs
+                quantum_out = np.array([qcircuit(x, weights) for x in X])
+                
+                # Pass through classical readout head
+                logits = np.array([self.readout_head.forward(qo, *readout_params) for qo in quantum_out])
+                
+                # Apply softmax
+                probabilities = np.array([self._softmax(l) for l in logits])
+                
+                # Cross-entropy loss
                 loss = -np.mean(y_one_hot * np.log(probabilities + 1e-9))
                 return loss
             
-            self.weights, current_loss = opt.step_and_cost(cost, self.weights)
+            # Combine all parameters for optimization
+            all_params = (self.weights,) + self.readout_head.get_params()
+            updated_params, current_loss = self.optimizer.step_and_cost(cost, *all_params)
+            
+            # Unpack updated parameters
+            self.weights = updated_params[0]
+            self.readout_head.set_params(updated_params[1:])
             
             # Track best model
             if current_loss < self.best_loss:
                 self.best_loss = current_loss
                 self.best_weights = self.weights.copy()
+                self.best_readout_params = self.readout_head.get_params()
                 self.best_step = step
+                
                 if self.checkpoint_dir:
-                    best_path = os.path.join(self.checkpoint_dir, 'best_weights.joblib')
-                    joblib.dump({'weights': self.best_weights, 'loss': self.best_loss, 'step': step}, best_path)
+                    save_checkpoint(
+                        self.checkpoint_dir,
+                        quantum_params=self.best_weights,
+                        classical_params=self.readout_head.get_state_dict(),
+                        optimizer_state=self.optimizer.get_state(),
+                        step=step,
+                        loss=self.best_loss,
+                        is_best=True
+                    )
+            
+            # Compute metrics periodically
+            if step % 10 == 0:
+                y_pred = self.predict(X)
+                metrics = compute_epoch_metrics(y, y_pred, loss=current_loss, n_classes=self.n_classes)
+                metrics['step'] = step
+                metrics['epoch'] = step  # For compatibility
+                self.epoch_history.append(metrics)
             
             # Save checkpoint periodically
             if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
-                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_step_{step}.joblib')
-                joblib.dump({'weights': self.weights, 'loss': current_loss, 'step': step}, checkpoint_path)
-                self.checkpoint_history.append(checkpoint_path)
-                
-                # Keep only last N checkpoints
-                if len(self.checkpoint_history) > self.keep_last_n:
-                    old_checkpoint = self.checkpoint_history.pop(0)
-                    if os.path.exists(old_checkpoint):
-                        os.remove(old_checkpoint)
+                save_checkpoint(
+                    self.checkpoint_dir,
+                    quantum_params=self.weights,
+                    classical_params=self.readout_head.get_state_dict(),
+                    optimizer_state=self.optimizer.get_state(),
+                    step=step,
+                    loss=current_loss,
+                    is_best=False
+                )
 
             if self.verbose and (step % 10 == 0 or step == self.steps - 1):
                 elapsed = time.time() - start_time
@@ -110,14 +276,23 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Load best weights
         if self.best_weights is not None:
             self.weights = self.best_weights
+            if self.best_readout_params is not None:
+                self.readout_head.set_params(self.best_readout_params)
             log.info(f"  [QML Training] Loaded best weights from step {self.best_step} with loss: {self.best_loss:.4f}")
+        
+        # Save epoch history
+        if self.checkpoint_dir and self.epoch_history:
+            save_epoch_history(self.checkpoint_dir, self.epoch_history)
+            save_metrics_plots(self.epoch_history, self.checkpoint_dir)
         
         return self
 
     def predict_proba(self, X):
         qcircuit = self._get_circuit()
-        raw_predictions = np.array([qcircuit(x, self.weights) for x in X])
-        return np.array([self._softmax(p) for p in raw_predictions])
+        quantum_out = np.array([qcircuit(x, self.weights) for x in X])
+        readout_params = self.readout_head.get_params()
+        logits = np.array([self.readout_head.forward(qo, *readout_params) for qo in quantum_out])
+        return np.array([self._softmax(l) for l in logits])
 
     def predict(self, X):
         return np.argmax(self.predict_proba(X), axis=1)
