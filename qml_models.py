@@ -28,7 +28,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout."""
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False, 
                  checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='weighted_f1',
+                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, patience=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -375,7 +375,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
     """Data Re-uploading Multiclass VQC for pre-processed, dense data with classical readout."""
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='weighted_f1',
+                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, patience=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -725,7 +725,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     """Conditional Multiclass QVC that expects pre-processed tuple input with classical readout."""
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='weighted_f1',
+                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, patience=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -1099,7 +1099,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
     """Data Re-uploading Conditional Multiclass QVC with classical readout."""
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='weighted_f1',
+                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, patience=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
