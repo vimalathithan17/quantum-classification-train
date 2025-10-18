@@ -183,9 +183,14 @@ for data_type in data_types:
             n_classes=n_classes, 
             verbose=args.verbose,
             checkpoint_dir=checkpoint_dir,
+            checkpoint_fallback_dir=args.checkpoint_fallback_dir,
             checkpoint_frequency=args.checkpoint_frequency,
             keep_last_n=args.keep_last_n,
-            max_training_time=args.max_training_time
+            max_training_time=args.max_training_time,
+            validation_frequency=args.validation_frequency,
+            use_wandb=args.use_wandb,
+            wandb_project=args.wandb_project,
+            wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}'
         ))
     ])
     # --- Generate and Save Multiclass Predictions ---

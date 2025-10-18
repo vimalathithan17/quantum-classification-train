@@ -131,7 +131,11 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, scaler_opt
         'learning_rate': params['learning_rate'], 
         'steps': params['steps'], 
         'n_classes': n_classes,
-        'verbose': args.verbose
+        'verbose': args.verbose,
+        'validation_frequency': args.validation_frequency,
+        'use_wandb': args.use_wandb,
+        'wandb_project': args.wandb_project,
+        'wandb_run_name': f'metalearner_tune_trial{trial.number}' if args.use_wandb else None
     }
     
     if params['qml_model'] == 'standard':
@@ -162,6 +166,11 @@ def main():
     parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
     parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
     parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
+    parser.add_argument('--checkpoint_fallback_dir', type=str, default=None, help="Fallback directory for checkpoints if primary is read-only")
+    parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
+    parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
+    parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
+    parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
     args = parser.parse_args()
 
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le = assemble_meta_data(args.preds_dir, args.indicator_file)
@@ -237,9 +246,14 @@ def main():
             'n_classes': n_classes,
             'verbose': args.verbose,
             'checkpoint_dir': checkpoint_dir,
+            'checkpoint_fallback_dir': args.checkpoint_fallback_dir,
             'checkpoint_frequency': args.checkpoint_frequency,
             'keep_last_n': args.keep_last_n,
-            'max_training_time': args.max_training_time
+            'max_training_time': args.max_training_time,
+            'validation_frequency': args.validation_frequency,
+            'use_wandb': args.use_wandb,
+            'wandb_project': args.wandb_project,
+            'wandb_run_name': args.wandb_run_name or 'metalearner_train'
         }
         
         if params['qml_model'] == 'standard':
