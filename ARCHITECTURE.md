@@ -331,12 +331,52 @@ python dre_standard.py \
     --keep_last_n 3                    # Keep only last 3 checkpoints
 ```
 
-**Resume Modes:**
-- `auto`: Automatically detects and loads the most recent checkpoint
-- `latest`: Loads the most recent checkpoint by step number
-- `best`: Loads the checkpoint with the best validation metric
+**Checkpoint Loading and Resume:**
 
-**Implementation:** See `utils/io_checkpoint.py` for checkpoint save/load logic.
+The system automatically detects existing checkpoints and can resume training from a saved state. When a model is initialized with a checkpoint directory that contains existing checkpoints:
+
+1. **Automatic Detection:** The system scans for `best_weights.joblib` or `checkpoint_step_*.joblib` files
+2. **State Restoration:** Loads the complete training state including:
+   - Model weights (quantum circuit and classical readout parameters)
+   - Optimizer state (momentum, velocity, iteration count)
+   - Training history (loss, metrics, best model tracking)
+   - Random number generator state
+3. **Seamless Continuation:** Training resumes exactly where it left off with no loss of optimization momentum
+
+**Resume Modes:**
+
+The checkpoint utilities support different resume strategies:
+- **`auto`**: Automatically detects and loads the most recent checkpoint (best or latest)
+- **`latest`**: Loads the most recent checkpoint by step number from periodic saves
+- **`best`**: Loads the checkpoint with the best validation metric
+
+**Loading Examples:**
+```python
+from utils.io_checkpoint import find_best_checkpoint, find_latest_checkpoint, load_checkpoint
+
+# Load best checkpoint (typically used after training completes)
+best_path = find_best_checkpoint(checkpoint_dir)
+if best_path:
+    checkpoint_data = load_checkpoint(best_path)
+    model.set_weights(checkpoint_data['weights'])
+
+# Load latest checkpoint (typically used to resume interrupted training)
+latest_path = find_latest_checkpoint(checkpoint_dir)
+if latest_path:
+    checkpoint_data = load_checkpoint(latest_path)
+    model.set_weights(checkpoint_data['weights'])
+    optimizer.set_state(checkpoint_data['optimizer_state'])
+```
+
+**Training Interruption Handling:**
+
+If training is interrupted (e.g., system crash, manual stop, time limit):
+1. The most recent checkpoint is preserved
+2. Restart training with the same checkpoint directory
+3. The system automatically loads the last checkpoint and continues
+4. No manual intervention required beyond restarting the script
+
+**Implementation:** See `utils/io_checkpoint.py` for checkpoint save/load logic and `qml_models.py` for model-level integration.
 
 ### 2. Serializable Adam Optimizer
 

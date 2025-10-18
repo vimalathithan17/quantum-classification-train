@@ -401,6 +401,9 @@ Tune (optional):
 ```bash
 # Tune the meta-learner hyperparameters with verbose logging
 python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --n_trials 50 --verbose
+
+# Tune with W&B logging for experiment tracking
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --n_trials 50 --use_wandb --wandb_project qml_tuning --verbose
 ```
 
 Train final meta-learner (uses best parameters from tuning if available):
@@ -410,12 +413,17 @@ python metalearner.py --preds_dir final_ensemble_predictions --indicator_file in
 
 # Or with time-based training for extended optimization
 python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --max_training_time 11 --verbose
+
+# With W&B logging and checkpoint fallback for resilience
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --max_training_time 11 --use_wandb --wandb_project qml_metalearner --checkpoint_fallback_dir /tmp/metalearner_checkpoints --verbose
 ```
 
 Notes:
 - If tuning was run, the script loads parameters from `final_model_and_predictions/best_metalearner_params.json`
 - If no tuned parameters exist, the script uses sensible defaults
 - When `--max_training_time` is used, checkpoints are saved to `final_model_and_predictions/checkpoints_metalearner/`
+- Use `--checkpoint_fallback_dir` if working with read-only storage (e.g., mounted volumes)
+- Enable `--use_wandb` to track experiments and visualize training metrics in Weights & Biases
 
 Outputs (saved to `final_model_and_predictions/` by default):
 - `metalearner_model.joblib`
@@ -579,6 +587,11 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--max_training_time` (float, optional): Maximum training time in hours. If specified, training continues until this time limit is reached instead of using fixed steps. Example: `--max_training_time 11` for 11 hours.
 	- `--checkpoint_frequency` (int, default 50): Save a checkpoint every N training steps.
 	- `--keep_last_n` (int, default 3): Keep only the last N checkpoints to save disk space.
+	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only. If the primary checkpoint directory is not writable, the system will attempt to use this fallback directory and copy any existing checkpoints.
+	- `--validation_frequency` (int, default 10): Compute validation metrics every N training steps. This parameter controls how often validation is performed during training.
+	- `--use_wandb` (flag): Enable Weights & Biases logging for experiment tracking. When enabled, training metrics and validation results are automatically logged to W&B.
+	- `--wandb_project` (str, optional): W&B project name for organizing experiments.
+	- `--wandb_run_name` (str, optional): W&B run name for identifying specific training runs. If not provided, a default name is generated based on the training mode.
 	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features with automatic best model selection and optional checkpointing, and saves the model and metadata to `final_model_and_predictions/`.
 
 6) `inference.py`
@@ -649,6 +662,14 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 | `--override_steps` | int | No | `None` | - | Override the number of training steps from the tuned parameters. |
 | `--scalers` | str | No | `smr` | - | String indicating which scalers to try during tuning (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+| `--max_training_time` | float | No | `None` | - | Maximum training time in hours. Trains until time limit instead of fixed steps. |
+| `--checkpoint_frequency` | int | No | `50` | - | Save a checkpoint every N training steps. |
+| `--keep_last_n` | int | No | `3` | - | Keep only the last N checkpoints to save disk space. |
+| `--checkpoint_fallback_dir` | str | No | `None` | - | Fallback directory for checkpoints if primary is read-only. |
+| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N training steps. |
+| `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging for experiment tracking. |
+| `--wandb_project` | str | No | `None` | - | W&B project name for organizing experiments. |
+| `--wandb_run_name` | str | No | `None` | - | W&B run name for identifying specific training runs. |
 
 ### Example commands for `metalearner.py`
 
@@ -674,5 +695,40 @@ python metalearner.py \
     --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train \
     --override_steps 150 \
+    --verbose
+
+# Train with time-based training and checkpointing
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --max_training_time 11 \
+    --checkpoint_frequency 25 \
+    --verbose
+
+# Train with W&B logging and custom validation frequency
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --use_wandb \
+    --wandb_project qml_metalearner \
+    --wandb_run_name final_ensemble_v1 \
+    --validation_frequency 5 \
+    --verbose
+
+# Complete example with all advanced features
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --max_training_time 8 \
+    --checkpoint_frequency 20 \
+    --keep_last_n 5 \
+    --checkpoint_fallback_dir /tmp/metalearner_checkpoints \
+    --validation_frequency 5 \
+    --use_wandb \
+    --wandb_project qml_experiments \
+    --wandb_run_name metalearner_long_run \
     --verbose
 ```
