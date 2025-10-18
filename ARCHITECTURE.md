@@ -5,6 +5,9 @@ This document provides a detailed breakdown of the architectural decisions, quan
 ## Table of Contents
 - [End-to-End Pipeline Workflow](#-end-to-end-pipeline-workflow)
 - [The Quantum Models](#-the-quantum-models-a-deeper-look)
+- [Classical Readout Layer](#-classical-readout-layer-hybrid-quantum-classical-architecture)
+- [Nested Cross-Validation](#-nested-cross-validation-for-robust-hyperparameter-tuning)
+- [Advanced Training Features](#-advanced-training-features)
 - [Exploring Advanced Quantum Gates](#-exploring-advanced-quantum-gates)
 - [Classical Design Decisions](#-classical-design-decisions-the-rationale)
 
@@ -65,38 +68,413 @@ This loop leverages the quantum processor for its unique computational power whi
 
 ### **1. The Standard Workhorse (`MulticlassQuantumClassifierDR`)**
 
-This model is the foundation for the **Dimensionality Reduction Encoding (DRE)** approach. It's a standard and powerful architecture for classification tasks where the input features are already dense and information-rich.
+This model is the foundation for the **Dimensionality Reduction Encoding (DRE)** approach. It's a hybrid quantum-classical architecture that combines quantum circuit processing with a trainable classical neural network readout layer.
 
 *   **How it Works (Step-by-Step):**
     1.  **Encoding (`AngleEmbedding`):** The process begins by loading the classical data vector (e.g., the 8 principal components from PCA) into the quantum circuit. The `AngleEmbedding` layer takes this vector `[x_0, x_1, ..., x_7]` and maps it to 8 qubits. It does this by applying a rotation gate to each qubit, using the feature's value as the rotation angle (e.g., `RY(x_0)` on the first qubit, `RY(x_1)` on the second). This "encodes" the classical information into the quantum state.
-    2.  **Processing (`BasicEntanglerLayers`):** This is the trainable, "neural network" part of the model. It's a repeating block of two types of gates:
+    2.  **Processing (`BasicEntanglerLayers`):** This is the trainable, "neural network" part of the quantum model. It's a repeating block of two types of gates:
         *   **Rotation Gates (`RY`):** Each qubit is rotated by a trainable angle. These angles are the `weights` that the model learns during optimization.
         *   **Entangling Gates (`CNOT`):** Gates like `CNOT` are applied between adjacent qubits. This is the most crucial step. **Entanglement** creates non-local correlations between the qubits, allowing them to process information collectively. These layers allow the circuit to create and explore a massive, high-dimensional computational space (the Hilbert space) to find complex patterns that might be inaccessible to classical models of a similar size.
-    3.  **Measurement:** After processing, we only measure the first `n_classes` qubits. The measurement is the expectation value of the Pauli-Z operator, which gives a real number between -1 and 1. This vector of real numbers (e.g., `[-0.2, 0.9, -0.5]`) represents the model's raw, "logit-like" output.
-    4.  **Softmax Activation:** The raw output is not a probability distribution. The classical softmax function is applied as a final post-processing step to convert these raw values into probabilities that sum to 1 (e.g., `[0.15, 0.70, 0.15]`), which can then be used to make the final classification.
+    3.  **Measurement:** After processing, we measure **all qubits** (not just the first `n_classes`). The measurement is the expectation value of the Pauli-Z operator for each qubit, which gives a real number between -1 and 1. This vector of real numbers represents the quantum circuit's raw output.
+    4.  **Classical Readout Layer:** This is the hybrid component that processes quantum measurements through a trainable classical neural network:
+        *   **Hidden Layer:** The quantum measurements are fed into a hidden layer with configurable size (default: 16 neurons). The transformation is: `hidden = activation(W1 * quantum_output + b1)`, where `W1` and `b1` are trainable weights and biases.
+        *   **Activation Function:** The hidden layer uses a configurable activation function (default: tanh, but can also use relu or linear).
+        *   **Output Layer:** The hidden layer output is then transformed to class logits: `logits = W2 * hidden + b2`, where `W2` and `b2` are additional trainable parameters.
+    5.  **Softmax Activation:** The classical softmax function is applied as a final post-processing step to convert the logits into probabilities that sum to 1 (e.g., `[0.15, 0.70, 0.15]`), which can then be used to make the final classification.
 
-*   **Architectural Rationale:** This architecture is a well-established standard for VQCs. The use of more qubits than classes is a deliberate choice to create "workspace" qubits. These extra qubits participate in the entanglement and processing, allowing for more complex intermediate calculations before the final result is extracted from the first few qubits. This increases the model's **capacity** (its ability to learn complex functions).
+*   **Architectural Rationale:** This hybrid architecture provides several advantages:
+    * **Enhanced Expressivity:** The classical readout layer can learn complex non-linear transformations of the quantum measurements, improving the model's ability to represent complex decision boundaries.
+    * **Joint Optimization:** All parameters (quantum circuit weights, classical layer weights and biases) are jointly trained using gradient descent, allowing the quantum and classical components to co-adapt.
+    * **Flexibility:** Measuring all qubits (rather than just `n_classes` qubits) provides more information to the classical layer, enabling it to extract richer features from the quantum state.
+    * **Improved Performance:** This architecture typically achieves better classification accuracy compared to direct softmax on quantum measurements, especially for complex multi-class problems.
 
 ### **2. The High-Capacity Model (`MulticlassQuantumClassifierDataReuploadingDR`)**
 
+This model extends the standard architecture with data re-uploading while maintaining the same hybrid quantum-classical readout layer.
+
 *   **How it Works (The Key Difference):** This model modifies the standard architecture by re-inserting the input data between each processing layer. Instead of one encoding at the beginning, there are multiple "data re-uploading" steps. Each layer consists of: `AngleEmbedding` -> `BasicEntanglerLayers`.
+*   **Classical Readout:** Uses the same trainable classical neural network layer as the standard model to process quantum measurements.
 *   **Architectural Rationale:** We chose this architecture to test the hypothesis that some data types might have patterns that are too complex for the standard VQC. Data re-uploading dramatically increases the model's **expressivity** (its ability to represent complex functions). It has been shown that this technique effectively turns the circuit into a quantum version of a Fourier series, allowing it to approximate much more complex functions. The trade-off is a higher number of parameters and a greater risk of overfitting, making it suitable for situations where we suspect the decision boundary is highly non-linear.
 
 ### **3. The Missing Data Specialist (`ConditionalMulticlassQuantumClassifierFS`)**
 
-This model is the foundation for the **Conditional Feature Encoding (CFE)** approach. Its innovation lies entirely in the encoding step, which is designed to treat missing data as a first-class citizen.
+This model is the foundation for the **Conditional Feature Encoding (CFE)** approach. Its innovation lies in the encoding step, which treats missing data as a first-class citizen, while using the same hybrid quantum-classical architecture.
 
 *   **How it Works (Step-by-Step):**
     1.  **Dual Input:** The model receives two pieces of information for each sample: the feature vector (where `NaN`s are filled with a placeholder like 0) and a binary mask vector that indicates which features were originally missing.
     2.  **Conditional Encoding:** The encoding layer iterates through each qubit. For each qubit `i`, it checks the `i`-th element of the mask vector.
         *   If `mask[i] == 0` (the feature is present), it applies a standard rotation using the feature's value: `RY(feature[i] * np.pi, wires=i)`.
         *   If `mask[i] == 1` (the feature is missing), it applies a rotation using a separate, **trainable parameter**: `RY(weights_missing[i], wires=i)`.
-    3.  **Processing and Measurement:** The rest of the circuit (the entangling layers and measurement) is identical to the standard workhorse model.
-*   **Architectural Rationale:** The core hypothesis here is that **"missingness" is valuable information, not a problem to be fixed**. Instead of using a classical method like mean imputation (which makes an uninformed guess and can shrink variance), we let the model itself *learn* the best possible representation for a missing value. The optimizer might discover that the most effective way to represent a missing protein feature is a specific angle that places the qubit in a superposition—a state that is difficult to represent classically and might be the key to separating two classes.
+    3.  **Processing and Measurement:** The rest of the circuit (the entangling layers and measurement) is identical to the standard model, measuring all qubits.
+    4.  **Classical Readout:** Uses the trainable classical neural network layer to transform quantum measurements into class predictions.
+*   **Architectural Rationale:** The core hypothesis here is that **"missingness" is valuable information, not a problem to be fixed**. Instead of using a classical method like mean imputation (which makes an uninformed guess and can shrink variance), we let the model itself *learn* the best possible representation for a missing value. The optimizer might discover that the most effective way to represent a missing protein feature is a specific angle that places the qubit in a superposition—a state that is difficult to represent classically and might be the key to separating two classes. The classical readout layer then learns how to optimally combine these quantum representations with learned missing-value encodings.
 
 ### **4. The Ultimate Complexity Test (`ConditionalMulticlassQuantumClassifierDataReuploadingFS`)**
 
-*   **Architectural Rationale:** This model is the logical synthesis of our two experimental hypotheses. It combines the missingness-aware encoding of the CFE approach with the high-capacity data re-uploading architecture. We included this to test if the combination of these two advanced techniques could provide a performance edge on the most challenging datasets, where we suspect that both missingness and pattern complexity are high. It is the most powerful but also the most computationally expensive and data-hungry model in our arsenal.
+*   **Architectural Rationale:** This model is the logical synthesis of our two experimental hypotheses. It combines the missingness-aware encoding of the CFE approach with the high-capacity data re-uploading architecture, along with the hybrid quantum-classical readout layer. We included this to test if the combination of these three advanced techniques (conditional encoding, data re-uploading, and classical readout) could provide a performance edge on the most challenging datasets, where we suspect that both missingness and pattern complexity are high. It is the most powerful but also the most computationally expensive and data-hungry model in our arsenal.
+
+---
+
+## 🔗 Classical Readout Layer: Hybrid Quantum-Classical Architecture
+
+All quantum classifiers in this project (`MulticlassQuantumClassifierDR`, `MulticlassQuantumClassifierDataReuploadingDR`, `ConditionalMulticlassQuantumClassifierFS`, and `ConditionalMulticlassQuantumClassifierDataReuploadingFS`) now incorporate a **trainable classical neural network layer** that processes the quantum measurement outputs. This hybrid approach bridges quantum and classical machine learning.
+
+### Architecture Design
+
+The classical readout layer is a two-layer fully-connected neural network that transforms quantum measurements into final class predictions:
+
+```
+Quantum Measurements → Hidden Layer → Activation → Output Layer → Softmax → Predictions
+     (n_qubits)        (hidden_size)              (n_classes)
+```
+
+### Key Components
+
+1. **Input:** Raw quantum measurements from all qubits (expectation values of Pauli-Z operators, each in range [-1, 1])
+
+2. **Hidden Layer:**
+   - **Size:** Configurable (default: 16 neurons)
+   - **Transformation:** `hidden = activation(W1 * measurements + b1)`
+   - **Parameters:** Weight matrix `W1` (n_qubits × hidden_size) and bias vector `b1` (hidden_size)
+
+3. **Activation Function:**
+   - **Default:** `tanh` - provides smooth, bounded non-linearity
+   - **Options:** `relu` (rectified linear), `linear` (no activation)
+   - **Purpose:** Introduces non-linearity to learn complex transformations
+
+4. **Output Layer:**
+   - **Transformation:** `logits = W2 * hidden + b2`
+   - **Parameters:** Weight matrix `W2` (hidden_size × n_classes) and bias vector `b2` (n_classes)
+
+5. **Softmax:** Converts logits to probability distribution over classes
+
+### Training Procedure
+
+The classical readout parameters are **jointly optimized** with the quantum circuit parameters:
+
+- **Optimizer:** Custom serializable Adam optimizer (see `utils/optim_adam.py`)
+- **Gradient Computation:** PennyLane's autograd computes gradients through both quantum and classical components
+- **Loss Function:** Cross-entropy loss between predicted probabilities and true labels
+- **Co-adaptation:** Quantum and classical parameters adapt together, allowing the quantum circuit to generate features optimized for the classical readout
+
+### Benefits of Hybrid Architecture
+
+1. **Increased Expressivity:**
+   - The classical layer can learn complex non-linear mappings from quantum measurements
+   - Enables the model to represent more intricate decision boundaries
+
+2. **Better Information Utilization:**
+   - By measuring **all qubits** (not just n_classes), we extract maximum information from the quantum state
+   - The classical layer learns which quantum measurements are most informative for each class
+
+3. **Improved Performance:**
+   - Empirically achieves higher accuracy than direct softmax on quantum measurements
+   - Particularly effective for complex multi-class problems with subtle class distinctions
+
+4. **Flexibility:**
+   - Hidden layer size can be tuned as a hyperparameter
+   - Different activation functions can be tested for different data types
+
+### Implementation Details
+
+The classical readout is implemented in all QML models in `qml_models.py`:
+
+```python
+# Initialize classical readout weights during model construction
+self.W1 = np.array(np.random.randn(self.n_meas, hidden_size) * 0.01, requires_grad=True)
+self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
+self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
+self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
+
+# Apply during forward pass
+def _classical_readout(self, quantum_output):
+    hidden = self._activation(np.dot(quantum_output, self.W1) + self.b1)
+    logits = np.dot(hidden, self.W2) + self.b2
+    return logits
+```
+
+The classical parameters are included in the optimizer state and checkpointing system, ensuring they are properly saved and restored during training.
+
+---
+
+## 🔄 Nested Cross-Validation for Robust Hyperparameter Tuning
+
+The project implements a **nested cross-validation strategy** to ensure robust hyperparameter selection and unbiased model evaluation. This approach prevents overfitting to the validation set and provides reliable performance estimates.
+
+### The Nested CV Strategy
+
+The pipeline uses a two-level cross-validation approach:
+
+#### **Outer Level: Model Training and Evaluation**
+- **Purpose:** Generate out-of-fold (OOF) predictions for the meta-learner
+- **Implementation:** 3-fold stratified cross-validation (configurable)
+- **Process:** 
+  - Split data into 3 folds
+  - For each fold: train on 2 folds, predict on the held-out fold
+  - Produces predictions for every sample in the training set without data leakage
+
+#### **Inner Level: Hyperparameter Tuning**
+- **Purpose:** Find optimal hyperparameters for each base learner
+- **Implementation:** Optuna-based Bayesian optimization with stratified k-fold CV
+- **Process:**
+  - For each hyperparameter configuration (Optuna trial):
+    - Perform 3-fold cross-validation
+    - Average validation scores across folds
+    - Return mean score to Optuna
+  - After all trials, save best hyperparameters
+
+### Workflow Details
+
+**Step 1: Hyperparameter Tuning (`tune_models.py`)**
+```
+For each Optuna trial:
+  Sample hyperparameters (n_qubits, n_layers, scaler, etc.)
+  
+  Inner CV Loop (3 folds):
+    For each fold:
+      - Split into train/validation
+      - Build pipeline with sampled hyperparameters
+      - Train on train split
+      - Evaluate on validation split
+    
+  Return: Average validation score across 3 folds
+  
+Save: Best hyperparameters based on highest average score
+```
+
+**Step 2: Final Model Training (e.g., `dre_standard.py`, `cfe_standard.py`)**
+```
+Load best hyperparameters from tuning
+
+Outer CV Loop (3 folds for OOF predictions):
+  For each fold:
+    - Split into train/validation  
+    - Build pipeline with best hyperparameters
+    - Perform fold-specific preprocessing (e.g., feature selection for CFE)
+    - Train QML model on train split
+    - Generate predictions on validation split
+  
+Concatenate: All fold predictions → OOF predictions (no data leakage)
+
+Final Model:
+  - Train on entire training set with best hyperparameters
+  - Generate predictions on test set
+```
+
+### Benefits of Nested CV
+
+1. **Unbiased Performance Estimation:**
+   - OOF predictions are generated on data the model has never seen during training
+   - Provides realistic estimates of model generalization
+
+2. **Prevents Hyperparameter Overfitting:**
+   - Hyperparameters are selected on validation sets separate from the final evaluation
+   - Reduces risk of selecting hyperparameters that overfit to a specific data split
+
+3. **Robust to Data Variability:**
+   - Multiple folds capture different aspects of data distribution
+   - More stable hyperparameter selection compared to single train/val split
+
+4. **Meta-Learner Training:**
+   - OOF predictions from base learners enable the meta-learner to be trained on predictions generated without data leakage
+   - Critical for stacked ensemble to work properly
+
+### Implementation Notes
+
+- **Stratification:** All cross-validation splits use stratified sampling to preserve class distributions
+- **Seed Control:** Random states are set for reproducibility (default: 42, configurable via `RANDOM_STATE` environment variable)
+- **Optuna Integration:** Hyperparameter tuning uses SQLite storage for persistence and supports parallel trials
+- **Skip Options:** Both `--skip_cross_validation` and `--cv_only` flags allow flexibility in training workflows
+
+### Example: Complete Nested CV Flow for CNV Data
+
+```bash
+# Step 1: Tune hyperparameters (inner CV)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50
+
+# Step 2: Train with nested CV (outer CV for OOF, final model on full data)
+python dre_standard.py --datatypes CNV --verbose
+
+# Result: 
+# - train_oof_preds_CNV.csv (OOF predictions from nested CV)
+# - test_preds_CNV.csv (predictions on held-out test set)
+# - pipeline_CNV.joblib (final model trained on all training data)
+```
+
+This nested approach ensures that the meta-learner receives high-quality, unbiased predictions from the base learners, which is crucial for achieving optimal ensemble performance.
+
+---
+
+## 🚀 Advanced Training Features
+
+The project includes several sophisticated training features designed for production-quality quantum machine learning pipelines. These features enable robust, resumable, and well-monitored training processes.
+
+### 1. Comprehensive Checkpointing System
+
+**Purpose:** Enable training recovery, model selection, and long-running experiments.
+
+**Key Features:**
+- **Automatic Checkpointing:** Saves model state at configurable intervals (default: every 50 steps)
+- **Best Model Tracking:** Continuously tracks and saves the best model based on training loss or validation metrics
+- **State Persistence:** Saves complete training state including:
+  - Quantum circuit weights
+  - Classical readout layer parameters
+  - Optimizer state (momentum, velocity, timestep)
+  - RNG state for reproducibility
+  - Training history and metrics
+
+**Configuration:**
+```bash
+python dre_standard.py \
+    --max_training_time 11 \           # Enable time-based training
+    --checkpoint_frequency 50 \        # Checkpoint every 50 steps
+    --keep_last_n 3                    # Keep only last 3 checkpoints
+```
+
+**Resume Modes:**
+- `auto`: Automatically detects and loads the most recent checkpoint
+- `latest`: Loads the most recent checkpoint by step number
+- `best`: Loads the checkpoint with the best validation metric
+
+**Implementation:** See `utils/io_checkpoint.py` for checkpoint save/load logic.
+
+### 2. Serializable Adam Optimizer
+
+**Purpose:** Enable true checkpoint/resume functionality with complete optimizer state.
+
+**Standard Problem:** PennyLane's built-in optimizers don't support state serialization, making it impossible to resume training with momentum.
+
+**Solution:** Custom `AdamSerializable` optimizer that:
+- Maintains all Adam state variables (first moment, second moment, timestep)
+- Provides `get_state()` and `set_state()` methods for serialization
+- Compatible with PennyLane's autograd system
+- Enables seamless training resumption without losing optimization momentum
+
+**Implementation:** See `utils/optim_adam.py`
+
+**Benefits:**
+- Resume training from exact optimizer state
+- No loss of training progress when interrupted
+- Critical for long-running experiments (e.g., 11-hour training sessions)
+
+### 3. Time-Based Training
+
+**Purpose:** Train for a specified duration rather than a fixed number of steps.
+
+**Traditional Approach:** Fixed number of steps (e.g., `--steps 100`)
+- Problem: Different data types/models may require different amounts of time
+- May under-train complex models or waste time on simple ones
+
+**Time-Based Approach:** Specify maximum training time (e.g., `--max_training_time 11`)
+- Trains until time limit reached, regardless of step count
+- Automatically checkpoints periodically
+- Loads best model at end based on validation metric
+
+**Use Cases:**
+- **Resource-Limited Training:** Utilize available compute time efficiently
+- **Fair Comparison:** Give each model the same computational budget
+- **Long-Running Experiments:** Train overnight or over weekend
+
+**Example:**
+```bash
+# Train for 8 hours instead of fixed 100 steps
+python cfe_relupload.py --max_training_time 8 --checkpoint_frequency 25
+```
+
+### 4. Comprehensive Metrics Logging
+
+**Purpose:** Full observability into training progress and model performance.
+
+**Metrics Tracked:**
+- **Training Metrics:** Loss per epoch
+- **Validation Metrics (if validation split used):**
+  - Accuracy
+  - Precision (macro and weighted)
+  - Recall (macro and weighted)
+  - F1 score (macro and weighted)
+  - Specificity (macro and weighted)
+  - Confusion matrix per epoch
+
+**Outputs:**
+1. **CSV Export:** `history.csv` containing all metrics per epoch
+2. **Automatic Plots:**
+   - Loss curves (training and validation)
+   - F1 score curves (macro and weighted)
+   - Precision/recall curves
+   - PNG format, saved to model directory
+
+**Model Selection:**
+- Configurable selection metric (default: weighted F1)
+- Best model determined by validation performance, not training loss
+- Prevents overfitting to training data
+
+**Implementation:** See `utils/metrics_utils.py` for metric computation and plotting.
+
+### 5. Flexible Training Modes
+
+The training scripts support multiple operational modes:
+
+**Cross-Validation Modes:**
+- **Full Training (default):** Generates OOF predictions + trains final model
+- **`--skip_cross_validation`:** Skip CV, only train final model (faster when OOF not needed)
+- **`--cv_only`:** Only generate OOF predictions, skip final training (useful for meta-learner prep)
+
+**Hyperparameter Modes:**
+- **Use Tuned Parameters (default):** Load best parameters from `tune_models.py`
+- **`--skip_tuning`:** Ignore tuned parameters, use CLI arguments or defaults
+
+**These modes enable flexible workflows:**
+```bash
+# Generate OOF predictions for meta-learner (no final model)
+python dre_standard.py --cv_only
+
+# Quick final model training (skip CV)
+python dre_standard.py --skip_cross_validation --steps 150
+
+# Exploratory training (skip tuned params)
+python dre_standard.py --skip_tuning --n_qubits 8 --n_layers 4
+```
+
+### 6. Validation Split and Early Stopping
+
+**Purpose:** Prevent overfitting during training.
+
+**Features:**
+- **Validation Split:** Automatic stratified train/validation split (configurable via `validation_frac`)
+- **Best Model Selection:** Track best model by validation metric during training
+- **Patience (Optional):** Stop training if validation metric doesn't improve for N epochs
+
+**Configuration:**
+```python
+model = MulticlassQuantumClassifierDR(
+    validation_frac=0.1,      # Hold out 10% for validation
+    selection_metric='f1_weighted',  # Use weighted F1 for model selection
+    patience=20                # Stop if no improvement for 20 epochs (optional)
+)
+```
+
+### Integration Example
+
+These features work together seamlessly:
+
+```bash
+# Long-running training with all features enabled
+python dre_standard.py \
+    --datatypes CNV Prot \
+    --max_training_time 11 \        # Time-based training
+    --checkpoint_frequency 25 \      # Frequent checkpoints
+    --keep_last_n 5 \               # More checkpoint retention
+    --verbose                       # Detailed logging
+
+# Result:
+# - Trains for 11 hours with periodic checkpoints
+# - Tracks comprehensive metrics in history.csv
+# - Generates automatic plots
+# - Saves best model based on validation F1
+# - Can be resumed if interrupted
+```
+
+These advanced features make the quantum machine learning pipeline production-ready, enabling reliable and reproducible experiments at scale.
 
 ---
 

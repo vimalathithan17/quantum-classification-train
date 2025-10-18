@@ -25,6 +25,10 @@ All quantum classifiers now include a trainable classical neural network layer t
 - Uses a hidden layer with configurable size (default: 16 neurons) and activation (default: tanh)
 - Jointly trains quantum circuit parameters with classical weights
 - Improves model expressivity and performance
+- Configurable parameters:
+  - `hidden_size`: Number of neurons in hidden layer (default: 16)
+  - `readout_activation`: Activation function - 'tanh' (default), 'relu', or 'linear'
+  - `selection_metric`: Metric for best model selection (default: 'f1_weighted')
 
 ### Serializable Adam Optimizer
 A custom Adam optimizer with state persistence:
@@ -54,11 +58,27 @@ Enhanced hyperparameter tuning:
 - Default training steps increased to 100
 - TPE sampler with configurable seed for reproducibility
 
+### Nested Cross-Validation Strategy
+Robust hyperparameter tuning and model evaluation:
+- **Inner CV (Tuning):** 3-fold stratified cross-validation within Optuna trials to select hyperparameters
+- **Outer CV (Training):** 3-fold stratified cross-validation to generate out-of-fold predictions without data leakage
+- Prevents hyperparameter overfitting and provides unbiased performance estimates
+- OOF predictions from outer CV are used to train the meta-learner
+- Ensures proper stacked ensemble with no information leakage
+
 ### Stratified 80/20 Split
 All training scripts now use:
 - 80/20 train/test split (previously 70/30)
 - Stratified sampling to preserve class distributions
 - Optional validation split from training data
+
+### Time-Based Training
+Flexible training duration control:
+- Train for a specified time duration instead of fixed steps (e.g., `--max_training_time 11` for 11 hours)
+- Automatic periodic checkpointing during training
+- Best model selected based on validation metrics
+- Enables fair comparison across models with same computational budget
+- Particularly useful for long-running experiments and resource-constrained environments
 
 ### Dependencies
 All required packages are now specified in `requirements.txt`:
@@ -416,15 +436,15 @@ source export_env.sh
 
 ## Approach mapping — which script implements each approach
 
-This repository provides two families of base-learner designs. The mapping below shows which scripts implement Approach 1 and Approach 2 (the filenames were renamed for clarity):
+This repository provides two families of base-learner designs. All models use a hybrid quantum-classical architecture with trainable classical readout layers. The mapping below shows which scripts implement Approach 1 and Approach 2:
 
 - Approach 1 — Dimensionality Reduction Encoding (DRE)
-	- `dre_standard.py` — DRE with classical dimensionality reduction (PCA or UMAP) followed by a standard QML classifier.
-	- `dre_relupload.py` — DRE using data re-uploading QML circuits for datasets where re-uploading is beneficial.
+	- `dre_standard.py` — DRE with classical dimensionality reduction (PCA or UMAP) followed by a standard QML classifier with classical readout layer.
+	- `dre_relupload.py` — DRE using data re-uploading QML circuits with classical readout layer for datasets where re-uploading is beneficial.
 
--- Approach 2 — Conditional Feature Encoding (CFE)
-	- `cfe_standard.py` — CFE where the QML model is conditioned on a selected subset of features (standard QML circuit).
-	- `cfe_relupload.py` — CFE using data re-uploading QML circuits and fold-wise feature selection (LightGBM importance-based selection).
+- Approach 2 — Conditional Feature Encoding (CFE)
+	- `cfe_standard.py` — CFE where the QML model is conditioned on a selected subset of features (standard QML circuit) with classical readout layer.
+	- `cfe_relupload.py` — CFE using data re-uploading QML circuits with classical readout layer and fold-wise feature selection (LightGBM importance-based selection).
 
 Below are the CLI arguments for each script (if not listed, script uses defaults):
 
