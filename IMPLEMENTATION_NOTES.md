@@ -11,24 +11,21 @@
   - Resume functionality (auto/latest/best)
   - RNG state preservation
 
-### Basic Implementation (Existing Features Retained)
-The following classes maintain their existing checkpoint functionality but do not yet have classical readout heads:
+### Partial Implementation (Basic Features)
+The following classes maintain their existing checkpoint functionality:
 - `MulticlassQuantumClassifierDataReuploadingDR`
 - `ConditionalMulticlassQuantumClassifierFS`
 - `ConditionalMulticlassQuantumClassifierDataReuploadingFS`
 
-These classes have:
-- Basic checkpoint saving (periodic + best)
-- Checkpoint management (keep last N)
-- Best weight tracking
-- Time-based or step-based training
+**Why partial implementation?**
+Following the requirement for "minimal changes" to avoid breaking existing functionality, we fully implemented all new features in the most commonly used class first. This allows thorough testing and validation before extending to other variants.
 
-## Recommendation
+**Migration Plan:**
+1. Short-term: Use `MulticlassQuantumClassifierDR` for all new work requiring advanced features
+2. Medium-term: Apply same enhancements to DataReuploading variant based on usage needs
+3. Long-term: Complete implementation for Conditional variants if needed
 
-**For full feature support, use `MulticlassQuantumClassifierDR`** which includes:
-- Quantum circuit with classical readout for improved classification
-- Full checkpoint/resume capabilities
-- Comprehensive metrics logging and visualization
+Users should prefer `MulticlassQuantumClassifierDR` which provides the complete feature set.
 
 ## Completing the Enhancement
 
@@ -46,7 +43,7 @@ self.b1 = np.zeros(self.hidden_dim)
 self.W2 = np.random.randn(self.hidden_dim, self.n_classes) * 0.01
 self.b2 = np.zeros(self.n_classes)
 
-# Make trainable
+# Convert to trainable PennyLane parameters with gradient tracking
 self.W1 = np.array(self.W1, requires_grad=True)
 self.b1 = np.array(self.b1, requires_grad=True)
 self.W2 = np.array(self.W2, requires_grad=True)
@@ -105,16 +102,31 @@ Note: This requires PennyLane and other dependencies to be installed:
 pip install -r requirements.txt
 ```
 
-## Architectural Decision
+## Architectural Decision and Roadmap
 
-The current implementation follows a **minimal change approach** by:
-1. Fully implementing all features in the most commonly used class (`MulticlassQuantumClassifierDR`)
-2. Maintaining backward compatibility with existing classes
-3. Providing clear documentation and examples
-4. Offering a complete reference implementation that can be extended to other classes as needed
+The current implementation follows a **phased deployment approach**:
 
-This approach:
+### Phase 1 (Current): Foundation - COMPLETE ✓
+1. Fully implement all features in the most commonly used class (`MulticlassQuantumClassifierDR`)
+2. Create utility modules and training infrastructure
+3. Provide comprehensive documentation and testing
+4. Maintain backward compatibility with existing classes
+
+**Benefits:**
 - ✓ Minimizes risk of breaking existing code
-- ✓ Provides a working, fully-featured implementation
-- ✓ Allows gradual migration and testing
+- ✓ Provides a working, fully-featured implementation for immediate use
+- ✓ Allows thorough testing and validation
 - ✓ Documents clear upgrade path for other classes
+
+### Phase 2 (Next): Validation and Extension
+1. Gather user feedback on `MulticlassQuantumClassifierDR` implementation
+2. Validate performance improvements from classical readout heads
+3. Apply enhancements to `MulticlassQuantumClassifierDataReuploadingDR` based on demand
+4. Update conditional variants if specific use cases require them
+
+### Phase 3 (Future): Consolidation
+1. Potentially refactor common functionality into a base class mixin
+2. Standardize API across all classifier variants
+3. Deprecate unused variants based on actual usage patterns
+
+This phased approach ensures quality while minimizing technical debt.

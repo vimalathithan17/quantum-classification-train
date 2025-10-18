@@ -138,7 +138,9 @@ Results saved:
 
 ### Using Models with Classical Readout
 
-**Note**: Currently, `MulticlassQuantumClassifierDR` has full implementation of all new features. This is the recommended class for training with classical readout heads, enhanced checkpointing, and comprehensive metrics. The other classifier variants (`MulticlassQuantumClassifierDataReuploadingDR`, `ConditionalMulticlassQuantumClassifierFS`, `ConditionalMulticlassQuantumClassifierDataReuploadingFS`) retain their existing checkpoint functionality but do not yet include classical readout heads. See `IMPLEMENTATION_NOTES.md` for details on extending these features to other classes.
+**Recommended Class**: `MulticlassQuantumClassifierDR` is the primary implementation with all new features. While other classifier variants (`MulticlassQuantumClassifierDataReuploadingDR`, `ConditionalMulticlassQuantumClassifierFS`, `ConditionalMulticlassQuantumClassifierDataReuploadingFS`) retain their existing functionality, they do not yet include classical readout heads and enhanced checkpointing. 
+
+**Rationale**: Following a phased deployment approach, we fully implemented all requested features in the most commonly used class first to minimize risk and enable thorough validation. See `IMPLEMENTATION_NOTES.md` for the roadmap to extend these features to other classes based on user needs and feedback.
 
 ```python
 from qml_models import MulticlassQuantumClassifierDR
