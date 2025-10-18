@@ -512,6 +512,30 @@ python dre_standard.py \
 # - Generates automatic plots
 # - Saves best model based on validation F1
 # - Can be resumed if interrupted
+
+# Complete integration: All advanced features combined
+python dre_standard.py \
+    --datatypes CNV Prot \
+    --max_training_time 11 \              # Time-based training
+    --checkpoint_frequency 25 \            # Frequent checkpoints
+    --keep_last_n 5 \                     # More checkpoint retention
+    --checkpoint_fallback_dir /tmp/ckpt \ # Fallback for read-only storage
+    --validation_frequency 5 \            # More frequent validation
+    --use_wandb \                         # W&B experiment tracking
+    --wandb_project qml_experiments \     # W&B project name
+    --wandb_run_name dre_full_run \       # W&B run identifier
+    --verbose                             # Detailed logging
+
+# Result:
+# - Trains for 11 hours with periodic checkpoints
+# - Uses fallback directory if primary checkpoint location is read-only
+# - Validates every 5 steps for detailed monitoring
+# - Logs all metrics to Weights & Biases for visualization
+# - Tracks comprehensive metrics in history.csv
+# - Generates automatic plots locally
+# - Saves best model based on validation F1
+# - Can be resumed if interrupted with full optimizer state
+# - Provides complete experiment reproducibility and tracking
 ```
 
 These advanced features make the quantum machine learning pipeline production-ready, enabling reliable and reproducible experiments at scale.

@@ -217,12 +217,20 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
+
+# Tune with W&B logging for experiment tracking
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project qml_tuning --verbose
+
+# Tune with custom validation frequency
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --validation_frequency 5 --verbose
 ```
 
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - Studies are persisted to SQLite database (default: `./optuna_studies.db`).
 - The number of training steps for tuning defaults to 100 (configurable via `--steps`).
+- Use `--use_wandb` to log tuning trials and metrics to Weights & Biases for visualization and comparison.
+- Adjust `--validation_frequency` to control how often validation metrics are computed during each trial.
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -362,6 +370,18 @@ python cfe_relupload.py \
     --n_layers 3 \
     --steps 150 \
     --scaler r \
+    --verbose
+
+# Complete example: Train with W&B logging, checkpoint fallback, and custom validation
+python dre_standard.py \
+    --datatypes CNV Prot \
+    --max_training_time 11 \
+    --checkpoint_frequency 50 \
+    --checkpoint_fallback_dir /tmp/checkpoints_fallback \
+    --validation_frequency 5 \
+    --use_wandb \
+    --wandb_project qml_base_learners \
+    --wandb_run_name dre_standard_experiment \
     --verbose
 ```
 
@@ -624,6 +644,9 @@ Environment variables relevant to CLI behavior
 | `--steps` | int | No | `100` | - | Number of training steps for tuning. |
 | `--scalers` | str | No | `smr` | - | String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N training steps (default: 10). |
+| `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging during tuning. |
+| `--wandb_project` | str | No | `None` | - | W&B project name for organizing tuning experiments. |
 
 ### Example commands for `tune_models.py`
 
@@ -640,6 +663,9 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 # Resume tuning by adding 20 more trials to an existing study
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 20 --verbose
 
+# Tune with W&B logging and custom validation frequency
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --use_wandb --wandb_project qml_tuning --validation_frequency 5 --verbose
+
 # Use with read-only database (automatically copies to writable location)
 export OPTUNA_DB_PATH=/path/to/readonly/optuna_studies.db
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50
@@ -650,6 +676,8 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 - **Interruption Handling**: Press Ctrl+C during tuning to gracefully stop after the current trial completes. Press Ctrl+C again to force exit (may lose current trial). The script will save all completed trials even if interrupted.
 - **Trial Counting**: Use `--total_trials` to specify a target number of trials. If the study already has some trials, it will calculate and run only the remaining trials needed. Use `--n_trials` to add a specific number of new trials to an existing study.
 - **Custom Study Names**: Use `--study_name` to organize multiple tuning experiments or to resume a specific study by name.
+- **W&B Integration**: Use `--use_wandb` to log all tuning trials and metrics to Weights & Biases for easy comparison and visualization.
+- **Validation Frequency**: Adjust `--validation_frequency` to control validation overhead during tuning trials.
 
 ### Command-line arguments for `metalearner.py`
 
