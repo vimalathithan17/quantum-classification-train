@@ -5,8 +5,6 @@ import optuna
 import argparse
 import os
 import json
-from optuna.storages import JournalStorage
-from optuna.storages.journal import JournalFileBackend
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import SimpleImputer
@@ -29,7 +27,7 @@ from qml_models import (
 # Directories configurable via environment
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
 TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
-TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
+OPTUNA_DB_PATH = os.environ.get('OPTUNA_DB_PATH', './optuna_studies.db')
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
 
 
@@ -180,7 +178,7 @@ def main():
     parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
     parser.add_argument('--min_layers', type=int, default=2, help="Minimum number of layers for tuning.")
     parser.add_argument('--max_layers', type=int, default=5, help="Maximum number of layers for tuning.")
-    parser.add_argument('--steps', type=int, default=75, help="Number of training steps for tuning.")
+    parser.add_argument('--steps', type=int, default=100, help="Number of training steps for tuning.")
     parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
@@ -220,10 +218,16 @@ def main():
 
     study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
     log.info(f"Using study name: {study_name}")
-    log.info(f"Using journal file: {TUNING_JOURNAL_FILE}")
+    log.info(f"Using sqlite database: {OPTUNA_DB_PATH}")
 
-    storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
-    study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
+    storage = f"sqlite:///{OPTUNA_DB_PATH}"
+    study = optuna.create_study(
+        direction='maximize',
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=True,
+        sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE)
+    )
     
     # Add fixed 'steps' to the study's user attributes
     study.set_user_attr('steps', args.steps)

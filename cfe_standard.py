@@ -160,7 +160,7 @@ for data_type in data_types:
     y_categorical = df[LABEL_COL]
     y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=RANDOM_STATE, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
     # Convert y back to pandas Series for easier indexing with iloc
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
 

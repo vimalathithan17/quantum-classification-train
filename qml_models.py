@@ -354,11 +354,21 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X):
+        """Predict class probabilities using quantum circuit and classical readout."""
         qcircuit = self._get_circuit()
-        raw_predictions = np.array([qcircuit(x, self.weights) for x in X])
-        return np.array([self._softmax(p) for p in raw_predictions])
+        quantum_outputs = np.array([qcircuit(x, self.weights) for x in X])
+        
+        # Apply classical readout to each sample
+        logits_list = []
+        for qout in quantum_outputs:
+            logits = self._classical_readout(qout)
+            logits_list.append(logits)
+        
+        logits_array = np.array(logits_list)
+        return np.array([self._softmax(logit) for logit in logits_array])
 
     def predict(self, X):
+        """Predict class labels."""
         return np.argmax(self.predict_proba(X), axis=1)
 
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
