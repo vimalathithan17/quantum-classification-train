@@ -5,6 +5,9 @@ import optuna
 import argparse
 import os
 import json
+import shutil
+import signal
+import sys
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder
 from sklearn.impute import SimpleImputer
@@ -29,6 +32,80 @@ SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
 TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
 OPTUNA_DB_PATH = os.environ.get('OPTUNA_DB_PATH', './optuna_studies.db')
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+# Global flag for interruption handling
+interrupted = False
+
+
+def handle_interruption(signum, frame):
+    """Handle interruption signals (SIGINT, SIGTERM) gracefully."""
+    global interrupted
+    if not interrupted:
+        interrupted = True
+        log.warning(f"\nReceived interruption signal ({signum}). Finishing current trial and saving progress...")
+        log.warning("Press Ctrl+C again to force exit (may lose current trial).")
+    else:
+        log.error("\nForced interruption. Exiting immediately.")
+        sys.exit(1)
+
+
+def is_db_writable(db_path):
+    """Check if a database file is writable."""
+    if not os.path.exists(db_path):
+        # If DB doesn't exist, check if parent directory is writable
+        parent_dir = os.path.dirname(db_path) or '.'
+        return os.access(parent_dir, os.W_OK)
+    return os.access(db_path, os.W_OK)
+
+
+def ensure_writable_db(db_path):
+    """
+    Ensure the database is writable. If read-only, copy it to a writable location.
+    Returns the path to the writable database.
+    """
+    if is_db_writable(db_path):
+        log.info(f"Database at {db_path} is writable.")
+        return db_path
+    
+    log.warning(f"Database at {db_path} is read-only. Copying to a writable location...")
+    
+    # Try multiple locations for writable copy
+    import tempfile
+    candidate_paths = [
+        os.path.join(os.getcwd(), 'optuna_studies_working.db'),
+        os.path.join(tempfile.gettempdir(), 'optuna_studies_working.db')
+    ]
+    
+    writable_path = None
+    for candidate in candidate_paths:
+        # Check if we can write to this location
+        if os.path.exists(candidate):
+            if is_db_writable(candidate):
+                writable_path = candidate
+                break
+        else:
+            # Check if parent directory is writable
+            parent_dir = os.path.dirname(candidate) or '.'
+            if os.access(parent_dir, os.W_OK):
+                writable_path = candidate
+                break
+    
+    if writable_path is None:
+        raise RuntimeError("Could not find a writable location for the database copy")
+    
+    # Copy the database if source exists
+    if os.path.exists(db_path):
+        try:
+            shutil.copy2(db_path, writable_path)
+            # Ensure the copy is writable (shutil.copy2 preserves permissions)
+            os.chmod(writable_path, 0o644)
+            log.info(f"Copied database to {writable_path}")
+        except (IOError, OSError) as e:
+            raise RuntimeError(f"Failed to copy database to {writable_path}: {e}")
+    else:
+        log.info(f"Source database does not exist yet. Will create new database at {writable_path}")
+    
+    return writable_path
 
 
 def safe_load_parquet(file_path):
@@ -173,7 +250,9 @@ def main():
     parser.add_argument('--approach', type=int, required=True, choices=[1, 2], help="1: Classical+QML, 2: Conditional QML")
     parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
     parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
-    parser.add_argument('--n_trials', type=int, default=9, help="Number of Optuna trials for random search")
+    parser.add_argument('--n_trials', type=int, default=9, help="Number of NEW Optuna trials to run (if study exists, these are added to existing trials)")
+    parser.add_argument('--total_trials', type=int, default=None, help="Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total.")
+    parser.add_argument('--study_name', type=str, default=None, help="Override the auto-generated study name")
     parser.add_argument('--min_qbits', type=int, default=None, help="Minimum number of qubits for tuning.")
     parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
     parser.add_argument('--min_layers', type=int, default=2, help="Minimum number of layers for tuning.")
@@ -182,6 +261,10 @@ def main():
     parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     args = parser.parse_args()
+    
+    # Setup interruption handlers
+    signal.signal(signal.SIGINT, handle_interruption)
+    signal.signal(signal.SIGTERM, handle_interruption)
 
     log.info(f"Starting hyperparameter tuning with arguments: {args}")
 
@@ -216,11 +299,19 @@ def main():
     if max_qbits <= min_qbits:
         max_qbits = min_qbits + 2
 
-    study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
-    log.info(f"Using study name: {study_name}")
-    log.info(f"Using sqlite database: {OPTUNA_DB_PATH}")
+    # Use custom study name if provided, otherwise generate one
+    if args.study_name:
+        study_name = args.study_name
+        log.info(f"Using custom study name: {study_name}")
+    else:
+        study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
+        log.info(f"Using auto-generated study name: {study_name}")
+    
+    # Ensure database is writable
+    writable_db_path = ensure_writable_db(OPTUNA_DB_PATH)
+    log.info(f"Using sqlite database: {writable_db_path}")
 
-    storage = f"sqlite:///{OPTUNA_DB_PATH}"
+    storage = f"sqlite:///{writable_db_path}"
     study = optuna.create_study(
         direction='maximize',
         study_name=study_name,
@@ -231,20 +322,66 @@ def main():
     
     # Add fixed 'steps' to the study's user attributes
     study.set_user_attr('steps', args.steps)
-
-    study.optimize(lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits, scaler_options), n_trials=args.n_trials)
+    
+    # Calculate number of trials to run
+    existing_trials = len(study.trials)
+    log.info(f"Study '{study_name}' has {existing_trials} existing trial(s)")
+    
+    if args.total_trials is not None:
+        # Calculate remaining trials needed to reach total_trials
+        n_trials_to_run = max(0, args.total_trials - existing_trials)
+        if n_trials_to_run == 0:
+            log.info(f"Target of {args.total_trials} total trials already reached. No new trials will be run.")
+        else:
+            log.info(f"Target: {args.total_trials} total trials. Running {n_trials_to_run} more trial(s).")
+    else:
+        # Use n_trials as number of NEW trials to run
+        n_trials_to_run = args.n_trials
+        log.info(f"Running {n_trials_to_run} new trial(s) (current total: {existing_trials})")
+    
+    if n_trials_to_run > 0:
+        # Create a callback to check for interruption
+        def interruption_callback(study, trial):
+            if interrupted:
+                log.warning("Interruption detected. Stopping optimization after this trial.")
+                study.stop()
+        
+        try:
+            study.optimize(
+                lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits, scaler_options),
+                n_trials=n_trials_to_run,
+                callbacks=[interruption_callback]
+            )
+        except KeyboardInterrupt:
+            log.warning("\nOptimization interrupted by user.")
+        
+        final_trial_count = len(study.trials)
+        log.info(f"Optimization complete. Study now has {final_trial_count} total trial(s).")
+    else:
+        log.info("No trials to run. Retrieving existing best parameters.")
 
     log.info("--- Hyperparameter Tuning Complete ---")
-    log.info(f"Best hyperparameters found: {study.best_params}")
     
-    best_params = study.best_params
-    best_params['steps'] = args.steps
+    # Check if we have any completed trials
+    if len(study.trials) == 0:
+        log.error("No trials have been completed. Cannot save best parameters.")
+        return
     
-    os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
-    params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')
-    with open(params_file, 'w') as f:
-        json.dump(best_params, f, indent=4)
-    log.info(f"Saved best parameters to '{params_file}'")
+    try:
+        log.info(f"Best hyperparameters found: {study.best_params}")
+        log.info(f"Best value: {study.best_value:.4f}")
+        
+        best_params = study.best_params.copy()
+        best_params['steps'] = args.steps
+        
+        os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
+        params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')
+        with open(params_file, 'w') as f:
+            json.dump(best_params, f, indent=4)
+        log.info(f"Saved best parameters to '{params_file}'")
+    except ValueError as e:
+        log.error(f"Could not retrieve best parameters: {e}")
+        log.info("This may happen if no trials completed successfully.")
 
 if __name__ == "__main__":
     main()
