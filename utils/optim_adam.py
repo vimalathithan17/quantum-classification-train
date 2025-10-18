@@ -3,6 +3,7 @@ Serializable Adam optimizer compatible with PennyLane numpy.
 This optimizer can save and restore its state for checkpoint resumption.
 """
 from pennylane import numpy as np
+import autograd.numpy as anp
 
 
 class SerializableAdam:
@@ -41,15 +42,15 @@ class SerializableAdam:
         """
         self.t += 1
         
-        # Compute gradient and cost
-        grad_and_cost = np.autograd.grad_and_value(cost_fn)
-        grads = grad_and_cost(*params)
+        # Compute gradient and cost using autograd
+        from autograd import grad, value_and_grad
+        grads_fn = grad(cost_fn, argnum=list(range(len(params))))
         
-        # grads is a tuple of (gradient_tuple, cost_value)
-        if isinstance(grads, tuple) and len(grads) == 2:
-            param_grads, cost_value = grads
-        else:
-            raise ValueError("grad_and_cost should return (gradients, cost)")
+        # Compute gradients for all parameters
+        param_grads = grads_fn(*params)
+        
+        # Compute cost value
+        cost_value = cost_fn(*params)
         
         # Initialize moments on first step
         if self.m is None:

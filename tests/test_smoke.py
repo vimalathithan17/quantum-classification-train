@@ -4,7 +4,7 @@ Tests construction, training for a few steps, and checkpoint creation.
 """
 import os
 import sys
-import numpy as np
+from pennylane import numpy as np  # Use pennylane numpy for requires_grad support
 import tempfile
 import shutil
 
