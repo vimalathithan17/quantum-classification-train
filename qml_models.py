@@ -12,8 +12,8 @@ from logging_utils import log
 
 # Import custom utilities
 from utils.optim_adam import SerializableAdam
-from utils.io_checkpoint import save_checkpoint, load_checkpoint
-from utils.metrics import compute_epoch_metrics, save_epoch_history, save_metrics_plots
+from utils.io_checkpoint import save_checkpoint, load_checkpoint, save_epoch_history
+from utils.metrics import compute_epoch_metrics, save_metrics_plots
 
 
 # --- Classical Readout Head ---

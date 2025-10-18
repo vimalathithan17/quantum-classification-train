@@ -3,6 +3,7 @@ Serializable Adam optimizer wrapper compatible with PennyLane numpy arrays.
 Supports step_and_cost(cost_fn, *params) and get_state()/set_state() for persistence.
 """
 import pennylane.numpy as np
+from autograd import grad as autograd_grad
 from typing import Callable, Tuple, Dict, Any
 
 
@@ -60,7 +61,7 @@ class SerializableAdam:
             
         # Compute loss and gradients
         loss = cost_fn(*params)
-        grads = tuple(np.grad(cost_fn, argnum=i)(*params) for i in range(len(params)))
+        grads = tuple(autograd_grad(cost_fn, argnum=i)(*params) for i in range(len(params)))
         
         # Increment time step
         self.t += 1
