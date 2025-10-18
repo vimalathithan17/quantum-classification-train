@@ -51,6 +51,13 @@ venv.bak/
 *.json.log
 *.log
 
+# Checkpoints and training outputs
+checkpoints*/
+training_output/
+nested_cv_results/
+optuna_studies.db
+*.png
+
 # Project-specific output directories (uncomment if you want to exclude)
 # final_processed_datasets/
 # tuning_results/
