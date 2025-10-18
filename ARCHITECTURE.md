@@ -2,6 +2,12 @@
 
 This document provides a detailed breakdown of the architectural decisions, quantum models, and classical machine learning strategies used in this project.
 
+## Table of Contents
+- [End-to-End Pipeline Workflow](#-end-to-end-pipeline-workflow)
+- [The Quantum Models](#-the-quantum-models-a-deeper-look)
+- [Exploring Advanced Quantum Gates](#-exploring-advanced-quantum-gates)
+- [Classical Design Decisions](#-classical-design-decisions-the-rationale)
+
 ---
 
 ## 📜 End-to-End Pipeline Workflow

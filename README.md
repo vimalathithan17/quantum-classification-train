@@ -2,6 +2,20 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## Table of Contents
+- [New Features](#-new-features)
+- [Directory Layout](#directory-layout-recommended)
+- [Environment Variables](#important-configure-source_dir-and-other-dirs-via-environment-variables)
+- [Full Workflow](#full-workflow-commands)
+  - [1. Create Master Label Encoder](#1-create-the-master-label-encoder-one-time)
+  - [2. Hyperparameter Tuning](#2-hyperparameter-tuning-optuna)
+  - [3. Train Base Learners](#3-train-base-learners-final-training-using-tuned-params)
+  - [4. Curate Predictions](#4-curate-the-best-of-predictions-for-the-meta-learner)
+  - [5. Meta-Learner Training](#5-tune-and-train-the-meta-learner)
+  - [6. Inference](#6-prepare-deployment-directory-and-run-inference-on-a-new-patient)
+- [Approach Mapping](#approach-mapping--which-script-implements-each-approach)
+- [Notes and Recommendations](#notes-and-recommendations)
+
 ## ✨ New Features
 
 This repository now includes several advanced features for robust quantum machine learning:
