@@ -218,9 +218,14 @@ for data_type in data_types:
                 n_qubits=n_qubits, n_layers=config['n_layers'], 
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
                 checkpoint_dir=checkpoint_dir,
+                checkpoint_fallback_dir=args.checkpoint_fallback_dir,
                 checkpoint_frequency=args.checkpoint_frequency,
                 keep_last_n=args.keep_last_n,
-                max_training_time=args.max_training_time
+                max_training_time=args.max_training_time,
+                validation_frequency=args.validation_frequency,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_fold{fold_idx}'
             )
             model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
             val_preds = model.predict_proba((X_val_scaled, is_missing_val))
@@ -269,13 +274,18 @@ for data_type in data_types:
     
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
     final_model = ConditionalMulticlassQuantumClassifierFS(
-        n_qubits=n_qubits, n_layers=config['n_layers'], 
-        steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_frequency=args.checkpoint_frequency,
-        keep_last_n=args.keep_last_n,
-        max_training_time=args.max_training_time
-    )
+                n_qubits=n_qubits, n_layers=config['n_layers'], 
+                steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_fallback_dir=args.checkpoint_fallback_dir,
+                checkpoint_frequency=args.checkpoint_frequency,
+                keep_last_n=args.keep_last_n,
+                max_training_time=args.max_training_time,
+                validation_frequency=args.validation_frequency,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_fold{fold_idx}'
+            )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
     # Log best weights step if available

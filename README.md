@@ -80,6 +80,46 @@ Flexible training duration control:
 - Enables fair comparison across models with same computational budget
 - Particularly useful for long-running experiments and resource-constrained environments
 
+### Checkpoint Fallback Directory
+
+The system now includes intelligent checkpoint directory management:
+- **Auto-detection of read-only directories:** If the primary checkpoint directory is not writable (e.g., mounted as read-only), the system automatically detects this condition.
+- **Fallback directory support:** When a read-only directory is detected, checkpoints are saved to a configurable fallback directory via `--checkpoint_fallback_dir`.
+- **Automatic checkpoint migration:** Existing checkpoints from the read-only directory are automatically copied to the fallback location.
+- **Clear warning messages:** The system provides clear warnings when checkpoint directories are not writable and explains fallback behavior.
+
+This feature is particularly useful when working with shared or mounted storage that may have read-only restrictions.
+
+### Configurable Validation Frequency
+
+Training scripts now support `--validation_frequency` (default: 10) to control how often validation metrics are computed during training. This allows you to:
+- Reduce validation overhead for large datasets by validating less frequently
+- Increase validation frequency for fine-grained monitoring of training progress
+- Balance between training speed and observability
+
+### Weights & Biases Integration
+
+All training scripts now support optional Weights & Biases (W&B) integration for experiment tracking:
+- **Deferred import:** W&B is only imported if `--use_wandb` is enabled, avoiding unnecessary dependencies
+- **Automatic metric logging:** When enabled, validation metrics are automatically logged to W&B during training
+- **Organized experiments:** Use `--wandb_project` and `--wandb_run_name` to organize experiments in your W&B workspace
+- **No code changes required:** Simply add the CLI flags to enable W&B logging
+
+Example usage:
+```bash
+# Enable W&B logging with custom project and run name
+python dre_standard.py --use_wandb --wandb_project my_qml_project --wandb_run_name experiment_001
+
+# Use default run names (auto-generated based on script and data type)
+python cfe_relupload.py --use_wandb --wandb_project my_qml_project
+
+# Combine with other features
+python tune_models.py --datatype CNV --approach 1 --qml_model standard \
+    --use_wandb --wandb_project qml_tuning --validation_frequency 5
+```
+
+Note: To use W&B, install with `pip install wandb` and authenticate with `wandb login`.
+
 ### Dependencies
 All required packages are now specified in `requirements.txt`:
 ```bash
@@ -244,6 +284,14 @@ All base learner training scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_s
 - `--max_training_time` (float): maximum training time in hours. When specified, training continues until this time limit is reached instead of using a fixed number of steps. This enables "smart steps" training where the model trains for a specified duration rather than a fixed number of epochs.
 - `--checkpoint_frequency` (int, default 50): save a checkpoint every N training steps for recovery and analysis.
 - `--keep_last_n` (int, default 3): keep only the last N checkpoints to save disk space (older checkpoints are automatically deleted).
+- `--checkpoint_fallback_dir` (str, optional): fallback directory for checkpoints if primary is read-only. If the primary checkpoint directory is not writable, the system will attempt to use this fallback directory and copy any existing checkpoints.
+- `--validation_frequency` (int, default 10): compute validation metrics every N training steps. This parameter controls how often validation is performed during training.
+
+**Weights & Biases integration:**
+- `--use_wandb` (flag): enable Weights & Biases logging for experiment tracking. When enabled, training metrics and validation results are automatically logged to W&B.
+- `--wandb_project` (str, optional): W&B project name for organizing experiments.
+- `--wandb_run_name` (str, optional): W&B run name for identifying specific training runs. If not provided, a default name is generated based on the script and data type.
+
 
 **Logging:**
 - `--verbose` (flag): enable verbose logging for QML model training steps.

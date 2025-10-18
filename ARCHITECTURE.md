@@ -478,6 +478,198 @@ These advanced features make the quantum machine learning pipeline production-re
 
 ---
 
+## 🔧 Checkpoint Fallback and Resilience
+
+The training infrastructure includes robust checkpoint management to handle read-only storage and ensure training can proceed even in restricted environments.
+
+### Automatic Read-Only Detection
+
+The system automatically detects when checkpoint directories are read-only:
+- **Permission checks:** Before writing checkpoints, the system verifies write access to the checkpoint directory
+- **Fallback activation:** If the primary directory is read-only, the system automatically switches to a fallback directory
+- **Checkpoint migration:** Existing checkpoints from the read-only directory are copied to the fallback location
+- **Clear warnings:** Users receive informative messages about directory status and fallback behavior
+
+### Fallback Directory Configuration
+
+Users can specify a fallback directory via the `checkpoint_fallback_dir` parameter:
+```python
+model = MulticlassQuantumClassifierDR(
+    checkpoint_dir='/readonly/storage/checkpoints',
+    checkpoint_fallback_dir='/tmp/checkpoints_fallback',
+    # ... other parameters
+)
+```
+
+### Implementation Details
+
+The checkpoint fallback logic is implemented in the `_ensure_writable_checkpoint_dir()` helper function in `qml_models.py`:
+
+1. **Primary directory check:** Attempts to create and verify write access to the primary directory
+2. **Fallback attempt:** If primary is not writable and fallback is specified, creates and verifies the fallback
+3. **Checkpoint copy:** If fallback is writable, copies existing `.joblib` checkpoint files from primary to fallback
+4. **Return result:** Returns the writable directory path (primary or fallback) and a flag indicating which was used
+5. **Graceful degradation:** If no writable path exists, returns None and logs clear warnings (training proceeds without checkpointing)
+
+### Benefits
+
+- **Resilience:** Training can continue even when primary storage becomes read-only
+- **Flexibility:** Supports various storage configurations (NFS, read-only mounts, restricted containers)
+- **Data preservation:** Existing checkpoints are preserved and migrated automatically
+- **User-friendly:** Clear messaging guides users when checkpoint issues occur
+
+---
+
+## 📊 Weights & Biases Integration
+
+All quantum machine learning models now support optional Weights & Biases (W&B) integration for comprehensive experiment tracking and visualization.
+
+### Deferred Import Pattern
+
+W&B integration uses a deferred import pattern to avoid forcing the dependency:
+- **Optional dependency:** W&B is only imported if `use_wandb=True` is specified
+- **Graceful handling:** If W&B is not installed, a warning is logged and training proceeds normally
+- **No code bloat:** Models remain lightweight for users who don't need W&B
+
+### Initialization
+
+W&B is initialized at the start of model training via the `_initialize_wandb()` helper function:
+```python
+wandb = _initialize_wandb(
+    use_wandb=True,
+    wandb_project='my_project',
+    wandb_run_name='experiment_001',
+    config_dict={
+        'n_qubits': 8,
+        'n_layers': 3,
+        'learning_rate': 0.1,
+        # ... other hyperparameters
+    }
+)
+```
+
+### Automatic Metric Logging
+
+When W&B is enabled, validation metrics are automatically logged during training:
+- **Training metrics:** Loss and accuracy at each validation frequency step
+- **Validation metrics:** Loss, accuracy, F1 scores, precision, and recall
+- **Step tracking:** Each log entry is associated with the training step number
+- **No manual logging:** Developers don't need to add W&B logging calls manually
+
+### Implementation Pattern
+
+Logging is added at validation checkpoints in the training loop:
+```python
+# After computing validation metrics
+if wandb:
+    wandb.log({
+        'step': step,
+        'train_loss': history['train_loss'][-1],
+        'train_acc': history['train_acc'][-1],
+        'val_loss': history['val_loss'][-1],
+        'val_acc': history['val_acc'][-1],
+        'val_f1_weighted': history['val_f1_weighted'][-1],
+        # ... additional metrics
+    })
+```
+
+### Configuration in Training Scripts
+
+All training scripts support W&B via command-line arguments:
+```bash
+# Enable W&B with project and run name
+python dre_standard.py --use_wandb --wandb_project qml_experiments --wandb_run_name exp001
+
+# Auto-generated run names (includes script name and data type)
+python cfe_standard.py --datatypes CNV --use_wandb --wandb_project qml_project
+
+# Works with all training modes
+python tune_models.py --datatype CNV --approach 1 --use_wandb --wandb_project tuning
+```
+
+### Benefits
+
+- **Experiment tracking:** Centralized logging of all training runs
+- **Visualization:** Automatic plots of training curves and metrics
+- **Comparison:** Easy comparison of different hyperparameters and architectures
+- **Reproducibility:** Complete record of hyperparameters and training configuration
+- **Team collaboration:** Shared workspace for team members to view results
+
+---
+
+## ⚡ Configurable Validation Frequency
+
+The training system now supports configurable validation frequency via the `validation_frequency` parameter (default: 10).
+
+### Motivation
+
+Previously, validation metrics were computed at hard-coded intervals (every 10 steps). This approach:
+- **Wasted computation:** For large datasets, frequent validation was costly
+- **Limited flexibility:** Users couldn't adjust validation frequency based on their needs
+- **Hindered debugging:** For debugging, more frequent validation was sometimes needed
+
+### Implementation
+
+The `validation_frequency` parameter replaces all hard-coded `step % 10 == 0` checks:
+
+**Before:**
+```python
+if step % 10 == 0 or step == 0:
+    # Compute validation metrics
+```
+
+**After:**
+```python
+if step % self.validation_frequency == 0 or step == 0:
+    # Compute validation metrics
+```
+
+This applies consistently to:
+- Validation metric computation
+- Verbose logging output
+- Best model tracking
+- W&B metric logging
+
+### Use Cases
+
+1. **Large datasets:** Increase `validation_frequency` (e.g., 20 or 50) to reduce validation overhead
+2. **Debugging:** Decrease `validation_frequency` (e.g., 1 or 5) for fine-grained monitoring
+3. **Production training:** Use default (10) for balanced speed and observability
+4. **Resource-constrained:** Adjust based on available compute budget
+
+### Configuration
+
+All training scripts and tuning support the `--validation_frequency` CLI argument:
+```bash
+# Validate every 20 steps (reduce overhead)
+python dre_standard.py --validation_frequency 20
+
+# Validate every 5 steps (debugging)
+python cfe_relupload.py --validation_frequency 5 --verbose
+
+# Use in tuning
+python tune_models.py --datatype CNV --approach 1 --validation_frequency 15
+```
+
+Direct model instantiation:
+```python
+model = MulticlassQuantumClassifierDR(
+    n_qubits=8,
+    n_layers=3,
+    validation_frequency=20,  # Validate every 20 steps
+    # ... other parameters
+)
+```
+
+### Benefits
+
+- **Flexibility:** Users control the trade-off between speed and observability
+- **Performance:** Reduce validation overhead for large-scale training
+- **Debugging:** Fine-grained monitoring when needed
+- **Consistency:** Same parameter across all models and scripts
+
+---
+
 ## ⚛️ Exploring Advanced Quantum Gates
 
 The current models primarily use `RY` gates for encoding/processing and `CNOT` gates for entanglement. This is a robust and standard choice, but the world of quantum gates is vast. Here are some alternatives that could be explored to potentially enhance model performance.
