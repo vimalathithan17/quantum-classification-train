@@ -25,6 +25,10 @@ All quantum classifiers now include a trainable classical neural network layer t
 - Uses a hidden layer with configurable size (default: 16 neurons) and activation (default: tanh)
 - Jointly trains quantum circuit parameters with classical weights
 - Improves model expressivity and performance
+- Configurable parameters:
+  - `hidden_size`: Number of neurons in hidden layer (default: 16)
+  - `readout_activation`: Activation function - 'tanh' (default), 'relu', or 'linear'
+  - `selection_metric`: Metric for best model selection (default: 'f1_weighted')
 
 ### Serializable Adam Optimizer
 A custom Adam optimizer with state persistence:
