@@ -135,21 +135,30 @@ python cfe_standard.py --verbose
 python cfe_relupload.py --override_steps 100
 ```
 
-You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:
+All base learner training scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`) support the following command-line arguments:
 
+**Hyperparameter overrides:**
 - `--n_qbits` (int): override number of qubits / selected features used by the model/pipeline.
 - `--n_layers` (int): override number of ansatz layers for QML circuits.
 - `--steps` (int): override number of training steps.
 - `--override_steps` (int): override number of training steps (same as --steps, kept for backward compatibility).
 - `--scaler` (str): override scaler selection using shorthand: `s` (Standard), `m` (MinMax), `r` (Robust); full names are also accepted.
+
+**Data and workflow control:**
+- `--datatypes` (str...): space-separated list of data types to train (overrides the default `DATA_TYPES_TO_TRAIN`). Example: `--datatypes CNV Prot`
 - `--skip_tuning` (flag): skip loading tuned parameters entirely and use command-line arguments or defaults instead.
+- `--skip_cross_validation` (flag): skip cross-validation and only train final model on full training set (skips OOF prediction generation).
+- `--cv_only` (flag): perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training). Mutually exclusive with `--skip_cross_validation`.
+
+**Training duration and checkpointing:**
 - `--max_training_time` (float): maximum training time in hours. When specified, training continues until this time limit is reached instead of using a fixed number of steps. This enables "smart steps" training where the model trains for a specified duration rather than a fixed number of epochs.
 - `--checkpoint_frequency` (int, default 50): save a checkpoint every N training steps for recovery and analysis.
 - `--keep_last_n` (int, default 3): keep only the last N checkpoints to save disk space (older checkpoints are automatically deleted).
 
-**Note on checkpointing and best model selection:** All training scripts now automatically track the best model based on training loss. When `--max_training_time` is specified, checkpoints are saved periodically to `checkpoints_{datatype}/` subdirectories. The best model weights are always saved and automatically loaded at the end of training, ensuring you get the best performing model regardless of whether training ends naturally or due to time limits.
+**Logging:**
+- `--verbose` (flag): enable verbose logging for QML model training steps.
 
-You can also limit which data types are trained in a run by passing `--datatypes` followed by one or more data type names. This overrides the internal `DATA_TYPES_TO_TRAIN` list.
+**Note on checkpointing and best model selection:** All training scripts now automatically track the best model based on training loss. When `--max_training_time` is specified, checkpoints are saved periodically to `checkpoints_{datatype}/` subdirectories. The best model weights are always saved and automatically loaded at the end of training, ensuring you get the best performing model regardless of whether training ends naturally or due to time limits.
 
 Example (train only CNV and Prot):
 
@@ -177,6 +186,45 @@ python dre_standard.py --max_training_time 11 --checkpoint_frequency 50 --keep_l
 
 # Train only specific data types with time-based training
 python cfe_relupload.py --datatypes CNV Prot --max_training_time 11 --verbose
+```
+
+Example (comprehensive - combining multiple options):
+
+```bash
+# Complete example: Train specific data types with custom hyperparameters,
+# skip tuning (use CLI args), run cross-validation only (for meta-learner),
+# and enable verbose logging
+python dre_standard.py \
+    --datatypes CNV Prot GeneExpr \
+    --skip_tuning \
+    --n_qbits 10 \
+    --n_layers 4 \
+    --steps 200 \
+    --scaler s \
+    --cv_only \
+    --verbose
+
+# Complete example: Train all data types with time-based training,
+# custom checkpointing, and parameter overrides (will use tuned params if available)
+python dre_standard.py \
+    --n_qbits 12 \
+    --n_layers 5 \
+    --scaler m \
+    --max_training_time 8 \
+    --checkpoint_frequency 25 \
+    --keep_last_n 5 \
+    --verbose
+
+# Complete example: Skip cross-validation and train only final model
+# with custom parameters (useful when you already have OOF predictions)
+python cfe_relupload.py \
+    --datatypes CNV \
+    --skip_cross_validation \
+    --n_qbits 8 \
+    --n_layers 3 \
+    --steps 150 \
+    --scaler r \
+    --verbose
 ```
 
 Outputs (per data type):
