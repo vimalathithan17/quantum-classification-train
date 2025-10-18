@@ -167,7 +167,7 @@ for data_type in data_types:
     y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
     # Deterministic train/test split using the shared RANDOM_STATE
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=RANDOM_STATE, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
     scaler = get_scaler(config.get('scaler', 'MinMax'))
 
     # --- Build the appropriate pipeline using TUNED params ---

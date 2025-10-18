@@ -2,6 +2,62 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## ✨ New Features
+
+This repository now includes several advanced features for robust quantum machine learning:
+
+### Classical Readout Head
+All quantum classifiers now include a trainable classical neural network layer that processes quantum measurement outputs. This hybrid quantum-classical architecture:
+- Uses a hidden layer with configurable size (default: 16 neurons) and activation (default: tanh)
+- Jointly trains quantum circuit parameters with classical weights
+- Improves model expressivity and performance
+
+### Serializable Adam Optimizer
+A custom Adam optimizer with state persistence:
+- Full save/restore of optimizer state (momentum, velocity, timestep)
+- Enables true checkpoint/resume functionality
+- Compatible with PennyLane's autograd system
+
+### Comprehensive Checkpointing & Resume
+Robust training state management:
+- **Resume modes**: `auto`, `latest`, or `best`
+- Saves quantum weights, classical weights, optimizer state, RNG state
+- Automatic learning rate reduction when resuming without optimizer state
+- Periodic checkpoints with configurable retention policy
+
+### Metrics Logging & Visualization
+Full training observability:
+- Per-epoch metrics: accuracy, precision, recall, F1 (macro & weighted), specificity
+- Confusion matrices per epoch
+- CSV export of all metrics (`history.csv`)
+- Automatic PNG plots: loss curves, F1 scores, precision/recall
+- Configurable selection metric (default: weighted F1)
+
+### Optuna Integration with SQLite
+Enhanced hyperparameter tuning:
+- Persistent study storage in SQLite database (`optuna_studies.db`)
+- Support for distributed/parallel tuning
+- Default training steps increased to 100
+- TPE sampler with configurable seed for reproducibility
+
+### Stratified 80/20 Split
+All training scripts now use:
+- 80/20 train/test split (previously 70/30)
+- Stratified sampling to preserve class distributions
+- Optional validation split from training data
+
+### Dependencies
+All required packages are now specified in `requirements.txt`:
+```bash
+pip install -r requirements.txt
+```
+
+### Testing
+Basic smoke tests validate the new functionality:
+```bash
+python tests/test_smoke.py
+```
+
 ---
 
 ## Directory layout (recommended)
@@ -82,7 +138,7 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 75 steps)
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses default 100 steps)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
@@ -91,8 +147,8 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
-- The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
-- The number of training steps for tuning is fixed at 75.
+- Studies are persisted to SQLite database (default: `./optuna_studies.db`).
+- The number of training steps for tuning defaults to 100 (configurable via `--steps`).
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -466,7 +522,7 @@ Environment variables relevant to CLI behavior
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
 | `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
 | `--max_layers` | int | No | `5` | - | Maximum number of layers for tuning. |
-| `--steps` | int | No | `75` | - | Number of training steps for tuning. |
+| `--steps` | int | No | `100` | - | Number of training steps for tuning. |
 | `--scalers` | str | No | `smr` | - | String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 
