@@ -4,6 +4,170 @@ This repository implements a stacked ensemble that uses Quantum Machine Learning
 
 ---
 
+## 🆕 New Features (Enhanced Training)
+
+This repository now includes comprehensive improvements for robust training, tuning, and resuming:
+
+### Classical Readout Heads
+- **Small MLP heads** added to quantum circuits for improved classification
+- Classical parameters (W1, b1, W2, b2) trained jointly with quantum parameters
+- Configurable hidden layer size
+
+### Enhanced Checkpointing
+- **Dual checkpoints**: Latest and Best models saved separately
+- Checkpoints include:
+  - Model parameters (quantum + classical)
+  - Optimizer state (for seamless resume)
+  - RNG state (for reproducibility)
+  - Metadata and validation metrics
+- Automatic checkpoint management with configurable retention
+
+### Resume Training
+- `fit(resume='auto'|'latest'|'best')` support
+- Smart resume logic:
+  - `auto`: Load latest if optimizer state exists, else best
+  - `latest`: Resume from most recent checkpoint
+  - `best`: Resume from best-performing checkpoint
+- Learning rate warmup on resume with reinitialized optimizer
+
+### Comprehensive Metrics Logging
+- Per-epoch metrics tracked and saved:
+  - Accuracy, Precision (macro/weighted), Recall (macro/weighted)
+  - F1-score (macro/weighted), Per-class specificity
+  - Confusion matrix
+- CSV export of all metrics
+- Automatic PNG plots for loss and metrics visualization
+
+### Nested Cross-Validation with Optuna
+- **New script**: `scripts/optuna_nested_cv.py`
+- Outer CV for unbiased model evaluation
+- Inner CV for hyperparameter tuning
+- SQLite persistence for study history
+- TPE sampler and MedianPruner for efficient search
+- Separate budgets: SMALL_STEPS for tuning, FULL_STEPS for evaluation
+
+### Stratified Splits & Model Selection
+- Default 80/20 stratified train/test split
+- Configurable selection metric (default: weighted F1-score)
+- Internal validation support for early stopping
+
+### New Utilities
+- `utils/optim_adam.py`: Serializable Adam optimizer with state management
+- `utils/io_checkpoint.py`: Standardized checkpoint I/O functions
+- `scripts/train.py`: Standalone training script with all new features
+- `tests/test_smoke.py`: Smoke tests for functionality validation
+
+---
+
+## Installation
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies:
+- pennylane >= 0.30.0
+- scikit-learn >= 1.0.0
+- optuna >= 3.0.0
+- matplotlib >= 3.5.0
+- pandas >= 1.3.0
+- joblib >= 1.1.0
+
+---
+
+## Quick Start with New Features
+
+### Basic Training with Resume Support
+
+```bash
+# Train a quantum classifier on your data with enhanced features
+python scripts/train.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --output_dir ./my_training \
+    --n_qubits 8 \
+    --n_layers 3 \
+    --steps 100 \
+    --verbose
+
+# Resume training from the latest checkpoint
+python scripts/train.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --output_dir ./my_training \
+    --resume_mode auto \
+    --steps 200 \
+    --verbose
+```
+
+After training, you'll find:
+- `./my_training/qml_model.joblib` - Trained model
+- `./my_training/checkpoints/` - Checkpoint files
+- `./my_training/checkpoints/metrics.csv` - Training metrics
+- `./my_training/checkpoints/loss_plot.png` - Loss visualization
+- `./my_training/checkpoints/metrics_plot.png` - Metrics visualization
+
+### Nested Cross-Validation with Optuna
+
+```bash
+# Run nested CV for robust model evaluation and hyperparameter tuning
+python scripts/optuna_nested_cv.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --output_dir ./nested_cv_results \
+    --sqlite_path ./optuna_studies.db \
+    --n_outer 5 \
+    --n_inner 3 \
+    --n_trials 20 \
+    --small_steps 30 \
+    --full_steps 100 \
+    --metric f1_weighted
+```
+
+This will:
+1. Run 5-fold outer CV for evaluation
+2. For each outer fold, run 3-fold inner CV with 20 Optuna trials
+3. Use TPE sampler and MedianPruner for efficient search
+4. Save all studies to SQLite database
+5. Retrain with best hyperparameters and full training budget
+6. Report mean ± std performance across outer folds
+
+Results saved:
+- `./nested_cv_results/nested_cv_summary.csv` - Aggregate results
+- `./nested_cv_results/fold_*/` - Per-fold models and parameters
+- `./optuna_studies.db` - Optuna study history
+
+### Using Models with Classical Readout
+
+```python
+from qml_models import MulticlassQuantumClassifierDR
+import numpy as np
+
+# Create model with classical readout head
+model = MulticlassQuantumClassifierDR(
+    n_qubits=8,
+    n_layers=3,
+    n_classes=3,
+    learning_rate=0.01,
+    steps=100,
+    hidden_dim=16,  # Classical MLP hidden layer size
+    checkpoint_dir='./checkpoints',
+    checkpoint_frequency=10,
+    verbose=True
+)
+
+# Train (automatically saves checkpoints)
+model.fit(X_train, y_train)
+
+# Resume training
+model.fit(X_train, y_train, resume='auto')
+
+# Make predictions
+y_pred = model.predict(X_test)
+y_proba = model.predict_proba(X_test)
+```
+
+---
+
 ## Directory layout (recommended)
 
 ```
@@ -23,6 +187,15 @@ project_root/
 │   ├── metalearner_scaler.joblib
 │   └── best_metalearner_params.json (if tuning was run)
 ├── final_model_deployment/       # User-created directory containing final models for inference
+├── utils/                         # NEW: Utility modules
+│   ├── optim_adam.py              # Serializable Adam optimizer
+│   └── io_checkpoint.py           # Checkpoint I/O utilities
+├── scripts/                       # NEW: Standalone scripts
+│   ├── train.py                   # Basic training with resume support
+│   └── optuna_nested_cv.py        # Nested CV with Optuna
+├── tests/                         # NEW: Test suite
+│   └── test_smoke.py              # Smoke tests
+├── requirements.txt               # NEW: Python dependencies
 ├── create_master_label_encoder.py
 ├── tune_models.py
 ├── dre_standard.py                      # Approach 1: Dimensionality Reduction Encoding (standard)
