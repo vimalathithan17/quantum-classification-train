@@ -79,6 +79,22 @@ Key dependencies:
 
 ## Quick Start with New Features
 
+### Run the Example Script
+
+The easiest way to see all features in action:
+
+```bash
+pip install -r requirements.txt
+python scripts/example_usage.py
+```
+
+This will demonstrate:
+- Training with classical readout heads
+- Automatic checkpointing
+- Resume training
+- Metrics visualization
+- Making predictions
+
 ### Basic Training with Resume Support
 
 ```bash
