@@ -458,14 +458,16 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--scalers` (str, default `smr`): String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
-	- `--n_trials` (int, default 30): Number of Optuna trials to run.
+	- `--n_trials` (int, default 9): Number of NEW Optuna trials to run. If study exists, these are added to existing trials.
+	- `--total_trials` (int, optional): Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total.
+	- `--study_name` (str, optional): Override the auto-generated study name for custom experiment organization.
 	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
 	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
 	- `--min_layers` (int, default 2): Minimum number of layers for tuning.
 	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
-	- `--steps` (int, default 75): Number of training steps for tuning.
+	- `--steps` (int, default 100): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
+	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study, and writes best param JSON files to `TUNING_RESULTS_DIR`. Automatically handles read-only databases by copying to a writable location. Gracefully handles interruptions (Ctrl+C) by completing the current trial before stopping.
 	- Note: For Approach 2 (Conditional Feature Encoding) feature selection is performed using a LightGBM classifier to compute feature importances; the top-k important features (k = number of qubits) are selected per fold and for the final model. `SelectKBest` is no longer used for Approach 2.
 
 
@@ -551,7 +553,9 @@ Environment variables relevant to CLI behavior
 | `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
-| `--n_trials` | int | No | `9` | - | Number of Optuna trials. |
+| `--n_trials` | int | No | `9` | - | Number of NEW Optuna trials to run (if study exists, these are added to existing trials). |
+| `--total_trials` | int | No | `None` | - | Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total. Mutually exclusive with using `--n_trials` as absolute count. |
+| `--study_name` | str | No | `None` | - | Override the auto-generated study name. Useful for organizing multiple tuning experiments. |
 | `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
 | `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
@@ -568,7 +572,23 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 
 # Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6 --steps 75
+
+# Use custom study name and target a total of 100 trials (will run remaining trials to reach 100)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --total_trials 100 --study_name my_custom_study
+
+# Resume tuning by adding 20 more trials to an existing study
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 20 --verbose
+
+# Use with read-only database (automatically copies to writable location)
+export OPTUNA_DB_PATH=/path/to/readonly/optuna_studies.db
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50
 ```
+
+**Notes on new features:**
+- **Read-only Database Handling**: If the Optuna database is read-only (e.g., mounted from a read-only volume), `tune_models.py` will automatically detect this and copy it to a writable location (current directory or temp directory). The script will inform you where the working copy is stored.
+- **Interruption Handling**: Press Ctrl+C during tuning to gracefully stop after the current trial completes. Press Ctrl+C again to force exit (may lose current trial). The script will save all completed trials even if interrupted.
+- **Trial Counting**: Use `--total_trials` to specify a target number of trials. If the study already has some trials, it will calculate and run only the remaining trials needed. Use `--n_trials` to add a specific number of new trials to an existing study.
+- **Custom Study Names**: Use `--study_name` to organize multiple tuning experiments or to resume a specific study by name.
 
 ### Command-line arguments for `metalearner.py`
 
