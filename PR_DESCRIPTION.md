@@ -160,8 +160,10 @@ The `MulticlassQuantumClassifierDR` class serves as the reference implementation
 ## 🔍 Key Design Decisions
 
 1. **Classical Readout**: Hidden size 16 with tanh
-   - Good capacity without overfitting
-   - Tanh bounds values like quantum measurements
+   - Provides good model capacity without overfitting
+   - Hidden size = 2 × n_classes is a common heuristic (16 works well for 3-8 classes)
+   - Tanh bounds values like quantum measurements ([-1, 1])
+   - Fully configurable via `hidden_size` parameter
 
 2. **Selection Metric**: Weighted F1 score
    - Better than accuracy for imbalanced classes

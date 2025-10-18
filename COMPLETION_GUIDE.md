@@ -82,10 +82,10 @@ def _classical_readout(self, quantum_output):
 
 **Change the return statement** to measure ALL qubits (not just n_classes):
 ```python
-# OLD:
+# Before:
 return [qml.expval(qml.PauliZ(i)) for i in range(self.n_classes)]
 
-# NEW:
+# After:
 return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
 ```
 
