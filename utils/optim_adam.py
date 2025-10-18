@@ -1,5 +1,6 @@
 """Serializable Adam optimizer for PennyLane quantum machine learning."""
 from pennylane import numpy as np
+from autograd import grad as autograd_grad
 
 
 class AdamSerializable:
@@ -41,7 +42,14 @@ class AdamSerializable:
         """
         # Compute loss and gradients
         loss = cost_fn(*params)
-        grads = np.autograd.grad(cost_fn)(*params)
+        
+        # Compute gradients for all parameters
+        if len(params) == 1:
+            grads = (autograd_grad(cost_fn)(*params),)
+        else:
+            # For multiple parameters, specify argnum as list
+            grad_func = autograd_grad(cost_fn, argnum=list(range(len(params))))
+            grads = grad_func(*params)
         
         # Ensure grads is a tuple
         if not isinstance(grads, tuple):
