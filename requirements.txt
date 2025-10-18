@@ -1,0 +1,19 @@
+# Core quantum and scientific computing
+pennylane>=0.30.0
+numpy>=1.20.0
+
+# Machine learning and optimization
+scikit-learn>=1.0.0
+optuna>=3.0.0
+lightgbm>=3.0.0
+
+# Data handling and visualization
+pandas>=1.0.0
+matplotlib>=3.0.0
+seaborn>=0.11.0
+
+# Model persistence and utilities
+joblib>=1.0.0
+
+# Dimensionality reduction
+umap-learn>=0.5.0
