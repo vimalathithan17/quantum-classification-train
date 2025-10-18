@@ -563,6 +563,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.steps = steps
         self.verbose = verbose
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         self.checkpoint_frequency = checkpoint_frequency
         self.keep_last_n = keep_last_n
         self.max_training_time = max_training_time
@@ -571,12 +572,11 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.selection_metric = selection_metric
         self.resume = resume
         self.validation_frac = validation_frac
-        self.patience = patience
         self.validation_frequency = validation_frequency
+        self.patience = patience
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -974,6 +974,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.steps = steps
         self.verbose = verbose
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         self.checkpoint_frequency = checkpoint_frequency
         self.keep_last_n = keep_last_n
         self.max_training_time = max_training_time
@@ -982,12 +983,11 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.selection_metric = selection_metric
         self.resume = resume
         self.validation_frac = validation_frac
-        self.patience = patience
         self.validation_frequency = validation_frequency
+        self.patience = patience
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -1409,6 +1409,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.steps = steps
         self.verbose = verbose
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         self.checkpoint_frequency = checkpoint_frequency
         self.keep_last_n = keep_last_n
         self.max_training_time = max_training_time
@@ -1417,12 +1418,11 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.selection_metric = selection_metric
         self.resume = resume
         self.validation_frac = validation_frac
-        self.patience = patience
         self.validation_frequency = validation_frequency
+        self.patience = patience
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
