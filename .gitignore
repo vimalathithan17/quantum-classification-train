@@ -50,6 +50,7 @@ venv.bak/
 *.csv
 *.json.log
 *.log
+*.db
 
 # Project-specific output directories (uncomment if you want to exclude)
 # final_processed_datasets/
