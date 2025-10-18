@@ -20,7 +20,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def create_mock_optuna_db(db_path, study_name, n_trials):
-    """Create a mock Optuna database with a study and trials."""
+    """Create a mock Optuna database with a study and trials.
+    
+    Args:
+        db_path: Path where the database file should be created
+        study_name: Name of the study to create in the database
+        n_trials: Number of completed trials to add to the study
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
@@ -154,7 +160,12 @@ def test_total_trials_calculation():
 
 
 def test_study_name_override():
-    """Test scenario: Using custom study names."""
+    """Test scenario: Using custom study names.
+    
+    Tests the logic for generating study names with and without custom override.
+    Verifies that custom names are used when provided, and auto-generated names
+    follow the expected pattern when not provided.
+    """
     print("\n" + "=" * 70)
     print("TEST: Study Name Override")
     print("=" * 70)
@@ -181,7 +192,11 @@ def test_study_name_override():
 
 
 def run_integration_tests():
-    """Run all integration tests."""
+    """Run all integration tests.
+    
+    Returns:
+        bool: True if all tests passed, False otherwise
+    """
     print("\n" + "=" * 70)
     print("INTEGRATION TESTS FOR tune_models.py ENHANCEMENTS")
     print("=" * 70)
