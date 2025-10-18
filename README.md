@@ -2,6 +2,40 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## New Features
+
+### Classical Readout and Enhanced Training
+
+The quantum classifiers now support:
+- **Joint Classical Readout**: Optional MLP layer (measurement → hidden → logits) for improved classification
+- **Serializable Adam Optimizer**: Custom optimizer with state save/restore for checkpointing
+- **Robust Checkpointing**: Saves both latest and best checkpoints including optimizer state and RNG state
+- **Per-Epoch Metrics Logging**: Accuracy, precision, recall, F1 (macro/weighted), specificity, confusion matrix
+- **Resume Training**: Support for resuming from checkpoints ('auto', 'latest', 'best')
+- **Validation Metrics**: 80/20 stratified default split with validation set tracking
+
+### Hyperparameter Optimization with Nested CV
+
+New Optuna-based nested cross-validation:
+- **Nested CV**: Outer StratifiedKFold (n_outer=5) for evaluation, inner (n_inner=3) for tuning
+- **Optuna Integration**: TPESampler and MedianPruner for efficient hyperparameter search
+- **SQLite Storage**: Persistent study storage in `./optuna_studies.db`
+- **Selection Metric**: Validation weighted-F1 by default (configurable)
+
+### New Scripts
+
+- `scripts/train.py`: Orchestrated training with CLI args for any classifier type
+- `scripts/optuna_nested_cv.py`: Nested CV with Optuna for robust hyperparameter tuning
+
+### Dependencies
+
+Install required packages:
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies: pennylane, optuna, matplotlib, pandas, scikit-learn, joblib, lightgbm, umap-learn
+
 ---
 
 ## Directory layout (recommended)
@@ -470,3 +504,145 @@ python metalearner.py \
     --override_steps 150 \
     --verbose
 ```
+
+---
+
+## New Training Workflow (with Classical Readout and Checkpointing)
+
+### Using `scripts/train.py`
+
+Train a quantum classifier with classical readout, checkpointing, and metrics logging:
+
+```bash
+# Basic training with default 80/20 split
+python scripts/train.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --classifier standard \
+    --n_qubits 8 \
+    --n_layers 3 \
+    --steps 100 \
+    --lr 0.01 \
+    --checkpoint_dir ./checkpoints_cnv \
+    --output_dir ./output_cnv \
+    --verbose
+
+# Training with classical readout disabled
+python scripts/train.py \
+    --data_path final_processed_datasets/data_Prot_.parquet \
+    --classifier reuploading \
+    --no_classical_readout \
+    --steps 150 \
+    --verbose
+
+# Resume training from latest checkpoint
+python scripts/train.py \
+    --data_path final_processed_datasets/data_Meth_.parquet \
+    --classifier standard \
+    --resume_mode latest \
+    --checkpoint_dir ./checkpoints_meth \
+    --output_dir ./output_meth \
+    --steps 200 \
+    --verbose
+
+# Train with custom validation metric
+python scripts/train.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --classifier standard \
+    --selection_metric accuracy \
+    --checkpoint_dir ./checkpoints_cnv_acc \
+    --output_dir ./output_cnv_acc \
+    --verbose
+```
+
+**Key Arguments:**
+- `--data_path`: Path to input parquet file
+- `--classifier`: Classifier type ('standard', 'reuploading', 'conditional', 'conditional_reuploading')
+- `--n_qubits`: Number of qubits (default: 8)
+- `--n_layers`: Number of circuit layers (default: 3)
+- `--hidden_size`: Hidden layer size for classical readout (default: 16)
+- `--use_classical_readout` / `--no_classical_readout`: Enable/disable classical readout
+- `--lr`: Learning rate (default: 0.01)
+- `--steps`: Training steps (default: 100)
+- `--checkpoint_dir`: Directory for checkpoints
+- `--resume_mode`: Resume mode ('auto', 'latest', 'best', or None)
+- `--selection_metric`: Metric for best model selection (default: 'f1_weighted')
+- `--output_dir`: Directory for final model and results
+- `--scaler`: Preprocessing scaler ('minmax', 'standard', 'robust')
+- `--seed`: Random seed (default: 42)
+- `--verbose`: Enable verbose logging
+
+**Outputs:**
+- `{output_dir}/model.joblib`: Trained model
+- `{output_dir}/scaler.joblib`: Fitted scaler
+- `{output_dir}/imputer.joblib`: Fitted imputer
+- `{output_dir}/label_encoder.joblib`: Label encoder
+- `{output_dir}/test_predictions.csv`: Test set predictions with probabilities
+- `{checkpoint_dir}/metrics.csv`: Per-epoch metrics
+- `{checkpoint_dir}/loss_accuracy.png`: Loss and accuracy plots
+- `{checkpoint_dir}/f1_scores.png`: F1 score plots
+- `{checkpoint_dir}/confusion_matrix.png`: Confusion matrix
+- `{checkpoint_dir}/best_weights.joblib`: Best model checkpoint
+- `{checkpoint_dir}/checkpoint_step_*.joblib`: Periodic checkpoints
+
+### Using `scripts/optuna_nested_cv.py`
+
+Perform nested cross-validation with Optuna for robust hyperparameter tuning:
+
+```bash
+# Basic nested CV with 5 outer folds, 3 inner folds, 20 trials per fold
+python scripts/optuna_nested_cv.py \
+    --data_path final_processed_datasets/data_CNV_.parquet \
+    --n_outer 5 \
+    --n_inner 3 \
+    --n_trials 20 \
+    --output_dir ./nested_cv_cnv
+
+# Extended nested CV with more trials
+python scripts/optuna_nested_cv.py \
+    --data_path final_processed_datasets/data_Prot_.parquet \
+    --n_outer 5 \
+    --n_inner 3 \
+    --n_trials 50 \
+    --seed 42 \
+    --output_dir ./nested_cv_prot
+```
+
+**Key Arguments:**
+- `--data_path`: Path to input parquet file
+- `--n_outer`: Number of outer CV folds (default: 5)
+- `--n_inner`: Number of inner CV folds (default: 3)
+- `--n_trials`: Number of Optuna trials per outer fold (default: 20)
+- `--seed`: Random seed (default: 42)
+- `--output_dir`: Output directory (default: './nested_cv_results')
+
+**Outputs:**
+- `{output_dir}/nested_cv_results.csv`: Results for each outer fold
+- `{output_dir}/summary.json`: Aggregated statistics (mean/std of metrics)
+- `{output_dir}/trials_fold_{i}.csv`: Optuna trials for each fold
+- `{output_dir}/model_fold_{i}.joblib`: Trained model for each fold
+- `optuna_studies.db`: SQLite database with all Optuna studies
+
+**Configuration:**
+- Inner CV uses `SMALL_STEPS = 30` for faster hyperparameter search
+- Final model training uses `FULL_STEPS = 100` for best performance
+- Optuna uses TPESampler and MedianPruner for efficient search
+- Selection based on validation weighted-F1 score
+
+---
+
+## Testing
+
+Run smoke tests to verify basic functionality:
+
+```bash
+python tests/test_smoke.py
+```
+
+The smoke tests verify:
+- Classifier construction with/without classical readout
+- Training on small random datasets
+- Checkpoint creation and loading
+- Optimizer state serialization
+- Prediction functionality
+
+---
