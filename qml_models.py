@@ -221,16 +221,34 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         """
-    def fit(self, X, y):
-        
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
-        # Create checkpoint directory if needed
-        if self.checkpoint_dir:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        # Set default fallback dir based on checkpoint dir name
+        if self.checkpoint_dir and not self.checkpoint_fallback_dir:
+            checkpoint_name = os.path.basename(self.checkpoint_dir.rstrip('/'))
+            self.checkpoint_fallback_dir = checkpoint_name
+        
+        # Ensure checkpoint directory is writable
+        checkpoint_dir, used_fallback = _ensure_writable_checkpoint_dir(
+            self.checkpoint_dir, self.checkpoint_fallback_dir
+        )
+        
+        # Initialize W&B logging if requested
+        wandb = _initialize_wandb(
+            self.use_wandb, self.wandb_project, self.wandb_run_name,
+            config_dict={
+                'n_qubits': self.n_qubits,
+                'n_layers': self.n_layers,
+                'n_classes': self.n_classes,
+                'learning_rate': self.learning_rate,
+                'steps': self.steps,
+                'hidden_size': self.hidden_size,
+                'readout_activation': self.readout_activation
+            }
+        )
         
         # Split into train/validation if requested
         if self.validation_frac > 0:
@@ -554,6 +572,11 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.resume = resume
         self.validation_frac = validation_frac
         self.patience = patience
+        self.validation_frequency = validation_frequency
+        self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -607,16 +630,34 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
     def fit(self, X, y):
         """
-    def fit(self, X, y):
-        
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
-        # Create checkpoint directory if needed
-        if self.checkpoint_dir:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        # Set default fallback dir based on checkpoint dir name
+        if self.checkpoint_dir and not self.checkpoint_fallback_dir:
+            checkpoint_name = os.path.basename(self.checkpoint_dir.rstrip('/'))
+            self.checkpoint_fallback_dir = checkpoint_name
+        
+        # Ensure checkpoint directory is writable
+        checkpoint_dir, used_fallback = _ensure_writable_checkpoint_dir(
+            self.checkpoint_dir, self.checkpoint_fallback_dir
+        )
+        
+        # Initialize W&B logging if requested
+        wandb = _initialize_wandb(
+            self.use_wandb, self.wandb_project, self.wandb_run_name,
+            config_dict={
+                'n_qubits': self.n_qubits,
+                'n_layers': self.n_layers,
+                'n_classes': self.n_classes,
+                'learning_rate': self.learning_rate,
+                'steps': self.steps,
+                'hidden_size': self.hidden_size,
+                'readout_activation': self.readout_activation
+            }
+        )
         
         # Split into train/validation if requested
         if self.validation_frac > 0:
@@ -942,6 +983,11 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.resume = resume
         self.validation_frac = validation_frac
         self.patience = patience
+        self.validation_frequency = validation_frequency
+        self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -1000,16 +1046,34 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         """
-    def fit(self, X, y):
-        
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
-        # Create checkpoint directory if needed
-        if self.checkpoint_dir:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        # Set default fallback dir based on checkpoint dir name
+        if self.checkpoint_dir and not self.checkpoint_fallback_dir:
+            checkpoint_name = os.path.basename(self.checkpoint_dir.rstrip('/'))
+            self.checkpoint_fallback_dir = checkpoint_name
+        
+        # Ensure checkpoint directory is writable
+        checkpoint_dir, used_fallback = _ensure_writable_checkpoint_dir(
+            self.checkpoint_dir, self.checkpoint_fallback_dir
+        )
+        
+        # Initialize W&B logging if requested
+        wandb = _initialize_wandb(
+            self.use_wandb, self.wandb_project, self.wandb_run_name,
+            config_dict={
+                'n_qubits': self.n_qubits,
+                'n_layers': self.n_layers,
+                'n_classes': self.n_classes,
+                'learning_rate': self.learning_rate,
+                'steps': self.steps,
+                'hidden_size': self.hidden_size,
+                'readout_activation': self.readout_activation
+            }
+        )
         
         # Unpack the conditional input
         X_scaled, is_missing_mask = X
@@ -1354,6 +1418,11 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.resume = resume
         self.validation_frac = validation_frac
         self.patience = patience
+        self.validation_frequency = validation_frequency
+        self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -1415,16 +1484,34 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
 
     def fit(self, X, y):
         """
-    def fit(self, X, y):
-        
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
         # Store the classes seen during fit (required by sklearn)
         self.classes_ = np.unique(y)
         
-        # Create checkpoint directory if needed
-        if self.checkpoint_dir:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        # Set default fallback dir based on checkpoint dir name
+        if self.checkpoint_dir and not self.checkpoint_fallback_dir:
+            checkpoint_name = os.path.basename(self.checkpoint_dir.rstrip('/'))
+            self.checkpoint_fallback_dir = checkpoint_name
+        
+        # Ensure checkpoint directory is writable
+        checkpoint_dir, used_fallback = _ensure_writable_checkpoint_dir(
+            self.checkpoint_dir, self.checkpoint_fallback_dir
+        )
+        
+        # Initialize W&B logging if requested
+        wandb = _initialize_wandb(
+            self.use_wandb, self.wandb_project, self.wandb_run_name,
+            config_dict={
+                'n_qubits': self.n_qubits,
+                'n_layers': self.n_layers,
+                'n_classes': self.n_classes,
+                'learning_rate': self.learning_rate,
+                'steps': self.steps,
+                'hidden_size': self.hidden_size,
+                'readout_activation': self.readout_activation
+            }
+        )
         
         # Unpack the conditional input
         X_scaled, is_missing_mask = X
