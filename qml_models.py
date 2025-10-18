@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 import os
 import joblib
 import time
+import shutil
 from datetime import datetime
 
 # Import the centralized logger
@@ -22,14 +23,131 @@ from utils.metrics_utils import (
     compute_metrics, save_metrics_to_csv, plot_training_curves
 )
 
+
+def _ensure_writable_checkpoint_dir(checkpoint_dir, checkpoint_fallback_dir=None):
+    """
+    Ensure checkpoint directory is writable. If not, try fallback or warn.
+    
+    Args:
+        checkpoint_dir: Primary checkpoint directory
+        checkpoint_fallback_dir: Fallback directory if primary is read-only
+        
+    Returns:
+        tuple: (writable_dir, is_fallback) where writable_dir is the path to use
+               and is_fallback indicates if we're using the fallback
+    """
+    if checkpoint_dir is None:
+        return None, False
+        
+    # Try to create directory if it doesn't exist
+    try:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    except (OSError, PermissionError):
+        pass
+    
+    # Check if writable
+    if os.path.exists(checkpoint_dir) and os.access(checkpoint_dir, os.W_OK):
+        return checkpoint_dir, False
+    
+    # Primary is read-only or creation failed
+    if checkpoint_fallback_dir:
+        log.warning(f"Checkpoint directory '{checkpoint_dir}' is not writable. Trying fallback: '{checkpoint_fallback_dir}'")
+        
+        try:
+            os.makedirs(checkpoint_fallback_dir, exist_ok=True)
+            
+            if os.access(checkpoint_fallback_dir, os.W_OK):
+                # Copy existing checkpoints from primary to fallback
+                if os.path.exists(checkpoint_dir):
+                    for filename in os.listdir(checkpoint_dir):
+                        if filename.endswith('.joblib'):
+                            src = os.path.join(checkpoint_dir, filename)
+                            dst = os.path.join(checkpoint_fallback_dir, filename)
+                            try:
+                                shutil.copy2(src, dst)
+                                log.info(f"Copied checkpoint: {filename}")
+                            except Exception as e:
+                                log.warning(f"Could not copy checkpoint {filename}: {e}")
+                
+                log.info(f"Using fallback checkpoint directory: '{checkpoint_fallback_dir}'")
+                return checkpoint_fallback_dir, True
+        except Exception as e:
+            log.error(f"Could not create fallback directory '{checkpoint_fallback_dir}': {e}")
+    
+    # No writable path available
+    log.warning(f"No writable checkpoint directory available. Checkpointing will be disabled.")
+    log.warning(f"Primary: '{checkpoint_dir}' - not writable")
+    if checkpoint_fallback_dir:
+        log.warning(f"Fallback: '{checkpoint_fallback_dir}' - not available")
+    return None, False
+
+
+def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None):
+    """
+    Initialize Weights & Biases logging if requested.
+    
+    Args:
+        use_wandb: Whether to use wandb
+        wandb_project: W&B project name
+        wandb_run_name: W&B run name
+        config_dict: Configuration dictionary to log
+        
+    Returns:
+        wandb module if initialized, None otherwise
+    """
+    if not use_wandb:
+        return None
+    
+    try:
+        import wandb
+        wandb.init(
+            project=wandb_project,
+            name=wandb_run_name,
+            config=config_dict or {},
+            reinit=True
+        )
+        log.info(f"Initialized W&B logging: project='{wandb_project}', run='{wandb_run_name}'")
+        return wandb
+    except ImportError:
+        log.warning("wandb package not installed. Skipping W&B logging. Install with: pip install wandb")
+        return None
+    except Exception as e:
+        log.warning(f"Failed to initialize wandb: {e}")
+        return None
+
 # --- Models for Approach 1 (Classical Preprocessing + QML) ---
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
-    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout."""
+    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout.
+    
+    Args:
+        n_qubits (int): Number of qubits in the quantum circuit.
+        n_layers (int): Number of ansatz layers.
+        n_classes (int): Number of output classes.
+        learning_rate (float): Learning rate for optimizer.
+        steps (int): Number of training steps.
+        verbose (bool): Enable verbose logging.
+        checkpoint_dir (str): Primary directory for saving checkpoints.
+        checkpoint_fallback_dir (str): Fallback directory if primary is read-only.
+        checkpoint_frequency (int): Save checkpoint every N steps.
+        keep_last_n (int): Keep only last N checkpoints.
+        max_training_time (float): Maximum training time in hours (overrides steps).
+        hidden_size (int): Size of hidden layer in classical readout.
+        readout_activation (str): Activation function ('tanh', 'relu', 'linear').
+        selection_metric (str): Metric for best model selection.
+        resume (str): Resume mode ('auto', 'latest', 'best').
+        validation_frac (float): Fraction of data for validation.
+        validation_frequency (int): Compute validation metrics every N steps.
+        patience (int): Early stopping patience (steps without improvement).
+        use_wandb (bool): Enable Weights & Biases logging.
+        wandb_project (str): W&B project name.
+        wandb_run_name (str): W&B run name.
+    """
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False, 
-                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, patience=None):
+                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
+                 max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
+                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -37,6 +155,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.steps = steps
         self.verbose = verbose
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_fallback_dir = checkpoint_fallback_dir
         self.checkpoint_frequency = checkpoint_frequency
         self.keep_last_n = keep_last_n
         self.max_training_time = max_training_time
@@ -45,7 +164,11 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.selection_metric = selection_metric
         self.resume = resume
         self.validation_frac = validation_frac
+        self.validation_frequency = validation_frequency
         self.patience = patience
+        self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
         
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -98,7 +221,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         """
-        Fit the quantum classifier with classical readout head.
+    def fit(self, X, y):
         
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
@@ -144,18 +267,18 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         
         # Handle resume logic
         start_step = 0
-        if self.resume and self.checkpoint_dir:
+        if self.resume and checkpoint_dir:
             checkpoint_path = None
             
             if self.resume == 'best':
-                checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_best_checkpoint(checkpoint_dir)
             elif self.resume == 'latest':
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
             elif self.resume == 'auto':
                 # Try latest first, fall back to best
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
                 if checkpoint_path is None:
-                    checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                    checkpoint_path = find_best_checkpoint(checkpoint_dir)
             
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
@@ -220,7 +343,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             )
             
             # Compute training metrics periodically
-            if step % 10 == 0 or step == 0:
+            if step % self.validation_frequency == 0 or step == 0:
                 train_preds = self.predict(X_train)
                 train_metrics = compute_metrics(y_train, train_preds, self.n_classes)
                 
@@ -254,6 +377,19 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                     history['val_spec_macro'].append(val_metrics['specificity_macro'])
                     history['val_spec_weighted'].append(val_metrics['specificity_weighted'])
                     
+                    
+                    # Log validation metrics to W&B
+                    if wandb:
+                        wandb.log({
+                            'step': step,
+                            'train_loss': history['train_loss'][-1],
+                            'train_acc': history['train_acc'][-1],
+                            'val_loss': history['val_loss'][-1],
+                            'val_acc': history['val_acc'][-1],
+                            'val_f1_weighted': history['val_f1_weighted'][-1],
+                            'val_prec_weighted': history['val_prec_weighted'][-1],
+                            'val_rec_weighted': history['val_rec_weighted'][-1]
+                        })
                     # Check if this is the best model based on selection metric
                     current_metric = val_metrics[self.selection_metric]
                     if current_metric > self.best_metric:
@@ -268,7 +404,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                         self.best_step = step
                         patience_counter = 0
                         
-                        if self.checkpoint_dir:
+                        if checkpoint_dir:
                             checkpoint_data = {
                                 'step': step,
                                 'weights_quantum': self.best_weights,
@@ -285,12 +421,12 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                                     'date': datetime.now().isoformat()
                                 }
                             }
-                            save_best_checkpoint(self.checkpoint_dir, checkpoint_data)
+                            save_best_checkpoint(checkpoint_dir, checkpoint_data)
                     else:
                         patience_counter += 1
                 
             # Periodic checkpoint
-            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+            if checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
                 checkpoint_data = {
                     'step': step,
                     'weights_quantum': self.weights,
@@ -311,14 +447,14 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                         'n_layers': self.n_layers
                     }
                 }
-                save_periodic_checkpoint(self.checkpoint_dir, step, checkpoint_data, self.keep_last_n)
+                save_periodic_checkpoint(checkpoint_dir, step, checkpoint_data, self.keep_last_n)
                 
                 # Save history CSV and plots
                 if len(history['train_loss']) > 0:
-                    save_metrics_to_csv(history, self.checkpoint_dir)
-                    plot_training_curves(history, self.checkpoint_dir)
+                    save_metrics_to_csv(history, checkpoint_dir)
+                    plot_training_curves(history, checkpoint_dir)
 
-            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+            if self.verbose and (step % self.validation_frequency == 0 or step == self.steps - 1):
                 elapsed = time.time() - start_time
                 val_info = ""
                 if X_val is not None and len(history['val_loss']) > 0:
@@ -372,11 +508,36 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return np.argmax(self.predict_proba(X), axis=1)
 
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
-    """Data Re-uploading Multiclass VQC for pre-processed, dense data with classical readout."""
+    """Data Re-uploading Multiclass VQC for pre-processed, dense data with classical readout.
+    
+    Args:
+        n_qubits (int): Number of qubits in the quantum circuit.
+        n_layers (int): Number of ansatz layers.
+        n_classes (int): Number of output classes.
+        learning_rate (float): Learning rate for optimizer.
+        steps (int): Number of training steps.
+        verbose (bool): Enable verbose logging.
+        checkpoint_dir (str): Primary directory for saving checkpoints.
+        checkpoint_fallback_dir (str): Fallback directory if primary is read-only.
+        checkpoint_frequency (int): Save checkpoint every N steps.
+        keep_last_n (int): Keep only last N checkpoints.
+        max_training_time (float): Maximum training time in hours (overrides steps).
+        hidden_size (int): Size of hidden layer in classical readout.
+        readout_activation (str): Activation function ('tanh', 'relu', 'linear').
+        selection_metric (str): Metric for best model selection.
+        resume (str): Resume mode ('auto', 'latest', 'best').
+        validation_frac (float): Fraction of data for validation.
+        validation_frequency (int): Compute validation metrics every N steps.
+        patience (int): Early stopping patience (steps without improvement).
+        use_wandb (bool): Enable Weights & Biases logging.
+        wandb_project (str): W&B project name.
+        wandb_run_name (str): W&B run name.
+    """
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
-                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, patience=None):
+                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
+                 max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
+                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -446,7 +607,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
     def fit(self, X, y):
         """
-        Fit the quantum classifier with classical readout head.
+    def fit(self, X, y):
         
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
@@ -492,18 +653,18 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         
         # Handle resume logic
         start_step = 0
-        if self.resume and self.checkpoint_dir:
+        if self.resume and checkpoint_dir:
             checkpoint_path = None
             
             if self.resume == 'best':
-                checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_best_checkpoint(checkpoint_dir)
             elif self.resume == 'latest':
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
             elif self.resume == 'auto':
                 # Try latest first, fall back to best
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
                 if checkpoint_path is None:
-                    checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                    checkpoint_path = find_best_checkpoint(checkpoint_dir)
             
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
@@ -568,7 +729,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             )
             
             # Compute training metrics periodically
-            if step % 10 == 0 or step == 0:
+            if step % self.validation_frequency == 0 or step == 0:
                 train_preds = self.predict(X_train)
                 train_metrics = compute_metrics(y_train, train_preds, self.n_classes)
                 
@@ -602,6 +763,19 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                     history['val_spec_macro'].append(val_metrics['specificity_macro'])
                     history['val_spec_weighted'].append(val_metrics['specificity_weighted'])
                     
+                    
+                    # Log validation metrics to W&B
+                    if wandb:
+                        wandb.log({
+                            'step': step,
+                            'train_loss': history['train_loss'][-1],
+                            'train_acc': history['train_acc'][-1],
+                            'val_loss': history['val_loss'][-1],
+                            'val_acc': history['val_acc'][-1],
+                            'val_f1_weighted': history['val_f1_weighted'][-1],
+                            'val_prec_weighted': history['val_prec_weighted'][-1],
+                            'val_rec_weighted': history['val_rec_weighted'][-1]
+                        })
                     # Check if this is the best model based on selection metric
                     current_metric = val_metrics[self.selection_metric]
                     if current_metric > self.best_metric:
@@ -616,7 +790,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                         self.best_step = step
                         patience_counter = 0
                         
-                        if self.checkpoint_dir:
+                        if checkpoint_dir:
                             checkpoint_data = {
                                 'step': step,
                                 'weights_quantum': self.best_weights,
@@ -633,12 +807,12 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                                     'date': datetime.now().isoformat()
                                 }
                             }
-                            save_best_checkpoint(self.checkpoint_dir, checkpoint_data)
+                            save_best_checkpoint(checkpoint_dir, checkpoint_data)
                     else:
                         patience_counter += 1
                 
             # Periodic checkpoint
-            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+            if checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
                 checkpoint_data = {
                     'step': step,
                     'weights_quantum': self.weights,
@@ -659,14 +833,14 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                         'n_layers': self.n_layers
                     }
                 }
-                save_periodic_checkpoint(self.checkpoint_dir, step, checkpoint_data, self.keep_last_n)
+                save_periodic_checkpoint(checkpoint_dir, step, checkpoint_data, self.keep_last_n)
                 
                 # Save history CSV and plots
                 if len(history['train_loss']) > 0:
-                    save_metrics_to_csv(history, self.checkpoint_dir)
-                    plot_training_curves(history, self.checkpoint_dir)
+                    save_metrics_to_csv(history, checkpoint_dir)
+                    plot_training_curves(history, checkpoint_dir)
 
-            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+            if self.verbose and (step % self.validation_frequency == 0 or step == self.steps - 1):
                 elapsed = time.time() - start_time
                 val_info = ""
                 if X_val is not None and len(history['val_loss']) > 0:
@@ -722,11 +896,36 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 # --- Models for Approach 2 (Conditional Encoding on Selected Features) ---
 
 class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
-    """Conditional Multiclass QVC that expects pre-processed tuple input with classical readout."""
+    """Conditional Multiclass QVC that expects pre-processed tuple input with classical readout.
+    
+    Args:
+        n_qubits (int): Number of qubits in the quantum circuit.
+        n_layers (int): Number of ansatz layers.
+        n_classes (int): Number of output classes.
+        learning_rate (float): Learning rate for optimizer.
+        steps (int): Number of training steps.
+        verbose (bool): Enable verbose logging.
+        checkpoint_dir (str): Primary directory for saving checkpoints.
+        checkpoint_fallback_dir (str): Fallback directory if primary is read-only.
+        checkpoint_frequency (int): Save checkpoint every N steps.
+        keep_last_n (int): Keep only last N checkpoints.
+        max_training_time (float): Maximum training time in hours (overrides steps).
+        hidden_size (int): Size of hidden layer in classical readout.
+        readout_activation (str): Activation function ('tanh', 'relu', 'linear').
+        selection_metric (str): Metric for best model selection.
+        resume (str): Resume mode ('auto', 'latest', 'best').
+        validation_frac (float): Fraction of data for validation.
+        validation_frequency (int): Compute validation metrics every N steps.
+        patience (int): Early stopping patience (steps without improvement).
+        use_wandb (bool): Enable Weights & Biases logging.
+        wandb_project (str): W&B project name.
+        wandb_run_name (str): W&B run name.
+    """
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
-                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, patience=None):
+                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
+                 max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
+                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -801,7 +1000,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         """
-        Fit the quantum classifier with classical readout head.
+    def fit(self, X, y):
         
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
@@ -851,18 +1050,18 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         
         # Handle resume logic
         start_step = 0
-        if self.resume and self.checkpoint_dir:
+        if self.resume and checkpoint_dir:
             checkpoint_path = None
             
             if self.resume == 'best':
-                checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_best_checkpoint(checkpoint_dir)
             elif self.resume == 'latest':
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
             elif self.resume == 'auto':
                 # Try latest first, fall back to best
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
                 if checkpoint_path is None:
-                    checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                    checkpoint_path = find_best_checkpoint(checkpoint_dir)
             
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
@@ -930,7 +1129,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
             )
             
             # Compute training metrics periodically
-            if step % 10 == 0 or step == 0:
+            if step % self.validation_frequency == 0 or step == 0:
                 train_preds = self.predict((X_train_scaled, mask_train))
                 train_metrics = compute_metrics(y_train, train_preds, self.n_classes)
                 
@@ -965,6 +1164,19 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                     history['val_spec_macro'].append(val_metrics['specificity_macro'])
                     history['val_spec_weighted'].append(val_metrics['specificity_weighted'])
                     
+                    
+                    # Log validation metrics to W&B
+                    if wandb:
+                        wandb.log({
+                            'step': step,
+                            'train_loss': history['train_loss'][-1],
+                            'train_acc': history['train_acc'][-1],
+                            'val_loss': history['val_loss'][-1],
+                            'val_acc': history['val_acc'][-1],
+                            'val_f1_weighted': history['val_f1_weighted'][-1],
+                            'val_prec_weighted': history['val_prec_weighted'][-1],
+                            'val_rec_weighted': history['val_rec_weighted'][-1]
+                        })
                     # Check if this is the best model based on selection metric
                     current_metric = val_metrics[self.selection_metric]
                     if current_metric > self.best_metric:
@@ -980,7 +1192,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                         self.best_step = step
                         patience_counter = 0
                         
-                        if self.checkpoint_dir:
+                        if checkpoint_dir:
                             checkpoint_data = {
                                 'step': step,
                                 'weights_quantum': {
@@ -1000,12 +1212,12 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                                     'date': datetime.now().isoformat()
                                 }
                             }
-                            save_best_checkpoint(self.checkpoint_dir, checkpoint_data)
+                            save_best_checkpoint(checkpoint_dir, checkpoint_data)
                     else:
                         patience_counter += 1
                 
             # Periodic checkpoint
-            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+            if checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
                 checkpoint_data = {
                     'step': step,
                     'weights_quantum': {
@@ -1029,14 +1241,14 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                         'n_layers': self.n_layers
                     }
                 }
-                save_periodic_checkpoint(self.checkpoint_dir, step, checkpoint_data, self.keep_last_n)
+                save_periodic_checkpoint(checkpoint_dir, step, checkpoint_data, self.keep_last_n)
                 
                 # Save history CSV and plots
                 if len(history['train_loss']) > 0:
-                    save_metrics_to_csv(history, self.checkpoint_dir)
-                    plot_training_curves(history, self.checkpoint_dir)
+                    save_metrics_to_csv(history, checkpoint_dir)
+                    plot_training_curves(history, checkpoint_dir)
 
-            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+            if self.verbose and (step % self.validation_frequency == 0 or step == self.steps - 1):
                 elapsed = time.time() - start_time
                 val_info = ""
                 if X_val_scaled is not None and len(history['val_loss']) > 0:
@@ -1096,11 +1308,36 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return accuracy_score(y, self.predict(X))
 
 class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, ClassifierMixin):
-    """Data Re-uploading Conditional Multiclass QVC with classical readout."""
+    """Data Re-uploading Conditional Multiclass QVC with classical readout.
+    
+    Args:
+        n_qubits (int): Number of qubits in the quantum circuit.
+        n_layers (int): Number of ansatz layers.
+        n_classes (int): Number of output classes.
+        learning_rate (float): Learning rate for optimizer.
+        steps (int): Number of training steps.
+        verbose (bool): Enable verbose logging.
+        checkpoint_dir (str): Primary directory for saving checkpoints.
+        checkpoint_fallback_dir (str): Fallback directory if primary is read-only.
+        checkpoint_frequency (int): Save checkpoint every N steps.
+        keep_last_n (int): Keep only last N checkpoints.
+        max_training_time (float): Maximum training time in hours (overrides steps).
+        hidden_size (int): Size of hidden layer in classical readout.
+        readout_activation (str): Activation function ('tanh', 'relu', 'linear').
+        selection_metric (str): Metric for best model selection.
+        resume (str): Resume mode ('auto', 'latest', 'best').
+        validation_frac (float): Fraction of data for validation.
+        validation_frequency (int): Compute validation metrics every N steps.
+        patience (int): Early stopping patience (steps without improvement).
+        use_wandb (bool): Enable Weights & Biases logging.
+        wandb_project (str): W&B project name.
+        wandb_run_name (str): W&B run name.
+    """
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
-                 checkpoint_dir=None, checkpoint_frequency=10, keep_last_n=3, max_training_time=None,
-                 hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, patience=None):
+                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
+                 max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
+                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -1178,7 +1415,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
 
     def fit(self, X, y):
         """
-        Fit the quantum classifier with classical readout head.
+    def fit(self, X, y):
         
         Supports checkpointing, resume modes, validation split, and comprehensive metrics logging.
         """
@@ -1228,18 +1465,18 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         
         # Handle resume logic
         start_step = 0
-        if self.resume and self.checkpoint_dir:
+        if self.resume and checkpoint_dir:
             checkpoint_path = None
             
             if self.resume == 'best':
-                checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_best_checkpoint(checkpoint_dir)
             elif self.resume == 'latest':
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
             elif self.resume == 'auto':
                 # Try latest first, fall back to best
-                checkpoint_path = find_latest_checkpoint(self.checkpoint_dir)
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
                 if checkpoint_path is None:
-                    checkpoint_path = find_best_checkpoint(self.checkpoint_dir)
+                    checkpoint_path = find_best_checkpoint(checkpoint_dir)
             
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
@@ -1307,7 +1544,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             )
             
             # Compute training metrics periodically
-            if step % 10 == 0 or step == 0:
+            if step % self.validation_frequency == 0 or step == 0:
                 train_preds = self.predict((X_train_scaled, mask_train))
                 train_metrics = compute_metrics(y_train, train_preds, self.n_classes)
                 
@@ -1342,6 +1579,19 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                     history['val_spec_macro'].append(val_metrics['specificity_macro'])
                     history['val_spec_weighted'].append(val_metrics['specificity_weighted'])
                     
+                    
+                    # Log validation metrics to W&B
+                    if wandb:
+                        wandb.log({
+                            'step': step,
+                            'train_loss': history['train_loss'][-1],
+                            'train_acc': history['train_acc'][-1],
+                            'val_loss': history['val_loss'][-1],
+                            'val_acc': history['val_acc'][-1],
+                            'val_f1_weighted': history['val_f1_weighted'][-1],
+                            'val_prec_weighted': history['val_prec_weighted'][-1],
+                            'val_rec_weighted': history['val_rec_weighted'][-1]
+                        })
                     # Check if this is the best model based on selection metric
                     current_metric = val_metrics[self.selection_metric]
                     if current_metric > self.best_metric:
@@ -1357,7 +1607,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                         self.best_step = step
                         patience_counter = 0
                         
-                        if self.checkpoint_dir:
+                        if checkpoint_dir:
                             checkpoint_data = {
                                 'step': step,
                                 'weights_quantum': {
@@ -1377,12 +1627,12 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                                     'date': datetime.now().isoformat()
                                 }
                             }
-                            save_best_checkpoint(self.checkpoint_dir, checkpoint_data)
+                            save_best_checkpoint(checkpoint_dir, checkpoint_data)
                     else:
                         patience_counter += 1
                 
             # Periodic checkpoint
-            if self.checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+            if checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
                 checkpoint_data = {
                     'step': step,
                     'weights_quantum': {
@@ -1406,14 +1656,14 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                         'n_layers': self.n_layers
                     }
                 }
-                save_periodic_checkpoint(self.checkpoint_dir, step, checkpoint_data, self.keep_last_n)
+                save_periodic_checkpoint(checkpoint_dir, step, checkpoint_data, self.keep_last_n)
                 
                 # Save history CSV and plots
                 if len(history['train_loss']) > 0:
-                    save_metrics_to_csv(history, self.checkpoint_dir)
-                    plot_training_curves(history, self.checkpoint_dir)
+                    save_metrics_to_csv(history, checkpoint_dir)
+                    plot_training_curves(history, checkpoint_dir)
 
-            if self.verbose and (step % 10 == 0 or step == self.steps - 1):
+            if self.verbose and (step % self.validation_frequency == 0 or step == self.steps - 1):
                 elapsed = time.time() - start_time
                 val_info = ""
                 if X_val_scaled is not None and len(history['val_loss']) > 0:
