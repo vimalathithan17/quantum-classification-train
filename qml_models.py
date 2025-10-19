@@ -175,6 +175,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
         self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
         self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
+        
+        # Shape validation flag to track if we've done it once
+        self._shape_validated = False
 
         # Choose activation function once and store callable on instance for low overhead
         if self.readout_activation == 'tanh':
@@ -302,6 +305,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             )
         else:
             X_train, X_val, y_train, y_val = X, None, y, None
+        # Check for empty training set after split
+        if X_train.shape[0] == 0:
+            raise ValueError("Empty training set after split; reduce validation_frac or provide more data")
         
         # Ensure validation data is also at least 2D
         if X_val is not None:
@@ -390,6 +396,17 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 quantum_outputs = self._batched_qcircuit(X_train, w_quantum)
 
                 # vectorized classical readout using stored activation callable
+
+                # Shape validation (done once)
+                if not self._shape_validated:
+                    if self.W1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
+                    if self.W2.shape[0] != self.W1.shape[1]:
+                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
+                    if self.W2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    self._shape_validated = True
+
                 hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
                 logits_array = np.dot(hidden, w2) + b2                          # (N_train, n_classes)
 
@@ -670,6 +687,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.best_metric = -float('inf')
         self.best_step = 0
         self.checkpoint_history = []
+        
+        # Shape validation flag to track if we've done it once
+        self._shape_validated = False
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -792,6 +812,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             )
         else:
             X_train, X_val, y_train, y_val = X, None, y, None
+        # Check for empty training set after split
+        if X_train.shape[0] == 0:
+            raise ValueError("Empty training set after split; reduce validation_frac or provide more data")
         
         # Ensure validation data is also at least 2D
         if X_val is not None:
@@ -880,6 +903,17 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                 quantum_outputs = self._batched_qcircuit(X_train, w_quantum)
 
                 # vectorized classical readout using stored activation callable
+
+                # Shape validation (done once)
+                if not self._shape_validated:
+                    if self.W1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
+                    if self.W2.shape[0] != self.W1.shape[1]:
+                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
+                    if self.W2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    self._shape_validated = True
+
                 hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
                 logits_array = np.dot(hidden, w2) + b2                          # (N_train, n_classes)
 
@@ -1164,6 +1198,9 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.best_metric = -float('inf')
         self.best_step = 0
         self.checkpoint_history = []
+        
+        # Shape validation flag to track if we've done it once
+        self._shape_validated = False
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -1291,14 +1328,19 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
             X_train_scaled, mask_train, y_train = X_scaled, is_missing_mask, y
             X_val_scaled, mask_val, y_val = None, None, None
         
+
+        # Check for empty training set after split
+        if X_train_scaled.shape[0] == 0:
+            raise ValueError("Empty training set after split; reduce validation_frac or provide more data")
+        
         y_train_one_hot = np.eye(self.n_classes)[y_train]
         if y_val is not None:
             y_val_one_hot = np.eye(self.n_classes)[y_val]
         
-        qcircuit = self._get_circuit()
-        
         # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
+        # Use cached qnode for this fit session
+        qcircuit = self._qcircuit
         
         # Initialize training history
         history = {
@@ -1377,6 +1419,17 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 quantum_outputs = np.array([qcircuit(f, m, w_ansatz, w_missing) 
                                           for f, m in zip(X_train_scaled, mask_train)])
                 
+
+                # Shape validation (done once)
+                if not self._shape_validated:
+                    if self.W1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
+                    if self.W2.shape[0] != self.W1.shape[1]:
+                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
+                    if self.W2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    self._shape_validated = True
+
                 # Apply classical readout to each sample
                 logits_list = []
                 for qout in quantum_outputs:
@@ -1558,8 +1611,8 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         # Ensure inputs are batches
         X_scaled = np.atleast_2d(np.asarray(X_scaled))
         is_missing_mask = np.atleast_2d(np.asarray(is_missing_mask))
-        
-        qcircuit = self._get_circuit()
+        # Use cached qnode
+        qcircuit = self._qcircuit
         
         # compute quantum outputs for each sample
         quantum_outputs = [qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
@@ -1671,6 +1724,9 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.best_metric = -float('inf')
         self.best_step = 0
         self.checkpoint_history = []
+        
+        # Shape validation flag to track if we've done it once
+        self._shape_validated = False
 
     def _get_circuit(self):
         @qml.qnode(self.dev, interface='autograd')
@@ -1801,14 +1857,19 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             X_train_scaled, mask_train, y_train = X_scaled, is_missing_mask, y
             X_val_scaled, mask_val, y_val = None, None, None
         
+
+        # Check for empty training set after split
+        if X_train_scaled.shape[0] == 0:
+            raise ValueError("Empty training set after split; reduce validation_frac or provide more data")
+        
         y_train_one_hot = np.eye(self.n_classes)[y_train]
         if y_val is not None:
             y_val_one_hot = np.eye(self.n_classes)[y_val]
         
-        qcircuit = self._get_circuit()
-        
         # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
+        # Use cached qnode for this fit session
+        qcircuit = self._qcircuit
         
         # Initialize training history
         history = {
@@ -1887,6 +1948,17 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                 quantum_outputs = np.array([qcircuit(f, m, w_ansatz, w_missing) 
                                           for f, m in zip(X_train_scaled, mask_train)])
                 
+
+                # Shape validation (done once)
+                if not self._shape_validated:
+                    if self.W1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
+                    if self.W2.shape[0] != self.W1.shape[1]:
+                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
+                    if self.W2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    self._shape_validated = True
+
                 # Apply classical readout to each sample
                 logits_list = []
                 for qout in quantum_outputs:
@@ -2068,8 +2140,8 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         # Ensure inputs are batches
         X_scaled = np.atleast_2d(np.asarray(X_scaled))
         is_missing_mask = np.atleast_2d(np.asarray(is_missing_mask))
-        
-        qcircuit = self._get_circuit()
+        # Use cached qnode
+        qcircuit = self._qcircuit
         
         # compute quantum outputs for each sample
         quantum_outputs = [qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
