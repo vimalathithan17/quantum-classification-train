@@ -162,7 +162,18 @@ project_root/
 │   ├── data_CNV_.parquet
 │   └── ...
 ├── master_label_encoder/         # Output: label encoder (label_encoder.joblib)
-├── tuning_results/               # Output: tuning JSON files
+├── tuning_results/               # Output: tuning artifacts and metrics
+│   ├── best_params_{study_name}.json
+│   ├── trials_{study_name}.csv
+│   ├── optuna_plots/             # Visualization plots (PNG/HTML)
+│   │   ├── param_importances.png
+│   │   ├── optimization_history.png
+│   │   ├── slice.png
+│   │   └── contour.png
+│   └── trial_{trial_id}/         # Per-trial artifacts (best + latest 2 only)
+│       ├── fold_1_metrics.json
+│       ├── fold_2_metrics.json
+│       └── fold_3_metrics.json
 ├── base_learner_outputs_app1_standard/  # Example output directory for base learners
 ├── base_learner_outputs_app1_reuploading/
 ├── base_learner_outputs_app2_standard/
@@ -258,8 +269,17 @@ Notes:
 - The number of training steps for tuning defaults to 100 (configurable via `--steps`).
 - Use `--use_wandb` to log tuning trials and metrics to Weights & Biases for visualization and comparison.
 - Adjust `--validation_frequency` to control how often validation metrics are computed during each trial.
+- **Objective metric:** Trials are now optimized using **weighted F1 score** instead of accuracy for better handling of class imbalance.
+- **Comprehensive metrics:** Each fold tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
+- **Per-trial artifacts:** Each trial saves fold-level metrics to `tuning_results/trial_{trial_id}/fold_{fold_num}_metrics.json`.
+- **Automatic cleanup:** Only the best trial and the latest 2 trials are kept to save disk space. Older trial directories are automatically removed.
+- **Unique W&B runs:** Each trial gets a unique W&B run name (e.g., `tune_DR_CNV_trial0`, `tune_DR_CNV_trial1`) for easy tracking.
 
-Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
+Output: 
+- Best parameters: `tuning_results/best_params_{study_name}.json`
+- Trials dataframe: `tuning_results/trials_{study_name}.csv`
+- Optuna visualizations: `tuning_results/optuna_plots/` (parameter importances, optimization history, slice plots, contour plots)
+- Per-trial fold metrics: `tuning_results/trial_{trial_id}/fold_{fold_num}_metrics.json` (kept only for best + latest 2 trials)
 
 Quick inspection: there is a small helper script included to view saved parameter files:
 
