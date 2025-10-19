@@ -5,6 +5,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 import os
 import joblib
+from joblib import Parallel, delayed
 import time
 import shutil
 from datetime import datetime
@@ -23,6 +24,15 @@ from utils.io_checkpoint import (
 from utils.metrics_utils import (
     compute_metrics, save_metrics_to_csv, plot_training_curves
 )
+
+
+# Small activation helpers at module level (picklable)
+def relu(x):
+    return np.maximum(0, x)
+
+
+def identity(x):
+    return x
 
 
 def _ensure_writable_checkpoint_dir(checkpoint_dir, checkpoint_fallback_dir=None):
@@ -115,36 +125,13 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
 # --- Models for Approach 1 (Classical Preprocessing + QML) ---
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
-    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout.
-    
-    Args:
-        n_qubits (int): Number of qubits in the quantum circuit.
-        n_layers (int): Number of ansatz layers.
-        n_classes (int): Number of output classes.
-        learning_rate (float): Learning rate for optimizer.
-        steps (int): Number of training steps.
-        verbose (bool): Enable verbose logging.
-        checkpoint_dir (str): Primary directory for saving checkpoints.
-        checkpoint_fallback_dir (str): Fallback directory if primary is read-only.
-        checkpoint_frequency (int): Save checkpoint every N steps.
-        keep_last_n (int): Keep only last N checkpoints.
-        max_training_time (float): Maximum training time in hours (overrides steps).
-        hidden_size (int): Size of hidden layer in classical readout.
-        readout_activation (str): Activation function ('tanh', 'relu', 'linear').
-        selection_metric (str): Metric for best model selection.
-        resume (str): Resume mode ('auto', 'latest', 'best').
-        validation_frac (float): Fraction of data for validation.
-        validation_frequency (int): Compute validation metrics every N steps.
-        patience (int): Early stopping patience (steps without improvement).
-        use_wandb (bool): Enable Weights & Biases logging.
-        wandb_project (str): W&B project name.
-        wandb_run_name (str): W&B run name.
-    """
-    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False, 
-                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
+    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout."""
+
+    def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
+                 checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -166,20 +153,30 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        
+        self.n_jobs = n_jobs  # used by joblib parallel fallback
+
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
-        
+
         # Quantum weights - measurements from all qubits
         self.n_meas = self.n_qubits
+        # Use pennylane.numpy random initializations with requires_grad for qnode compatibility
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
-        
-        # Classical readout weights
+
+        # Classical readout weights (initialized small)
         self.W1 = np.array(np.random.randn(self.n_meas, hidden_size) * 0.01, requires_grad=True)
         self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
         self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
         self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
-        
+
+        # Choose activation function once and store callable on instance for low overhead
+        if self.readout_activation == 'tanh':
+            self._activation_fn = np.tanh
+        elif self.readout_activation == 'relu':
+            self._activation_fn = relu
+        else:
+            self._activation_fn = identity
+
         self.best_weights = None
         self.best_weights_classical = None
         self.best_loss = float('inf')
@@ -192,44 +189,58 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         def qcircuit(inputs, weights):
             qml.AngleEmbedding(inputs, wires=range(self.n_qubits))
             qml.BasicEntanglerLayers(weights, wires=range(self.n_qubits))
-            # Measure all qubits for classical readout
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
         return qcircuit
-    
+
     def _activation(self, x):
-        """Apply activation function."""
-        if self.readout_activation == 'tanh':
-            return np.tanh(x)
-        elif self.readout_activation == 'relu':
-            return np.maximum(0, x)
-        else:
-            return x  # linear
-    
+        """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
+        return self._activation_fn(x)
+
     def _classical_readout(self, quantum_output):
-        """Apply classical readout head to quantum measurements."""
+        """Apply classical readout head to quantum measurements (single-sample path)."""
         # quantum_output shape: (n_meas,)
-        hidden = self._activation(np.dot(quantum_output, self.W1) + self.b1)
+        hidden = self._activation_fn(np.dot(quantum_output, self.W1) + self.b1)
         logits = np.dot(hidden, self.W2) + self.b2
         return logits
 
+    def _batched_qcircuit(self, X, weights, n_jobs=None):
+        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
+        qcircuit = self._get_circuit()
+        X_arr = np.asarray(X, dtype=np.float64)
+
+        # Single sample
+        if X_arr.ndim == 1:
+            qout = qcircuit(X_arr, weights)
+            return np.asarray(qout, dtype=np.float64).reshape(1, -1)
+
+        # Try batched call (fast path)
+        N = X_arr.shape[0]
+        try:
+            qouts = qcircuit(X_arr, weights)
+            qouts = np.asarray(qouts, dtype=np.float64)
+            if qouts.ndim == 2 and qouts.shape[0] == N:
+                return qouts
+            # else fall back
+        except Exception:
+            pass
+
+        # Parallel fallback (threading backend avoids pickling the qnode)
+        n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        results = Parallel(n_jobs=n_jobs, backend='threading')(
+            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
+        )
+        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+
     def _softmax(self, x):
-        """Numerically stable softmax.
-        Accepts 1D (K,) or 2D (N, K) arrays and returns probabilities of same shape.
-        """
-        X = np.asarray(x, dtype=np.float64)
-        
-        if X.ndim == 1:
-            # single sample
-            shift = X - np.max(X)
-            exp_shift = np.exp(shift)
-            return exp_shift / np.sum(exp_shift)
-        elif X.ndim == 2:
-            # batch: subtract max per row for numerical stability
-            shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
-            exp_shift = np.exp(shift)                        # shape (N,K)
-            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
-        else:
-            raise ValueError("softmax input must be 1D or 2D array")
+        """Numerically stable softmax. Accepts 1D (K,) or 2D (N, K)."""
+        x = np.asarray(x, dtype=np.float64)
+        if x.ndim == 1:
+            z = x - np.max(x)
+            e = np.exp(z)
+            return e / e.sum()
+        z = x - np.max(x, axis=1, keepdims=True)
+        e = np.exp(z)
+        return e / e.sum(axis=1, keepdims=True)
 
     def fit(self, X, y):
         """
