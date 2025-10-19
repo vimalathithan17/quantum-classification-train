@@ -952,7 +952,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         """Predict class probabilities using quantum circuit and classical readout."""
         X_arr = np.asarray(X, dtype=np.float64)
         # ensure batch shape without copying
-        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D -> unchanged
+        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, n_features), 2D -> unchanged
         qcircuit = self._get_circuit()
         
         # compute quantum outputs for each sample
@@ -1407,8 +1407,8 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         X_scaled_arr = np.asarray(X_scaled, dtype=np.float64)
         is_missing_arr = np.asarray(is_missing_mask, dtype=np.float64)
         # ensure batch shape without copying
-        X_scaled_batch = np.atleast_2d(X_scaled_arr)   # 1D -> (1, K), 2D -> unchanged
-        is_missing_batch = np.atleast_2d(is_missing_arr)   # 1D -> (1, K), 2D -> unchanged
+        X_scaled_batch = np.atleast_2d(X_scaled_arr)   # 1D -> (1, n_features), 2D -> unchanged
+        is_missing_batch = np.atleast_2d(is_missing_arr)   # 1D -> (1, n_features), 2D -> unchanged
         
         qcircuit = self._get_circuit()
         
@@ -1869,8 +1869,8 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         X_scaled_arr = np.asarray(X_scaled, dtype=np.float64)
         is_missing_arr = np.asarray(is_missing_mask, dtype=np.float64)
         # ensure batch shape without copying
-        X_scaled_batch = np.atleast_2d(X_scaled_arr)   # 1D -> (1, K), 2D -> unchanged
-        is_missing_batch = np.atleast_2d(is_missing_arr)   # 1D -> (1, K), 2D -> unchanged
+        X_scaled_batch = np.atleast_2d(X_scaled_arr)   # 1D -> (1, n_features), 2D -> unchanged
+        is_missing_batch = np.atleast_2d(is_missing_arr)   # 1D -> (1, n_features), 2D -> unchanged
         
         qcircuit = self._get_circuit()
         
