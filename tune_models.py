@@ -16,6 +16,15 @@ from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 from umap import UMAP
 
+# Additional imports for comprehensive metrics
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    confusion_matrix,
+    classification_report
+)
+import numpy as _np  # local alias to avoid shadowing pennylane.numpy
+
 # Import the centralized logger
 from logging_utils import log
 
@@ -108,6 +117,54 @@ def ensure_writable_db(db_path):
     return writable_path
 
 
+def ensure_writable_results_dir(results_dir):
+    """
+    Ensure the tuning results directory is writable. If not, create a copy in current working dir.
+    Returns the path to the writable directory.
+    """
+    # Try to create directory if it doesn't exist
+    try:
+        os.makedirs(results_dir, exist_ok=True)
+    except (OSError, PermissionError):
+        pass
+    
+    # Check if writable
+    if os.path.exists(results_dir) and os.access(results_dir, os.W_OK):
+        log.info(f"Results directory '{results_dir}' is writable.")
+        return results_dir
+    
+    # Not writable - try fallback in current directory
+    log.warning(f"Results directory '{results_dir}' is not writable. Creating fallback directory...")
+    
+    fallback_dir = os.path.join(os.getcwd(), os.path.basename(results_dir.rstrip('/')))
+    
+    try:
+        os.makedirs(fallback_dir, exist_ok=True)
+        
+        if os.access(fallback_dir, os.W_OK):
+            log.info(f"Using fallback results directory: '{fallback_dir}'")
+            
+            # Copy existing files from original to fallback if possible
+            if os.path.exists(results_dir):
+                for filename in os.listdir(results_dir):
+                    src = os.path.join(results_dir, filename)
+                    dst = os.path.join(fallback_dir, filename)
+                    try:
+                        if os.path.isfile(src):
+                            shutil.copy2(src, dst)
+                            log.info(f"Copied: {filename}")
+                    except Exception as e:
+                        log.warning(f"Could not copy {filename}: {e}")
+            
+            return fallback_dir
+    except Exception as e:
+        log.error(f"Could not create fallback directory '{fallback_dir}': {e}")
+    
+    # Last resort - return original and hope for the best
+    log.warning(f"No writable results directory available. Results may not be saved.")
+    return results_dir
+
+
 def safe_load_parquet(file_path):
     """Loads a parquet file with increased thrift limits, returning None on failure."""
     if not os.path.exists(file_path):
@@ -123,6 +180,78 @@ def safe_load_parquet(file_path):
     except Exception as e:
         log.error(f"Error loading {file_path}: {e}")
         return None
+
+def _per_class_specificity(cm_arr):
+    """Compute per-class specificity from confusion matrix."""
+    K = cm_arr.shape[0]
+    speci = _np.zeros(K, dtype=float)
+    total = cm_arr.sum()
+    for i in range(K):
+        TP = cm_arr[i, i]
+        FP = cm_arr[:, i].sum() - TP
+        FN = cm_arr[i, :].sum() - TP
+        TN = total - (TP + FP + FN)
+        denom = TN + FP
+        speci[i] = float(TN / denom) if denom > 0 else 0.0
+    return speci
+
+
+def cleanup_old_trials(results_dir, study, keep_best=True, keep_latest_n=2):
+    """
+    Clean up old trial directories, keeping only the best trial and the latest N trials.
+    
+    Args:
+        results_dir: Directory containing trial_* subdirectories
+        study: Optuna study object
+        keep_best: Whether to keep the best trial directory
+        keep_latest_n: Number of latest trials to keep (in addition to best)
+    """
+    try:
+        # Get list of trial directories
+        trial_dirs = []
+        for item in os.listdir(results_dir):
+            item_path = os.path.join(results_dir, item)
+            if os.path.isdir(item_path) and item.startswith('trial_'):
+                try:
+                    trial_num = int(item.split('_')[1])
+                    trial_dirs.append((trial_num, item_path))
+                except (ValueError, IndexError):
+                    continue
+        
+        if not trial_dirs:
+            return
+        
+        # Sort by trial number
+        trial_dirs.sort(key=lambda x: x[0])
+        
+        # Identify trials to keep
+        trials_to_keep = set()
+        
+        # Keep best trial
+        if keep_best and len(study.trials) > 0:
+            try:
+                best_trial_num = study.best_trial.number
+                trials_to_keep.add(best_trial_num)
+                log.info(f"Keeping best trial directory: trial_{best_trial_num}")
+            except ValueError:
+                log.warning("No best trial found (no completed trials)")
+        
+        # Keep latest N trials
+        latest_trials = [t[0] for t in trial_dirs[-keep_latest_n:]]
+        trials_to_keep.update(latest_trials)
+        log.info(f"Keeping latest {keep_latest_n} trial directories: {latest_trials}")
+        
+        # Remove other trial directories
+        for trial_num, trial_path in trial_dirs:
+            if trial_num not in trials_to_keep:
+                try:
+                    shutil.rmtree(trial_path)
+                    log.info(f"Removed old trial directory: {trial_path}")
+                except Exception as e:
+                    log.warning(f"Could not remove trial directory {trial_path}: {e}")
+    
+    except Exception as e:
+        log.warning(f"Error during trial directory cleanup: {e}")
 
 def get_scaler(scaler_name):
     """Returns a scaler object from a string name."""
@@ -170,10 +299,15 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
         else:
             steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=RANDOM_STATE)))
 
+        # Generate unique wandb run name for this trial
+        wandb_run_name = f"tune_DR_{args.datatype}_trial{trial.number}" if args.use_wandb else None
+        if args.wandb_run_name:
+            wandb_run_name = f"{args.wandb_run_name}_trial{trial.number}"
+        
         if args.qml_model == 'standard':
-            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_DR_{args.datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
         else: # reuploading
-            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_DRE_{args.datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
             
         pipeline = Pipeline(steps_list + [('qml', qml_model)])
         
@@ -184,16 +318,76 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
             pipeline.fit(X_train, y_train)
-            score = pipeline.score(X_val, y_val)
-            scores.append(score)
-            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Completed with score {score:.4f}")
+            
+            # predictions
+            y_val_pred = pipeline.predict(X_val)
+            y_val_proba = None
+            if hasattr(pipeline, "predict_proba"):
+                try:
+                    y_val_proba = pipeline.predict_proba(X_val)
+                except Exception as e:
+                    log.warning(f"pipeline.predict_proba failed: {e}")
+                    y_val_proba = None
+
+            # compute metrics
+            acc = float(accuracy_score(y_val, y_val_pred))
+            prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val, y_val_pred, average='macro', zero_division=0)
+            prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val, y_val_pred, average='weighted', zero_division=0)
+            cm = confusion_matrix(y_val, y_val_pred)
+
+            # per-class specificity
+            per_class_spec = _per_class_specificity(cm)
+            spec_macro = float(_np.mean(per_class_spec))
+            # weighted specificity (by support)
+            support = _np.bincount(y_val)
+            spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
+
+            # pack fold metrics
+            fold_metrics = {
+                'accuracy': acc,
+                'precision_macro': float(prec_macro),
+                'recall_macro': float(rec_macro),
+                'f1_macro': float(f1_macro),
+                'precision_weighted': float(prec_weighted),
+                'recall_weighted': float(rec_weighted),
+                'f1_weighted': float(f1_weighted),
+                'specificity_macro': spec_macro,
+                'specificity_weighted': spec_weighted,
+                'confusion_matrix': cm.tolist(),
+                'classification_report': classification_report(y_val, y_val_pred, zero_division=0)
+            }
+
+            # logging
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
+            
+            # Save per-fold metrics to disk
+            fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
+            os.makedirs(fold_dir, exist_ok=True)
+            with open(os.path.join(fold_dir, f"fold_{fold+1}_metrics.json"), 'w') as fh:
+                json.dump(fold_metrics, fh, indent=2)
+
+            # attach fold metrics to the Optuna trial so you can inspect them later
+            trial.set_user_attr(f"fold_{fold+1}_metrics", fold_metrics)
+
+            # report to optuna for pruning
+            trial.report(float(f1_weighted), step=fold)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+            # accumulate objective metric per fold
+            scores.append(float(f1_weighted))
 
     elif args.approach == 2:
          
+        # Generate unique wandb run name for this trial
+        wandb_run_name = f"tune_CQFS_{args.datatype}_trial{trial.number}" if args.use_wandb else None
+        if args.wandb_run_name:
+            wandb_run_name = f"{args.wandb_run_name}_trial{trial.number}"
+        
         if args.qml_model == 'standard':
-            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_CQFS_{args.datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
         else: # reuploading
-            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_CQDFS_{args.datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
@@ -236,13 +430,71 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             X_val_scaled = scaler.transform(X_val_filled)
 
             qml_model.fit((X_train_scaled, is_missing_train), y_train.values)
-            score = qml_model.score((X_val_scaled, is_missing_val), y_val.values)
-            scores.append(score)
-            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Completed with score {score:.4f}")
+            
+            # obtain predictions from your QML model API
+            try:
+                y_val_pred = qml_model.predict((X_val_scaled, is_missing_val))
+            except Exception:
+                # if predict expects flat arrays or different signature adapt here
+                y_val_pred = qml_model.predict(np.asarray(X_val_scaled))
 
-    average_accuracy = np.mean(scores)
-    log.info(f"--- Trial {trial.number} Finished: Average Accuracy = {average_accuracy:.4f} ---")
-    return average_accuracy
+            # optionally probabilities
+            y_val_proba = None
+            if hasattr(qml_model, "predict_proba"):
+                try:
+                    y_val_proba = qml_model.predict_proba((X_val_scaled, is_missing_val))
+                except Exception:
+                    try:
+                        y_val_proba = qml_model.predict_proba(np.asarray(X_val_scaled))
+                    except Exception as e:
+                        log.warning(f"predict_proba not available or failed for fold {fold+1}: {e}")
+                        y_val_proba = None
+
+            # compute metrics (same as above)
+            acc = float(accuracy_score(y_val.values, y_val_pred))
+            prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val.values, y_val_pred, average='macro', zero_division=0)
+            prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val.values, y_val_pred, average='weighted', zero_division=0)
+            cm = confusion_matrix(y_val.values, y_val_pred)
+            per_class_spec = _per_class_specificity(cm)
+            spec_macro = float(_np.mean(per_class_spec))
+            support = _np.bincount(y_val.values)
+            spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
+
+            fold_metrics = {
+                'accuracy': acc,
+                'precision_macro': float(prec_macro),
+                'recall_macro': float(rec_macro),
+                'f1_macro': float(f1_macro),
+                'precision_weighted': float(prec_weighted),
+                'recall_weighted': float(rec_weighted),
+                'f1_weighted': float(f1_weighted),
+                'specificity_macro': spec_macro,
+                'specificity_weighted': spec_weighted,
+                'confusion_matrix': cm.tolist(),
+                'classification_report': classification_report(y_val.values, y_val_pred, zero_division=0)
+            }
+
+            log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
+            
+            fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
+            os.makedirs(fold_dir, exist_ok=True)
+            with open(os.path.join(fold_dir, f"fold_{fold+1}_metrics.json"), 'w') as fh:
+                json.dump(fold_metrics, fh, indent=2)
+
+            trial.set_user_attr(f"fold_{fold+1}_metrics", fold_metrics)
+            trial.report(float(f1_weighted), step=fold)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+            scores.append(float(f1_weighted))
+
+    mean_f1 = float(_np.mean(scores))
+    std_f1 = float(_np.std(scores))
+    # optionally attach aggregate metrics to trial
+    trial.set_user_attr('mean_f1_weighted', mean_f1)
+    trial.set_user_attr('std_f1_weighted', std_f1)
+
+    log.info(f"--- Trial {trial.number} Finished: mean_f1_weighted = {mean_f1:.4f} ± {std_f1:.4f} ---")
+    return mean_f1
 
 def main():
     parser = argparse.ArgumentParser(description="Universal QML tuning framework for multiclass problems.")
@@ -314,6 +566,11 @@ def main():
     # Ensure database is writable
     writable_db_path = ensure_writable_db(OPTUNA_DB_PATH)
     log.info(f"Using sqlite database: {writable_db_path}")
+    
+    # Ensure results directory is writable
+    global TUNING_RESULTS_DIR
+    TUNING_RESULTS_DIR = ensure_writable_results_dir(TUNING_RESULTS_DIR)
+    log.info(f"Using results directory: {TUNING_RESULTS_DIR}")
 
     storage = f"sqlite:///{writable_db_path}"
     study = optuna.create_study(
@@ -371,6 +628,9 @@ def main():
         log.error("No trials have been completed. Cannot save best parameters.")
         return
     
+    # Clean up old trial directories (keep best + latest 2)
+    cleanup_old_trials(TUNING_RESULTS_DIR, study, keep_best=True, keep_latest_n=2)
+    
     try:
         log.info(f"Best hyperparameters found: {study.best_params}")
         log.info(f"Best value: {study.best_value:.4f}")
@@ -383,6 +643,47 @@ def main():
         with open(params_file, 'w') as f:
             json.dump(best_params, f, indent=4)
         log.info(f"Saved best parameters to '{params_file}'")
+        
+        # Save trials dataframe (flat CSV) for offline analysis
+        try:
+            df_trials = study.trials_dataframe()
+            df_file = os.path.join(TUNING_RESULTS_DIR, f'trials_{study_name}.csv')
+            df_trials.to_csv(df_file, index=False)
+            log.info(f"Saved trials dataframe to '{df_file}'")
+        except Exception as e:
+            log.warning(f"Could not save trials dataframe: {e}")
+        
+        # Save Optuna visualization plots
+        try:
+            from optuna import visualization
+            optuna_plots_dir = os.path.join(TUNING_RESULTS_DIR, 'optuna_plots')
+            os.makedirs(optuna_plots_dir, exist_ok=True)
+            
+            plot_configs = [
+                ('param_importances.png', visualization.plot_param_importances),
+                ('optimization_history.png', visualization.plot_optimization_history),
+                ('slice.png', visualization.plot_slice),
+                ('contour.png', visualization.plot_contour),
+            ]
+            
+            for fn, plotter in plot_configs:
+                try:
+                    fig = plotter(study)
+                    out_path = os.path.join(optuna_plots_dir, fn)
+                    # Try to save as image if plotly/kaleido is available
+                    try:
+                        fig.write_image(out_path)
+                        log.info(f"Saved Optuna plot: {fn}")
+                    except Exception:
+                        # Fallback: save as HTML
+                        html_path = out_path.replace('.png', '.html')
+                        fig.write_html(html_path)
+                        log.info(f"Saved Optuna plot as HTML: {html_path.split('/')[-1]}")
+                except Exception as e:
+                    log.warning(f"Could not generate {fn}: {e}")
+        except Exception as e:
+            log.warning(f"Could not generate Optuna visualization plots: {e}")
+            
     except ValueError as e:
         log.error(f"Could not retrieve best parameters: {e}")
         log.info("This may happen if no trials completed successfully.")
