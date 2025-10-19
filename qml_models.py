@@ -218,7 +218,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
+        qcircuit = self._qcircuit
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -398,12 +398,13 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
                 # Shape validation (done once)
                 if not self._shape_validated:
-                    if self.W1.shape[0] != self.n_meas:
-                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
-                    if self.W2.shape[0] != self.W1.shape[1]:
-                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
-                    if self.W2.shape[1] != self.n_classes:
-                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    if w1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {w1.shape[0]}")
+                    hidden_size = w1.shape[1]
+                    if w2.shape[0] != hidden_size:
+                        raise ValueError(f"W2 shape mismatch: expected {hidden_size} rows, got {w2.shape[0]}")
+                    if w2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
                 hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
@@ -717,7 +718,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
+        qcircuit = self._qcircuit
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -905,12 +906,13 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
                 # Shape validation (done once)
                 if not self._shape_validated:
-                    if self.W1.shape[0] != self.n_meas:
-                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
-                    if self.W2.shape[0] != self.W1.shape[1]:
-                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
-                    if self.W2.shape[1] != self.n_classes:
-                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    if w1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {w1.shape[0]}")
+                    hidden_size = w1.shape[1]
+                    if w2.shape[0] != hidden_size:
+                        raise ValueError(f"W2 shape mismatch: expected {hidden_size} rows, got {w2.shape[0]}")
+                    if w2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
                 hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
@@ -1231,7 +1233,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
+        qcircuit = self._qcircuit
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1421,12 +1423,13 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 
                 # Shape validation (done once)
                 if not self._shape_validated:
-                    if self.W1.shape[0] != self.n_meas:
-                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
-                    if self.W2.shape[0] != self.W1.shape[1]:
-                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
-                    if self.W2.shape[1] != self.n_classes:
-                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    if w1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {w1.shape[0]}")
+                    hidden_size = w1.shape[1]
+                    if w2.shape[0] != hidden_size:
+                        raise ValueError(f"W2 shape mismatch: expected {hidden_size} rows, got {w2.shape[0]}")
+                    if w2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
                 # Apply classical readout to each sample
@@ -1757,7 +1760,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
+        qcircuit = self._qcircuit
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1947,12 +1950,13 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
 
                 # Shape validation (done once)
                 if not self._shape_validated:
-                    if self.W1.shape[0] != self.n_meas:
-                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {self.W1.shape[0]}")
-                    if self.W2.shape[0] != self.W1.shape[1]:
-                        raise ValueError(f"W2 shape mismatch: expected {self.W1.shape[1]} rows, got {self.W2.shape[0]}")
-                    if self.W2.shape[1] != self.n_classes:
-                        raise ValueError(f"W2 output dim ({self.W2.shape[1]}) != n_classes ({self.n_classes})")
+                    if w1.shape[0] != self.n_meas:
+                        raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {w1.shape[0]}")
+                    hidden_size = w1.shape[1]
+                    if w2.shape[0] != hidden_size:
+                        raise ValueError(f"W2 shape mismatch: expected {hidden_size} rows, got {w2.shape[0]}")
+                    if w2.shape[1] != self.n_classes:
+                        raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
                 # Apply classical readout to each sample
