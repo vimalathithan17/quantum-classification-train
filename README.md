@@ -118,13 +118,24 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard \
     --use_wandb --wandb_project qml_tuning --validation_frequency 5
 ```
 
-Note: To use W&B, install with `pip install wandb` and authenticate with `wandb login`.
+Note: To use W&B, install with `pip install wandb` and authenticate with `wandb login`. See the Dependencies section below for installation instructions.
 
 ### Dependencies
 All required packages are now specified in `requirements.txt`:
 ```bash
 pip install -r requirements.txt
 ```
+
+After installing the dependencies, if you plan to use Weights & Biases for experiment tracking, authenticate with your W&B account:
+```bash
+# Login to Weights & Biases (required for --use_wandb flag)
+wandb login
+
+# Or login with API key directly
+wandb login <your-api-key>
+```
+
+You can find your API key at https://wandb.ai/authorize
 
 ### Testing
 Basic smoke tests validate the new functionality:
@@ -178,6 +189,10 @@ export SOURCE_DIR=/absolute/path/to/your/processed_datasets
 export OUTPUT_DIR=/absolute/path/to/outputs
 export TUNING_RESULTS_DIR=/absolute/path/to/tuning_results
 export ENCODER_DIR=/absolute/path/to/master_label_encoder
+# Optional: override other configuration variables
+export RANDOM_STATE=42
+export OPTUNA_DB_PATH=/absolute/path/to/optuna_studies.db
+export TUNING_JOURNAL_FILE=/absolute/path/to/tuning_journal.log
 ```
 
 If you don't set these, the defaults will be used:
@@ -185,6 +200,9 @@ If you don't set these, the defaults will be used:
 - OUTPUT_DIR: script-specific defaults (e.g. `base_learner_outputs_app1_standard`)
 - TUNING_RESULTS_DIR: `tuning_results`
 - ENCODER_DIR: `master_label_encoder`
+- RANDOM_STATE: `42`
+- OPTUNA_DB_PATH: `./optuna_studies.db`
+- TUNING_JOURNAL_FILE: `tuning_journal.log`
 
 ---
 
@@ -501,6 +519,10 @@ The script prints the final predicted class label.
 export SOURCE_DIR=/abs/path/to/final_processed_datasets
 export TUNING_RESULTS_DIR=/abs/path/to/tuning_results
 export ENCODER_DIR=/abs/path/to/master_label_encoder
+# Optional: set these for custom configuration
+export RANDOM_STATE=42
+export OPTUNA_DB_PATH=/abs/path/to/optuna_studies.db
+export TUNING_JOURNAL_FILE=/abs/path/to/tuning_journal.log
 ```
 
 and source it before running scripts:
@@ -625,6 +647,9 @@ Environment variables relevant to CLI behavior
 - `TUNING_RESULTS_DIR` — directory where tuning outputs are read/written (default `tuning_results`).
 - `ENCODER_DIR` — directory for the master `label_encoder.joblib` (default `master_label_encoder`).
 - `OUTPUT_DIR` — per-script output directory; most scripts provide a sensible default but will respect the env var when set.
+- `RANDOM_STATE` — random seed for reproducibility (default `42`).
+- `OPTUNA_DB_PATH` — path to Optuna SQLite database for hyperparameter tuning (default `./optuna_studies.db`).
+- `TUNING_JOURNAL_FILE` — path to tuning journal log file for meta-learner (default `tuning_journal.log`).
 
 ### Command-line arguments for `tune_models.py`
 
