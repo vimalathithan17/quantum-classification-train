@@ -100,8 +100,8 @@ Training scripts now support `--validation_frequency` (default: 10) to control h
 ### Weights & Biases Integration
 
 All training scripts now support optional Weights & Biases (W&B) integration for experiment tracking:
-- **Deferred import:** W&B is only imported if `--use_wandb` is enabled, avoiding unnecessary dependencies
-- **Automatic metric logging:** When enabled, validation metrics are automatically logged to W&B during training
+- **Required dependency:** W&B is now included in requirements.txt and imported by default
+- **Automatic metric logging:** When enabled with `--use_wandb`, validation metrics are automatically logged to W&B during training
 - **Organized experiments:** Use `--wandb_project` and `--wandb_run_name` to organize experiments in your W&B workspace
 - **No code changes required:** Simply add the CLI flags to enable W&B logging
 
@@ -118,7 +118,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard \
     --use_wandb --wandb_project qml_tuning --validation_frequency 5
 ```
 
-Note: To use W&B, install with `pip install wandb` and authenticate with `wandb login`. See the Dependencies section below for installation instructions.
+Note: W&B is installed with the requirements. To use it, authenticate with `wandb login` (see the Dependencies section below).
 
 ### Dependencies
 All required packages are now specified in `requirements.txt`:
