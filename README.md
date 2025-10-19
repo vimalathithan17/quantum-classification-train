@@ -491,11 +491,16 @@ Notes:
 - When `--max_training_time` is used, checkpoints are saved to `final_model_and_predictions/checkpoints_metalearner/`
 - Use `--checkpoint_fallback_dir` if working with read-only storage (e.g., mounted volumes)
 - Enable `--use_wandb` to track experiments and visualize training metrics in Weights & Biases
+- **Optimization Metric:** Tuning optimizes for **weighted F1 score** instead of accuracy for better handling of class imbalance
+- **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report
+- **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location
+- **Per-Trial Artifacts:** Each trial saves comprehensive metrics to `final_model_and_predictions/trial_{trial_id}/metrics.json`
 
 Outputs (saved to `final_model_and_predictions/` by default):
 - `metalearner_model.joblib`
 - `metalearner_scaler.joblib`
 - `best_metalearner_params.json` (if tuning was run)
+- `trial_{trial_id}/metrics.json` (per-trial comprehensive metrics during tuning)
 
 Note: The default OUTPUT_DIR for metalearner.py is `final_model_and_predictions`. For inference, you'll need to manually copy/rename files to match what `inference.py` expects (see Step 6).
 
@@ -758,6 +763,12 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 | `--wandb_run_name` | str | No | `None` | - | W&B run name for identifying specific training runs. |
 
 ### Example commands for `metalearner.py`
+
+**Note on Recent Updates:**
+- `metalearner.py` now optimizes for **weighted F1 score** instead of accuracy during tuning for better class imbalance handling
+- Comprehensive metrics (accuracy, precision, recall, F1, specificity) are tracked and saved for each trial
+- Automatic directory fallback: If journal file or output directory is read-only, the system automatically copies to a writable location
+- Per-trial metrics saved to `trial_{trial_id}/metrics.json` for detailed analysis
 
 ```bash
 # Tune the meta-learner with 100 trials and verbose logging

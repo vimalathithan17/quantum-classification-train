@@ -4,11 +4,18 @@ import argparse
 import optuna
 import joblib
 import json
+import shutil
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import (
+    accuracy_score, 
+    classification_report,
+    precision_recall_fscore_support,
+    confusion_matrix
+)
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
+import numpy as _np  # local alias to avoid shadowing pennylane.numpy
 
 # Import the centralized logger
 from logging_utils import log
@@ -21,6 +28,128 @@ ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+
+def _per_class_specificity(cm_arr):
+    """Compute per-class specificity from confusion matrix."""
+    K = cm_arr.shape[0]
+    speci = _np.zeros(K, dtype=float)
+    total = cm_arr.sum()
+    for i in range(K):
+        TP = cm_arr[i, i]
+        FP = cm_arr[:, i].sum() - TP
+        FN = cm_arr[i, :].sum() - TP
+        TN = total - (TP + FP + FN)
+        denom = TN + FP
+        speci[i] = float(TN / denom) if denom > 0 else 0.0
+    return speci
+
+
+def is_db_writable(db_path):
+    """Check if a database file is writable."""
+    if not os.path.exists(db_path):
+        # If DB doesn't exist, check if parent directory is writable
+        parent_dir = os.path.dirname(db_path) or '.'
+        return os.access(parent_dir, os.W_OK)
+    return os.access(db_path, os.W_OK)
+
+
+def ensure_writable_db(db_path):
+    """
+    Ensure the database is writable. If read-only, copy it to a writable location.
+    Returns the path to the writable database.
+    """
+    if is_db_writable(db_path):
+        log.info(f"Database at {db_path} is writable.")
+        return db_path
+    
+    log.warning(f"Database at {db_path} is read-only. Copying to a writable location...")
+    
+    # Try multiple locations for writable copy
+    import tempfile
+    candidate_paths = [
+        os.path.join(os.getcwd(), 'tuning_journal_working.log'),
+        os.path.join(tempfile.gettempdir(), 'tuning_journal_working.log')
+    ]
+    
+    writable_path = None
+    for candidate in candidate_paths:
+        # Check if we can write to this location
+        if os.path.exists(candidate):
+            if is_db_writable(candidate):
+                writable_path = candidate
+                break
+        else:
+            # Check if parent directory is writable
+            parent_dir = os.path.dirname(candidate) or '.'
+            if os.access(parent_dir, os.W_OK):
+                writable_path = candidate
+                break
+    
+    if writable_path is None:
+        raise RuntimeError("Could not find a writable location for the database copy")
+    
+    # Copy the database if source exists
+    if os.path.exists(db_path):
+        try:
+            shutil.copy2(db_path, writable_path)
+            # Ensure the copy is writable (shutil.copy2 preserves permissions)
+            os.chmod(writable_path, 0o644)
+            log.info(f"Copied database to {writable_path}")
+        except (IOError, OSError) as e:
+            raise RuntimeError(f"Failed to copy database to {writable_path}: {e}")
+    else:
+        log.info(f"Source database does not exist yet. Will create new database at {writable_path}")
+    
+    return writable_path
+
+
+def ensure_writable_results_dir(results_dir):
+    """
+    Ensure the results directory is writable. If not, create a copy in current working dir.
+    Returns the path to the writable directory.
+    """
+    # Try to create directory if it doesn't exist
+    try:
+        os.makedirs(results_dir, exist_ok=True)
+    except (OSError, PermissionError):
+        pass
+    
+    # Check if writable
+    if os.path.exists(results_dir) and os.access(results_dir, os.W_OK):
+        log.info(f"Results directory '{results_dir}' is writable.")
+        return results_dir
+    
+    # Not writable - try fallback in current directory
+    log.warning(f"Results directory '{results_dir}' is not writable. Creating fallback directory...")
+    
+    fallback_dir = os.path.join(os.getcwd(), os.path.basename(results_dir.rstrip('/')))
+    
+    try:
+        os.makedirs(fallback_dir, exist_ok=True)
+        
+        if os.access(fallback_dir, os.W_OK):
+            log.info(f"Using fallback results directory: '{fallback_dir}'")
+            
+            # Copy existing files from original to fallback if possible
+            if os.path.exists(results_dir):
+                for filename in os.listdir(results_dir):
+                    src = os.path.join(results_dir, filename)
+                    dst = os.path.join(fallback_dir, filename)
+                    try:
+                        if os.path.isfile(src):
+                            shutil.copy2(src, dst)
+                            log.info(f"Copied: {filename}")
+                    except Exception as e:
+                        log.warning(f"Could not copy {filename}: {e}")
+            
+            return fallback_dir
+    except Exception as e:
+        log.error(f"Could not create fallback directory '{fallback_dir}': {e}")
+    
+    # Last resort - return original and hope for the best
+    log.warning(f"No writable results directory available. Results may not be saved.")
+    return results_dir
 
 
 def get_scaler(scaler_name):
@@ -148,10 +277,48 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, scaler_opt
     
     log.info(f"Trial {trial.number}: Evaluating...")
     predictions = model.predict(X_val_scaled)
-    accuracy = accuracy_score(y_val.values, predictions)
     
-    log.info(f"--- Trial {trial.number} Finished: Accuracy = {accuracy:.4f} ---")
-    return accuracy
+    # Compute comprehensive metrics
+    accuracy = float(accuracy_score(y_val.values, predictions))
+    prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val.values, predictions, average='macro', zero_division=0)
+    prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val.values, predictions, average='weighted', zero_division=0)
+    cm = confusion_matrix(y_val.values, predictions)
+    
+    # Per-class specificity
+    per_class_spec = _per_class_specificity(cm)
+    spec_macro = float(_np.mean(per_class_spec))
+    # Weighted specificity (by support)
+    support = _np.bincount(y_val.values)
+    spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
+    
+    # Pack comprehensive metrics
+    metrics = {
+        'accuracy': accuracy,
+        'precision_macro': float(prec_macro),
+        'recall_macro': float(rec_macro),
+        'f1_macro': float(f1_macro),
+        'precision_weighted': float(prec_weighted),
+        'recall_weighted': float(rec_weighted),
+        'f1_weighted': float(f1_weighted),
+        'specificity_macro': spec_macro,
+        'specificity_weighted': spec_weighted,
+        'confusion_matrix': cm.tolist(),
+        'classification_report': classification_report(y_val.values, predictions, zero_division=0)
+    }
+    
+    log.info(f"Trial {trial.number}: metrics: f1_weighted={f1_weighted:.4f}, acc={accuracy:.4f}")
+    
+    # Save comprehensive metrics to disk
+    trial_dir = os.path.join(OUTPUT_DIR, f"trial_{trial.number}")
+    os.makedirs(trial_dir, exist_ok=True)
+    with open(os.path.join(trial_dir, "metrics.json"), 'w') as fh:
+        json.dump(metrics, fh, indent=2)
+    
+    # Attach metrics to the Optuna trial for later inspection
+    trial.set_user_attr('metrics', metrics)
+    
+    log.info(f"--- Trial {trial.number} Finished: f1_weighted = {f1_weighted:.4f} ---")
+    return float(f1_weighted)  # Optimize for weighted F1 instead of accuracy
 
 def main():
     parser = argparse.ArgumentParser(description="Train or tune the QML meta-learner.")
@@ -181,7 +348,10 @@ def main():
     n_classes = len(le.classes_)
     log.info(f"Meta-learner will be trained on {n_classes} classes.")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Ensure output directory is writable
+    global OUTPUT_DIR
+    OUTPUT_DIR = ensure_writable_results_dir(OUTPUT_DIR)
+    log.info(f"Using output directory: {OUTPUT_DIR}")
 
     if args.mode == 'tune':
         log.info(f"--- Starting Hyperparameter Tuning for Meta-Learner ({args.n_trials} trials) ---")
@@ -200,13 +370,19 @@ def main():
         )
         
         study_name = 'qml_metalearner_tuning'
-        storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=TUNING_JOURNAL_FILE))
+        
+        # Ensure database file is writable
+        writable_journal_path = ensure_writable_db(TUNING_JOURNAL_FILE)
+        log.info(f"Using journal file: {writable_journal_path}")
+        
+        storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
         
         study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args, scaler_options), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
+        log.info(f"Best value (weighted F1): {study.best_value:.4f}")
         
         # Save best parameters
         params_file = os.path.join(OUTPUT_DIR, 'best_metalearner_params.json')

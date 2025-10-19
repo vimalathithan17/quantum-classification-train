@@ -61,7 +61,14 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
 - **Process:**
     1. **Assembles Meta-Features:** The script loads the OOF predictions generated in Stage 3. It also loads an `indicator_file`, which contains supplementary classical features (e.g., clinical data like age or tumor stage). These are concatenated to form the feature set for the meta-learner.
     2. **Trains Meta-Learner:** It trains a QML model on this combined feature set, using the true labels from the training data.
-- **Output:** The final trained meta-learner model (`metalearner_model.joblib`) and a list of the exact feature columns it was trained on (`best_metalearner_params.json`).
+- **Optimization Metric:** Trials are optimized using **weighted F1 score** instead of accuracy for better handling of class imbalance.
+- **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
+- **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location, ensuring training can proceed in restricted environments.
+- **Output:** 
+  - Final trained meta-learner model (`metalearner_model.joblib`)
+  - Meta-learner scaler (`metalearner_scaler.joblib`)
+  - Best hyperparameters if tuning was run (`best_metalearner_params.json`)
+  - Per-trial comprehensive metrics during tuning (`trial_{trial_id}/metrics.json`)
 
 **Stage 5: Inference (`inference.py`)**
 - **Purpose:** To predict the cancer type for a new, unseen patient.
