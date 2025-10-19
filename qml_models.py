@@ -531,7 +531,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
         """
         X_arr = np.asarray(X, dtype=np.float64)
-        X_batch = np.atleast_2d(X_arr)   # 1D -> (1,K), 2D unchanged
+        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D unchanged
         # optional: handle empty batch
         if X_batch.shape[0] == 0:
             return np.empty((0, self.n_classes), dtype=np.float64)
@@ -998,7 +998,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
         """
         X_arr = np.asarray(X, dtype=np.float64)
-        X_batch = np.atleast_2d(X_arr)   # 1D -> (1,K), 2D unchanged
+        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D unchanged
         # optional: handle empty batch
         if X_batch.shape[0] == 0:
             return np.empty((0, self.n_classes), dtype=np.float64)
