@@ -156,7 +156,7 @@ def test_minimal_training():
                 def cost(w):
                     preds = np.array([circuit(x, w) for x in X])
                     probs = np.array([np.exp(p) / np.sum(np.exp(p)) for p in preds])
-                    return -np.mean(y_one_hot * np.log(probs + 1e-9))
+                    return -np.mean(np.sum(y_one_hot * np.log(probs + 1e-9), axis=1))
                 
                 weights, loss = opt.step_and_cost(cost, weights)
             
