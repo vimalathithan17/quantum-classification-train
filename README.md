@@ -672,6 +672,7 @@ Environment variables relevant to CLI behavior
 | `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N training steps (default: 10). |
 | `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging during tuning. |
 | `--wandb_project` | str | No | `None` | - | W&B project name for organizing tuning experiments. |
+| `--wandb_run_name` | str | No | `None` | - | W&B run name (optional, auto-generated if not provided). |
 
 ### Example commands for `tune_models.py`
 
@@ -690,6 +691,9 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 
 # Tune with W&B logging and custom validation frequency
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --use_wandb --wandb_project qml_tuning --validation_frequency 5 --verbose
+
+# Tune with W&B logging and custom run name
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --use_wandb --wandb_project qml_tuning --wandb_run_name my_custom_tuning_run --verbose
 
 # Use with read-only database (automatically copies to writable location)
 export OPTUNA_DB_PATH=/path/to/readonly/optuna_studies.db
