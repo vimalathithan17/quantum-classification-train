@@ -8,6 +8,7 @@ import joblib
 import time
 import shutil
 from datetime import datetime
+import wandb
 
 # Import the centralized logger
 from logging_utils import log
@@ -99,7 +100,6 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
         return None
     
     try:
-        import wandb
         wandb.init(
             project=wandb_project,
             name=wandb_run_name,
@@ -108,9 +108,6 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
         )
         log.info(f"Initialized W&B logging: project='{wandb_project}', run='{wandb_run_name}'")
         return wandb
-    except ImportError:
-        log.warning("wandb package not installed. Skipping W&B logging. Install with: pip install wandb")
-        return None
     except Exception as e:
         log.warning(f"Failed to initialize wandb: {e}")
         return None
