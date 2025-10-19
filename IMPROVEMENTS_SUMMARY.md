@@ -26,7 +26,7 @@ This document summarizes the improvements made to `qml_models.py` based on code 
 ```python
 # Empty batch
 if X_arr.shape[0] == 0:
-    return np.empty((0, self.n_meas), dtype=np.float64)
+    return np.empty((0, self.n_meas), dtype=np.float64)  # n_meas = number of measurement outcomes
 ```
 
 **Impact**: Prevents crashes when processing empty batches, making the code more robust.
@@ -39,9 +39,11 @@ if X_arr.shape[0] == 0:
 **Implementation**:
 ```python
 log.debug("qcircuit batched fast-path used")
-log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
+log.debug(f"qcircuit batched call failed, falling back to parallel eval: {type(e).__name__}")
 log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
 ```
+
+Note: In the actual implementation, we log the full exception for debugging purposes since debug logs are typically only enabled during development.
 
 **Impact**: Failures are now visible when debugging with log level set to DEBUG.
 
@@ -83,6 +85,11 @@ set n_jobs=1 to force sequential execution.
 ```python
 def _batched_qcircuit(self, X, weights, n_jobs=None):
     """Batched wrapper: try true batched qnode first, otherwise parallel per-sample.
+    
+    Args:
+        X: Input data array, shape (N, n_features) or (n_features,)
+        weights: Quantum circuit weights
+        n_jobs: Number of parallel jobs (None uses self.n_jobs)
 
     Returns:
         np.ndarray shape (N, n_meas)
