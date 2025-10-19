@@ -30,6 +30,15 @@ All quantum classifiers now include a trainable classical neural network layer t
   - `readout_activation`: Activation function - 'tanh' (default), 'relu', or 'linear'
   - `selection_metric`: Metric for best model selection (default: 'f1_weighted')
 
+### Batched Evaluation Optimization
+All quantum models now use efficient batched evaluation for improved performance:
+- **Vectorized operations:** Training cost functions and validation loss use fully vectorized NumPy operations instead of per-sample loops
+- **Batched quantum circuit execution:** The `_batched_qcircuit` method tries true batched execution first, with automatic fallback to threaded parallel execution
+- **Stored activation functions:** Activation functions are stored as callables during initialization to eliminate repeated conditional checks
+- **Parallel fallback:** When batched execution is not supported, threaded parallel execution is used with configurable `n_jobs` parameter (default: -1 for all cores)
+- **Performance benefits:** Significantly faster training and inference, especially for larger batch sizes
+- **Backward compatible:** All external APIs remain unchanged; optimizations are internal
+
 ### Serializable Adam Optimizer
 A custom Adam optimizer with state persistence:
 - Full save/restore of optimizer state (momentum, velocity, timestep)
