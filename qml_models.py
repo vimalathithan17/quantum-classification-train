@@ -213,8 +213,23 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return logits
 
     def _softmax(self, x):
-        e_x = np.exp(x - np.max(x))
-        return e_x / e_x.sum(axis=0)
+        """Numerically stable softmax.
+        Accepts 1D (K,) or 2D (N, K) arrays and returns probabilities of same shape.
+        """
+        X = np.asarray(x, dtype=np.float64)
+        
+        if X.ndim == 1:
+            # single sample
+            shift = X - np.max(X)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift)
+        elif X.ndim == 2:
+            # batch: subtract max per row for numerical stability
+            shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
+            exp_shift = np.exp(shift)                        # shape (N,K)
+            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
+        else:
+            raise ValueError("softmax input must be 1D or 2D array")
 
     def fit(self, X, y):
         """
@@ -506,21 +521,26 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
     def predict_proba(self, X):
         """Predict class probabilities using quantum circuit and classical readout."""
+        # Ensure X is a batch: shape (N, features)
+        X = np.atleast_2d(np.asarray(X))
         qcircuit = self._get_circuit()
-        quantum_outputs = np.array([qcircuit(x, self.weights) for x in X])
         
-        # Apply classical readout to each sample
-        logits_list = []
-        for qout in quantum_outputs:
-            logits = self._classical_readout(qout)
-            logits_list.append(logits)
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(x, self.weights) for x in X]
         
-        logits_array = np.array(logits_list)
-        return np.array([self._softmax(logit) for logit in logits_array])
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
         """Predict class labels."""
-        return np.argmax(self.predict_proba(X), axis=1)
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
 
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Multiclass VQC for pre-processed, dense data with classical readout.
@@ -622,8 +642,23 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         return logits
 
     def _softmax(self, x):
-        e_x = np.exp(x - np.max(x))
-        return e_x / e_x.sum(axis=0)
+        """Numerically stable softmax.
+        Accepts 1D (K,) or 2D (N, K) arrays and returns probabilities of same shape.
+        """
+        X = np.asarray(x, dtype=np.float64)
+        
+        if X.ndim == 1:
+            # single sample
+            shift = X - np.max(X)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift)
+        elif X.ndim == 2:
+            # batch: subtract max per row for numerical stability
+            shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
+            exp_shift = np.exp(shift)                        # shape (N,K)
+            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
+        else:
+            raise ValueError("softmax input must be 1D or 2D array")
 
     def fit(self, X, y):
         """
@@ -915,21 +950,26 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
     def predict_proba(self, X):
         """Predict class probabilities using quantum circuit and classical readout."""
+        # Ensure X is a batch: shape (N, features)
+        X = np.atleast_2d(np.asarray(X))
         qcircuit = self._get_circuit()
-        quantum_outputs = np.array([qcircuit(x, self.weights) for x in X])
         
-        # Apply classical readout to each sample
-        logits_list = []
-        for qout in quantum_outputs:
-            logits = self._classical_readout(qout)
-            logits_list.append(logits)
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(x, self.weights) for x in X]
         
-        logits_array = np.array(logits_list)
-        return np.array([self._softmax(logit) for logit in logits_array])
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
         """Predict class labels."""
-        return np.argmax(self.predict_proba(X), axis=1)
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
 
 # --- Models for Approach 2 (Conditional Encoding on Selected Features) ---
 
@@ -1038,8 +1078,23 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return logits
 
     def _softmax(self, x):
-        e_x = np.exp(x - np.max(x))
-        return e_x / e_x.sum(axis=0)
+        """Numerically stable softmax.
+        Accepts 1D (K,) or 2D (N, K) arrays and returns probabilities of same shape.
+        """
+        X = np.asarray(x, dtype=np.float64)
+        
+        if X.ndim == 1:
+            # single sample
+            shift = X - np.max(X)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift)
+        elif X.ndim == 2:
+            # batch: subtract max per row for numerical stability
+            shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
+            exp_shift = np.exp(shift)                        # shape (N,K)
+            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
+        else:
+            raise ValueError("softmax input must be 1D or 2D array")
 
     def fit(self, X, y):
         """
@@ -1348,22 +1403,29 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         """Predict class probabilities using quantum circuit and classical readout."""
         X_scaled, is_missing_mask = X
+        # Ensure inputs are batches
+        X_scaled = np.atleast_2d(np.asarray(X_scaled))
+        is_missing_mask = np.atleast_2d(np.asarray(is_missing_mask))
+        
         qcircuit = self._get_circuit()
-        quantum_outputs = np.array([qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
-                                   for f, m in zip(X_scaled, is_missing_mask)])
         
-        # Apply classical readout to each sample
-        logits_list = []
-        for qout in quantum_outputs:
-            logits = self._classical_readout(qout)
-            logits_list.append(logits)
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
+                          for f, m in zip(X_scaled, is_missing_mask)]
         
-        logits_array = np.array(logits_list)
-        return np.array([self._softmax(logit) for logit in logits_array])
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
         """Predict class labels."""
-        return np.argmax(self.predict_proba(X), axis=1)
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
 
     def score(self, X, y):
         return accuracy_score(y, self.predict(X))
@@ -1476,8 +1538,23 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         return logits
 
     def _softmax(self, x):
-        e_x = np.exp(x - np.max(x))
-        return e_x / e_x.sum(axis=0)
+        """Numerically stable softmax.
+        Accepts 1D (K,) or 2D (N, K) arrays and returns probabilities of same shape.
+        """
+        X = np.asarray(x, dtype=np.float64)
+        
+        if X.ndim == 1:
+            # single sample
+            shift = X - np.max(X)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift)
+        elif X.ndim == 2:
+            # batch: subtract max per row for numerical stability
+            shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
+            exp_shift = np.exp(shift)                        # shape (N,K)
+            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
+        else:
+            raise ValueError("softmax input must be 1D or 2D array")
 
     def fit(self, X, y):
         """
@@ -1786,22 +1863,29 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
     def predict_proba(self, X):
         """Predict class probabilities using quantum circuit and classical readout."""
         X_scaled, is_missing_mask = X
+        # Ensure inputs are batches
+        X_scaled = np.atleast_2d(np.asarray(X_scaled))
+        is_missing_mask = np.atleast_2d(np.asarray(is_missing_mask))
+        
         qcircuit = self._get_circuit()
-        quantum_outputs = np.array([qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
-                                   for f, m in zip(X_scaled, is_missing_mask)])
         
-        # Apply classical readout to each sample
-        logits_list = []
-        for qout in quantum_outputs:
-            logits = self._classical_readout(qout)
-            logits_list.append(logits)
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
+                          for f, m in zip(X_scaled, is_missing_mask)]
         
-        logits_array = np.array(logits_list)
-        return np.array([self._softmax(logit) for logit in logits_array])
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
         """Predict class labels."""
-        return np.argmax(self.predict_proba(X), axis=1)
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
         
     def score(self, X, y):
         return accuracy_score(y, self.predict(X))
