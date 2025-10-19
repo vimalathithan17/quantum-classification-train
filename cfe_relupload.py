@@ -84,6 +84,11 @@ parser.add_argument('--cv_only', action='store_true', help="Perform only cross-v
 parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
 parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
 parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
+parser.add_argument('--checkpoint_fallback_dir', type=str, default=None, help="Fallback directory for checkpoints if primary is read-only")
+parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
+parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
+parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
+parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
 args = parser.parse_args()
 
 # Validate mutually exclusive arguments
