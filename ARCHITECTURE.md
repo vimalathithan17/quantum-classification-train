@@ -25,7 +25,24 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
 **Stage 2: Hyperparameter Tuning (`tune_models.py`)**
 - **Purpose:** To find the optimal set of hyperparameters for each base-learner configuration.
 - **Process:** Using Optuna, this script runs a series of trials for a specified data type (`--datatype`), architectural approach (`--approach`), and QML model (`--qml_model`). It uses `StratifiedKFold` cross-validation to robustly evaluate each parameter set.
-- **Output:** A JSON file (e.g., `tuning_results/best_params_..._CNV_app1_...json`) for each tuned configuration, containing the best-performing parameters.
+- **Optimization Metric:** Trials are optimized using **weighted F1 score** instead of accuracy. This provides better handling of class imbalance and more robust model selection.
+- **Comprehensive Metrics:** For each fold in each trial, the following metrics are computed and saved:
+  - Accuracy
+  - Precision (macro and weighted)
+  - Recall (macro and weighted)
+  - F1 score (macro and weighted)
+  - Specificity (macro and weighted)
+  - Confusion matrix
+  - Classification report
+- **Artifact Management:** 
+  - Per-trial fold metrics are saved to `tuning_results/trial_{trial_id}/fold_{fold_num}_metrics.json`
+  - Only the best trial and latest 2 trials are kept to conserve disk space
+  - Older trial directories are automatically cleaned up after optimization completes
+- **Output:** 
+  - Best parameters JSON file (e.g., `tuning_results/best_params_..._CNV_app1_...json`)
+  - Trials dataframe CSV with all trial results
+  - Optuna visualization plots (parameter importances, optimization history, etc.)
+  - Per-trial fold metrics for best + latest 2 trials
 
 **Stage 3: Base-Learner Training**
 - **Approaches:** Dimensionality Reduction Encoding (DRE) and Conditional Feature Encoding (CFE)
