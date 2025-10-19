@@ -531,39 +531,25 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X):
-        """Predict class probabilities using quantum circuit and classical readout.
-
-        Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
-        """
-        X_arr = np.asarray(X, dtype=np.float64)
-        if X_arr.ndim == 1:
-            # single sample -> shape (1, features)
-            X_batch = X_arr.reshape(1, -1)
-        elif X_arr.ndim == 2:
-            X_batch = X_arr
-        else:
-            raise ValueError("X must be 1D or 2D array of features")
-
-        # get quantum outputs shape (N, n_meas)
-        quantum_outputs = self._batched_qcircuit(X_batch, self.weights)
-
-        # vectorized classical readout
-        W1 = np.asarray(self.W1, dtype=np.float64)
-        W2 = np.asarray(self.W2, dtype=np.float64)
-        b1 = np.asarray(self.b1, dtype=np.float64).reshape(1, -1)
-        b2 = np.asarray(self.b2, dtype=np.float64).reshape(1, -1)
-
-        hidden = self._activation_fn(np.dot(quantum_outputs, W1) + b1)
-        logits_array = np.dot(hidden, W2) + b2  # (N, n_classes)
-
-        if not np.isfinite(logits_array).all():
-            raise FloatingPointError("Non-finite values detected in logits (NaN or Inf).")
-
-        probs = self._softmax(logits_array)  # (N, n_classes)
-        return probs
+        """Predict class probabilities using quantum circuit and classical readout."""
+        # Ensure X is a batch: shape (N, features)
+        X = np.atleast_2d(np.asarray(X))
+        qcircuit = self._get_circuit()
+        
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(x, self.weights) for x in X]
+        
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
-        """Predict class labels. Returns 1D array of length N."""
+        """Predict class labels."""
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
 
@@ -597,7 +583,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -619,8 +605,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.n_jobs = n_jobs  # used by joblib parallel fallback
-
+        
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         
@@ -633,15 +618,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
         self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
         self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
-
-        # Choose activation function once and store callable on instance for low overhead
-        if self.readout_activation == 'tanh':
-            self._activation_fn = np.tanh
-        elif self.readout_activation == 'relu':
-            self._activation_fn = relu
-        else:
-            self._activation_fn = identity
-
+        
         self.best_weights = None
         self.best_weights_classical = None
         self.best_loss = float('inf')
@@ -660,43 +637,20 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         return qcircuit
     
     def _activation(self, x):
-        """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
-        return self._activation_fn(x)
+        """Apply activation function."""
+        if self.readout_activation == 'tanh':
+            return np.tanh(x)
+        elif self.readout_activation == 'relu':
+            return np.maximum(0, x)
+        else:
+            return x  # linear
     
     def _classical_readout(self, quantum_output):
         """Apply classical readout head to quantum measurements."""
         # quantum_output shape: (n_meas,)
-        hidden = self._activation_fn(np.dot(quantum_output, self.W1) + self.b1)
+        hidden = self._activation(np.dot(quantum_output, self.W1) + self.b1)
         logits = np.dot(hidden, self.W2) + self.b2
         return logits
-
-    def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
-        X_arr = np.asarray(X, dtype=np.float64)
-
-        # Single sample
-        if X_arr.ndim == 1:
-            qout = qcircuit(X_arr, weights)
-            return np.asarray(qout, dtype=np.float64).reshape(1, -1)
-
-        # Try batched call (fast path)
-        N = X_arr.shape[0]
-        try:
-            qouts = qcircuit(X_arr, weights)
-            qouts = np.asarray(qouts, dtype=np.float64)
-            if qouts.ndim == 2 and qouts.shape[0] == N:
-                return qouts
-            # else fall back
-        except Exception:
-            pass
-
-        # Parallel fallback (threading backend avoids pickling the qnode)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
 
     def _softmax(self, x):
         """Numerically stable softmax.
@@ -1006,39 +960,25 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         return self
 
     def predict_proba(self, X):
-        """Predict class probabilities using quantum circuit and classical readout.
-
-        Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
-        """
-        X_arr = np.asarray(X, dtype=np.float64)
-        if X_arr.ndim == 1:
-            # single sample -> shape (1, features)
-            X_batch = X_arr.reshape(1, -1)
-        elif X_arr.ndim == 2:
-            X_batch = X_arr
-        else:
-            raise ValueError("X must be 1D or 2D array of features")
-
-        # get quantum outputs shape (N, n_meas)
-        quantum_outputs = self._batched_qcircuit(X_batch, self.weights)
-
-        # vectorized classical readout
-        W1 = np.asarray(self.W1, dtype=np.float64)
-        W2 = np.asarray(self.W2, dtype=np.float64)
-        b1 = np.asarray(self.b1, dtype=np.float64).reshape(1, -1)
-        b2 = np.asarray(self.b2, dtype=np.float64).reshape(1, -1)
-
-        hidden = self._activation_fn(np.dot(quantum_outputs, W1) + b1)
-        logits_array = np.dot(hidden, W2) + b2  # (N, n_classes)
-
-        if not np.isfinite(logits_array).all():
-            raise FloatingPointError("Non-finite values detected in logits (NaN or Inf).")
-
-        probs = self._softmax(logits_array)  # (N, n_classes)
-        return probs
+        """Predict class probabilities using quantum circuit and classical readout."""
+        # Ensure X is a batch: shape (N, features)
+        X = np.atleast_2d(np.asarray(X))
+        qcircuit = self._get_circuit()
+        
+        # compute quantum outputs for each sample
+        quantum_outputs = [qcircuit(x, self.weights) for x in X]
+        
+        # apply classical readout per sample
+        logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
+        
+        # stack into an (N, K) numeric array and ensure float dtype
+        logits_array = np.vstack(logits_list).astype(np.float64)
+        
+        # return (N, K) probabilities; for single-sample input this still returns shape (1,K)
+        return self._softmax(logits_array)
 
     def predict(self, X):
-        """Predict class labels. Returns 1D array of length N."""
+        """Predict class labels."""
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
 
@@ -1074,7 +1014,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -1096,8 +1036,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.n_jobs = n_jobs  # used by joblib parallel fallback
-
+        
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         
@@ -1111,15 +1050,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
         self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
         self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
-
-        # Choose activation function once and store callable on instance for low overhead
-        if self.readout_activation == 'tanh':
-            self._activation_fn = np.tanh
-        elif self.readout_activation == 'relu':
-            self._activation_fn = relu
-        else:
-            self._activation_fn = identity
-
+        
         self.best_weights_ansatz = None
         self.best_weights_missing = None
         self.best_weights_classical = None
@@ -1142,43 +1073,20 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return qcircuit
     
     def _activation(self, x):
-        """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
-        return self._activation_fn(x)
+        """Apply activation function."""
+        if self.readout_activation == 'tanh':
+            return np.tanh(x)
+        elif self.readout_activation == 'relu':
+            return np.maximum(0, x)
+        else:
+            return x  # linear
     
     def _classical_readout(self, quantum_output):
         """Apply classical readout head to quantum measurements."""
         # quantum_output shape: (n_meas,)
-        hidden = self._activation_fn(np.dot(quantum_output, self.W1) + self.b1)
+        hidden = self._activation(np.dot(quantum_output, self.W1) + self.b1)
         logits = np.dot(hidden, self.W2) + self.b2
         return logits
-
-    def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
-        X_arr = np.asarray(X, dtype=np.float64)
-
-        # Single sample
-        if X_arr.ndim == 1:
-            qout = qcircuit(X_arr, weights)
-            return np.asarray(qout, dtype=np.float64).reshape(1, -1)
-
-        # Try batched call (fast path)
-        N = X_arr.shape[0]
-        try:
-            qouts = qcircuit(X_arr, weights)
-            qouts = np.asarray(qouts, dtype=np.float64)
-            if qouts.ndim == 2 and qouts.shape[0] == N:
-                return qouts
-            # else fall back
-        except Exception:
-            pass
-
-        # Parallel fallback (threading backend avoids pickling the qnode)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
 
     def _softmax(self, x):
         """Numerically stable softmax.
@@ -1526,7 +1434,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return self._softmax(logits_array)
 
     def predict(self, X):
-        """Predict class labels. Returns 1D array of length N."""
+        """Predict class labels."""
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
 
@@ -1563,7 +1471,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -1585,8 +1493,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.use_wandb = use_wandb
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
-        self.n_jobs = n_jobs  # used by joblib parallel fallback
-
+        
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         
@@ -1600,15 +1507,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.b1 = np.array(np.zeros(hidden_size), requires_grad=True)
         self.W2 = np.array(np.random.randn(hidden_size, n_classes) * 0.01, requires_grad=True)
         self.b2 = np.array(np.zeros(n_classes), requires_grad=True)
-
-        # Choose activation function once and store callable on instance for low overhead
-        if self.readout_activation == 'tanh':
-            self._activation_fn = np.tanh
-        elif self.readout_activation == 'relu':
-            self._activation_fn = relu
-        else:
-            self._activation_fn = identity
-
+        
         self.best_weights_ansatz = None
         self.best_weights_missing = None
         self.best_weights_classical = None
@@ -1634,43 +1533,20 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         return qcircuit
     
     def _activation(self, x):
-        """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
-        return self._activation_fn(x)
+        """Apply activation function."""
+        if self.readout_activation == 'tanh':
+            return np.tanh(x)
+        elif self.readout_activation == 'relu':
+            return np.maximum(0, x)
+        else:
+            return x  # linear
     
     def _classical_readout(self, quantum_output):
         """Apply classical readout head to quantum measurements."""
         # quantum_output shape: (n_meas,)
-        hidden = self._activation_fn(np.dot(quantum_output, self.W1) + self.b1)
+        hidden = self._activation(np.dot(quantum_output, self.W1) + self.b1)
         logits = np.dot(hidden, self.W2) + self.b2
         return logits
-
-    def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
-        X_arr = np.asarray(X, dtype=np.float64)
-
-        # Single sample
-        if X_arr.ndim == 1:
-            qout = qcircuit(X_arr, weights)
-            return np.asarray(qout, dtype=np.float64).reshape(1, -1)
-
-        # Try batched call (fast path)
-        N = X_arr.shape[0]
-        try:
-            qouts = qcircuit(X_arr, weights)
-            qouts = np.asarray(qouts, dtype=np.float64)
-            if qouts.ndim == 2 and qouts.shape[0] == N:
-                return qouts
-            # else fall back
-        except Exception:
-            pass
-
-        # Parallel fallback (threading backend avoids pickling the qnode)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
 
     def _softmax(self, x):
         """Numerically stable softmax.
@@ -2018,7 +1894,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         return self._softmax(logits_array)
 
     def predict(self, X):
-        """Predict class labels. Returns 1D array of length N."""
+        """Predict class labels."""
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
         
