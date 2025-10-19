@@ -1,7 +1,6 @@
 import pennylane as qml
 from pennylane import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 import os
 import joblib
@@ -1632,9 +1631,6 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
 
-    def score(self, X, y):
-        return accuracy_score(y, self.predict(X))
-
 class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Conditional Multiclass QVC with classical readout.
     
@@ -2160,6 +2156,3 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         """Predict class labels. Returns 1D array of length N."""
         probs = self.predict_proba(X)
         return np.argmax(probs, axis=1)
-        
-    def score(self, X, y):
-        return accuracy_score(y, self.predict(X))
