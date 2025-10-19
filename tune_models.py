@@ -171,9 +171,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=RANDOM_STATE)))
 
         if args.qml_model == 'standard':
-            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=f"tune_DR_{datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_DR_{args.datatype}_{trial.number}" if args.use_wandb else None)
         else: # reuploading
-            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=f"tune_DRE_{datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_DRE_{args.datatype}_{trial.number}" if args.use_wandb else None)
             
         pipeline = Pipeline(steps_list + [('qml', qml_model)])
         
@@ -191,9 +191,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     elif args.approach == 2:
          
         if args.qml_model == 'standard':
-            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=f"tune_CQFS_{datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_CQFS_{args.datatype}_{trial.number}" if args.use_wandb else None)
         else: # reuploading
-            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=f"tune_CQDFS_{datatype}_{trial.number}" if args.use_wandb else None)
+            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name or f"tune_CQDFS_{args.datatype}_{trial.number}" if args.use_wandb else None)
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
@@ -263,6 +263,7 @@ def main():
     parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
     parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging during tuning")
     parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
+    parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name (optional, auto-generated if not provided)")
     args = parser.parse_args()
     
     # Setup interruption handlers
