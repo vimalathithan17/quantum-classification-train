@@ -125,7 +125,11 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
 # --- Models for Approach 1 (Classical Preprocessing + QML) ---
 
 class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
-    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout."""
+    """Multiclass VQC for pre-processed, dimensionally-reduced data with classical readout.
+    
+    Note: Threading backend is used for fallback parallelism. If device is not thread-safe,
+    set n_jobs=1 to force sequential execution.
+    """
 
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
@@ -157,6 +161,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
+        
+        # Cache the qnode once; reuse to avoid repeated re-creation overhead
+        self._qcircuit = self._get_circuit()
 
         # Quantum weights - measurements from all qubits
         self.n_meas = self.n_qubits
@@ -204,8 +211,12 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         return logits
 
     def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
+        """Batched wrapper: try true batched qnode first, otherwise parallel per-sample.
+
+        Returns:
+            np.ndarray shape (N, n_meas)
+        """
+        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -213,23 +224,31 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             qout = qcircuit(X_arr, weights)
             return np.asarray(qout, dtype=np.float64).reshape(1, -1)
 
-        # Try batched call (fast path)
+        # Empty batch
+        if X_arr.shape[0] == 0:
+            return np.empty((0, self.n_meas), dtype=np.float64)
+
         N = X_arr.shape[0]
+
+        # Fast path: try batched call
         try:
             qouts = qcircuit(X_arr, weights)
             qouts = np.asarray(qouts, dtype=np.float64)
             if qouts.ndim == 2 and qouts.shape[0] == N:
+                log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall back
-        except Exception:
-            pass
+            # else fall through
+        except Exception as e:
+            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
 
-        # Parallel fallback (threading backend avoids pickling the qnode)
+        # Parallel fallback (threading avoids pickling qcircuit)
         n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
         results = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(qcircuit)(X_arr[i], weights) for i in range(N)
         )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        return stacked
 
     def _softmax(self, x):
         """Numerically stable softmax. Accepts 1D (K,) or 2D (N, K)."""
@@ -273,6 +292,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             }
         )
         
+        # Ensure X is at least 2D to avoid per-iteration type surprises
+        X = np.atleast_2d(np.asarray(X, dtype=np.float64))
+        
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train, X_val, y_train, y_val = train_test_split(
@@ -281,11 +303,13 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         else:
             X_train, X_val, y_train, y_val = X, None, y, None
         
+        # Ensure validation data is also at least 2D
+        if X_val is not None:
+            X_val = np.atleast_2d(np.asarray(X_val, dtype=np.float64))
+        
         y_train_one_hot = np.eye(self.n_classes)[y_train]
         if y_val is not None:
             y_val_one_hot = np.eye(self.n_classes)[y_val]
-        
-        qcircuit = self._get_circuit()
         
         # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
@@ -562,6 +586,9 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Multiclass VQC for pre-processed, dense data with classical readout.
     
+    Note: Threading backend is used for fallback parallelism. If device is not thread-safe,
+    set n_jobs=1 to force sequential execution.
+    
     Args:
         n_qubits (int): Number of qubits in the quantum circuit.
         n_layers (int): Number of ansatz layers.
@@ -616,6 +643,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         
+        # Cache the qnode once; reuse to avoid repeated re-creation overhead
+        self._qcircuit = self._get_circuit()
+        
         # Quantum weights - measurements from all qubits
         self.n_meas = self.n_qubits
         self.weights = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -663,8 +693,12 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         return logits
 
     def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
+        """Batched wrapper: try true batched qnode first, otherwise parallel per-sample.
+
+        Returns:
+            np.ndarray shape (N, n_meas)
+        """
+        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -672,23 +706,31 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             qout = qcircuit(X_arr, weights)
             return np.asarray(qout, dtype=np.float64).reshape(1, -1)
 
-        # Try batched call (fast path)
+        # Empty batch
+        if X_arr.shape[0] == 0:
+            return np.empty((0, self.n_meas), dtype=np.float64)
+
         N = X_arr.shape[0]
+
+        # Fast path: try batched call
         try:
             qouts = qcircuit(X_arr, weights)
             qouts = np.asarray(qouts, dtype=np.float64)
             if qouts.ndim == 2 and qouts.shape[0] == N:
+                log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall back
-        except Exception:
-            pass
+            # else fall through
+        except Exception as e:
+            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
 
-        # Parallel fallback (threading backend avoids pickling the qnode)
+        # Parallel fallback (threading avoids pickling qcircuit)
         n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
         results = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(qcircuit)(X_arr[i], weights) for i in range(N)
         )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        return stacked
 
     def _softmax(self, x):
         """Numerically stable softmax.
@@ -740,6 +782,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             }
         )
         
+        # Ensure X is at least 2D to avoid per-iteration type surprises
+        X = np.atleast_2d(np.asarray(X, dtype=np.float64))
+        
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train, X_val, y_train, y_val = train_test_split(
@@ -748,11 +793,13 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         else:
             X_train, X_val, y_train, y_val = X, None, y, None
         
+        # Ensure validation data is also at least 2D
+        if X_val is not None:
+            X_val = np.atleast_2d(np.asarray(X_val, dtype=np.float64))
+        
         y_train_one_hot = np.eye(self.n_classes)[y_train]
         if y_val is not None:
             y_val_one_hot = np.eye(self.n_classes)[y_val]
-        
-        qcircuit = self._get_circuit()
         
         # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
@@ -1031,6 +1078,9 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     """Conditional Multiclass QVC that expects pre-processed tuple input with classical readout.
     
+    Note: Threading backend is used for fallback parallelism. If device is not thread-safe,
+    set n_jobs=1 to force sequential execution.
+    
     Args:
         n_qubits (int): Number of qubits in the quantum circuit.
         n_layers (int): Number of ansatz layers.
@@ -1085,6 +1135,9 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
         
+        # Cache the qnode once; reuse to avoid repeated re-creation overhead
+        self._qcircuit = self._get_circuit()
+        
         # Quantum weights - measurements from all qubits
         self.n_meas = self.n_qubits
         self.weights_ansatz = np.random.uniform(0, 2 * np.pi, (self.n_layers, self.n_qubits), requires_grad=True)
@@ -1137,8 +1190,12 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         return logits
 
     def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
+        """Batched wrapper: try true batched qnode first, otherwise parallel per-sample.
+
+        Returns:
+            np.ndarray shape (N, n_meas)
+        """
+        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1146,23 +1203,31 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
             qout = qcircuit(X_arr, weights)
             return np.asarray(qout, dtype=np.float64).reshape(1, -1)
 
-        # Try batched call (fast path)
+        # Empty batch
+        if X_arr.shape[0] == 0:
+            return np.empty((0, self.n_meas), dtype=np.float64)
+
         N = X_arr.shape[0]
+
+        # Fast path: try batched call
         try:
             qouts = qcircuit(X_arr, weights)
             qouts = np.asarray(qouts, dtype=np.float64)
             if qouts.ndim == 2 and qouts.shape[0] == N:
+                log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall back
-        except Exception:
-            pass
+            # else fall through
+        except Exception as e:
+            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
 
-        # Parallel fallback (threading backend avoids pickling the qnode)
+        # Parallel fallback (threading avoids pickling qcircuit)
         n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
         results = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(qcircuit)(X_arr[i], weights) for i in range(N)
         )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        return stacked
 
     def _softmax(self, x):
         """Numerically stable softmax.
@@ -1520,6 +1585,9 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
 class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, ClassifierMixin):
     """Data Re-uploading Conditional Multiclass QVC with classical readout.
     
+    Note: Threading backend is used for fallback parallelism. If device is not thread-safe,
+    set n_jobs=1 to force sequential execution.
+    
     Args:
         n_qubits (int): Number of qubits in the quantum circuit.
         n_layers (int): Number of ansatz layers.
@@ -1573,6 +1641,9 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
+        
+        # Cache the qnode once; reuse to avoid repeated re-creation overhead
+        self._qcircuit = self._get_circuit()
         
         # Quantum weights - measurements from all qubits
         self.n_meas = self.n_qubits
@@ -1629,8 +1700,12 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         return logits
 
     def _batched_qcircuit(self, X, weights, n_jobs=None):
-        """Batched wrapper that tries a true batched qnode call first, otherwise parallel per-sample."""
-        qcircuit = self._get_circuit()
+        """Batched wrapper: try true batched qnode first, otherwise parallel per-sample.
+
+        Returns:
+            np.ndarray shape (N, n_meas)
+        """
+        qcircuit = getattr(self, "_qcircuit", None) or self._get_circuit()
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1638,23 +1713,31 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             qout = qcircuit(X_arr, weights)
             return np.asarray(qout, dtype=np.float64).reshape(1, -1)
 
-        # Try batched call (fast path)
+        # Empty batch
+        if X_arr.shape[0] == 0:
+            return np.empty((0, self.n_meas), dtype=np.float64)
+
         N = X_arr.shape[0]
+
+        # Fast path: try batched call
         try:
             qouts = qcircuit(X_arr, weights)
             qouts = np.asarray(qouts, dtype=np.float64)
             if qouts.ndim == 2 and qouts.shape[0] == N:
+                log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall back
-        except Exception:
-            pass
+            # else fall through
+        except Exception as e:
+            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
 
-        # Parallel fallback (threading backend avoids pickling the qnode)
+        # Parallel fallback (threading avoids pickling qcircuit)
         n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
         results = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(qcircuit)(X_arr[i], weights) for i in range(N)
         )
-        return np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        return stacked
 
     def _softmax(self, x):
         """Numerically stable softmax.
