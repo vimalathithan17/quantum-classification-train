@@ -100,7 +100,7 @@ Training scripts now support `--validation_frequency` (default: 10) to control h
 ### Weights & Biases Integration
 
 All training scripts now support Weights & Biases (W&B) integration for experiment tracking:
-- **Required dependency:** W&B is included in requirements.txt and imported at module level (only initialized when enabled)
+- **Required dependency:** W&B is included in requirements.txt and imported at module level, but only initialized when the `--use_wandb` flag is used
 - **Automatic metric logging:** When enabled with `--use_wandb`, validation metrics are automatically logged to W&B during training
 - **Organized experiments:** Use `--wandb_project` and `--wandb_run_name` to organize experiments in your W&B workspace
 - **No code changes required:** Simply add the CLI flags to enable W&B logging
