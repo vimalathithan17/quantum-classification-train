@@ -75,12 +75,13 @@ def predict_proba(self, X):
 ```python
 def predict_proba(self, X):
     """Predict class probabilities using quantum circuit and classical readout."""
-    # Ensure X is a batch: shape (N, features)
-    X = np.atleast_2d(np.asarray(X))
+    X_arr = np.asarray(X, dtype=np.float64)
+    # ensure batch shape without copying
+    X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D -> unchanged
     qcircuit = self._get_circuit()
     
     # compute quantum outputs for each sample
-    quantum_outputs = [qcircuit(x, self.weights) for x in X]
+    quantum_outputs = [qcircuit(x, self.weights) for x in X_batch]
     
     # apply classical readout per sample
     logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
@@ -93,7 +94,9 @@ def predict_proba(self, X):
 ```
 
 **Improvements:**
-- `np.atleast_2d(np.asarray(X))` ensures single samples are treated as batches
+- Explicit `np.asarray(X, dtype=np.float64)` with dtype conversion up front
+- `np.atleast_2d(X_arr)` ensures single samples are treated as batches without copying
+- Clear comment explaining the transformation behavior
 - `np.vstack()` instead of `np.array()` for guaranteed shape consistency
 - Explicit `.astype(np.float64)` for type safety
 - Single softmax call on the full batch (more efficient)
@@ -128,15 +131,17 @@ For `ConditionalMulticlassQuantumClassifierFS` and `ConditionalMulticlassQuantum
 def predict_proba(self, X):
     """Predict class probabilities using quantum circuit and classical readout."""
     X_scaled, is_missing_mask = X
-    # Ensure inputs are batches
-    X_scaled = np.atleast_2d(np.asarray(X_scaled))
-    is_missing_mask = np.atleast_2d(np.asarray(is_missing_mask))
+    X_scaled_arr = np.asarray(X_scaled, dtype=np.float64)
+    is_missing_arr = np.asarray(is_missing_mask, dtype=np.float64)
+    # ensure batch shape without copying
+    X_scaled_batch = np.atleast_2d(X_scaled_arr)   # 1D -> (1, K), 2D -> unchanged
+    is_missing_batch = np.atleast_2d(is_missing_arr)   # 1D -> (1, K), 2D -> unchanged
     
     qcircuit = self._get_circuit()
     
     # compute quantum outputs for each sample
     quantum_outputs = [qcircuit(f, m, self.weights_ansatz, self.weights_missing) 
-                      for f, m in zip(X_scaled, is_missing_mask)]
+                      for f, m in zip(X_scaled_batch, is_missing_batch)]
     
     # apply classical readout per sample
     logits_list = [self._classical_readout(qout) for qout in quantum_outputs]
