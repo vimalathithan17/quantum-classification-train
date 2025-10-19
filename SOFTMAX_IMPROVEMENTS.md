@@ -39,7 +39,7 @@ def _softmax(self, x):
         return exp_shift / np.sum(exp_shift)
     elif X.ndim == 2:
         # batch: subtract max per row for numerical stability
-        shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,1)
+        shift = X - np.max(X, axis=1, keepdims=True)    # shape (N,K) after broadcasting
         exp_shift = np.exp(shift)                        # shape (N,K)
         return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)  # shape (N,K)
     else:
@@ -210,8 +210,8 @@ The changes are **backward compatible** for code that:
 - Passes 2D arrays (batches) to predict_proba
 - Uses predict_proba output with axis=1 operations
 
-**Breaking changes** (improvements):
+**API changes** (intended improvements):
 - Single sample predictions now return shape (1, K) instead of (K,)
 - predict() now returns shape (1,) for single samples instead of scalar
 
-These are actually improvements that make the API more consistent.
+These changes improve API consistency across all input types. Users who rely on the previous single-sample behavior will need to adjust by accessing the first element (e.g., `probs[0]` or `pred[0]`).
