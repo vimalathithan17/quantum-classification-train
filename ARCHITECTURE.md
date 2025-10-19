@@ -27,7 +27,9 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
 - **Process:** Using Optuna, this script runs a series of trials for a specified data type (`--datatype`), architectural approach (`--approach`), and QML model (`--qml_model`). It uses `StratifiedKFold` cross-validation to robustly evaluate each parameter set.
 - **Output:** A JSON file (e.g., `tuning_results/best_params_..._CNV_app1_...json`) for each tuned configuration, containing the best-performing parameters.
 
-**Stage 3: Base-Learner Training (`dre_*.py`, `cfe_*.py`)**
+**Stage 3: Base-Learner Training**
+- **Approaches:** Dimensionality Reduction Encoding (DRE) and Conditional Feature Encoding (CFE)
+- **Scripts:** `dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`
 - **Purpose:** To train specialized "expert" models for each data type using the best parameters found in Stage 2.
 - **Process:** The four training scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`) iterate through all available data types. For each one, they:
     1. Find the corresponding `best_params_*.json` file.

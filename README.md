@@ -569,7 +569,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- Note: For Approach 2 (Conditional Feature Encoding) feature selection is performed using a LightGBM classifier to compute feature importances; the top-k important features (k = number of qubits) are selected per fold and for the final model. `SelectKBest` is no longer used for Approach 2.
 
 
-3) `dre_standard.py` and `dre_relupload.py`
+3) `dre_standard.py` and `dre_relupload.py` — Dimensionality Reduction Encoding (DRE)
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
@@ -594,7 +594,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 
-4) `cfe_standard.py` and `cfe_relupload.py`
+4) `cfe_standard.py` and `cfe_relupload.py` — Conditional Feature Encoding (CFE)
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
