@@ -362,20 +362,19 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         while True:
             # Define cost function with all parameters
             def cost(w_quantum, w1, b1, w2, b2):
-                quantum_outputs = np.array([qcircuit(x, w_quantum) for x in X_train])
-                
-                # Apply classical readout to each sample
-                logits_list = []
-                for qout in quantum_outputs:
-                    hidden = np.tanh(np.dot(qout, w1) + b1) if self.readout_activation == 'tanh' else np.dot(qout, w1) + b1
-                    logits = np.dot(hidden, w2) + b2
-                    logits_list.append(logits)
-                
-                logits_array = np.array(logits_list)
-                probabilities = np.array([self._softmax(logit) for logit in logits_array])
-                
-                # Cross-entropy loss
-                loss = -np.mean(y_train_one_hot * np.log(probabilities + 1e-9))
+                # get batched quantum outputs: shape (N_train, n_meas)
+                quantum_outputs = self._batched_qcircuit(X_train, w_quantum)
+
+                # vectorized classical readout using stored activation callable
+                hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
+                logits_array = np.dot(hidden, w2) + b2                          # (N_train, n_classes)
+
+                # batch softmax -> (N_train, n_classes)
+                probabilities = self._softmax(logits_array)
+
+                # Cross-entropy loss: sum over classes per sample, then mean
+                eps = 1e-9
+                loss = -np.mean(np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1))
                 return loss
             
             # Update all parameters jointly
@@ -397,15 +396,11 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                     val_metrics = compute_metrics(y_val, val_preds, self.n_classes)
                     
                     # Compute validation loss
-                    val_quantum_outputs = np.array([qcircuit(x, self.weights) for x in X_val])
-                    val_logits_list = []
-                    for qout in val_quantum_outputs:
-                        hidden = np.tanh(np.dot(qout, self.W1) + self.b1) if self.readout_activation == 'tanh' else np.dot(qout, self.W1) + self.b1
-                        logits = np.dot(hidden, self.W2) + self.b2
-                        val_logits_list.append(logits)
-                    val_logits_array = np.array(val_logits_list)
-                    val_probs = np.array([self._softmax(logit) for logit in val_logits_array])
-                    val_loss = -np.mean(y_val_one_hot * np.log(val_probs + 1e-9))
+                    val_quantum_outputs = self._batched_qcircuit(X_val, self.weights)  # (N_val, n_meas)
+                    val_hidden = self._activation_fn(np.dot(val_quantum_outputs, self.W1) + self.b1)
+                    val_logits_array = np.dot(val_hidden, self.W2) + self.b2
+                    val_probs = self._softmax(val_logits_array)
+                    val_loss = -np.mean(np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1))
                     
                     history['val_loss'].append(float(val_loss))
                     history['val_acc'].append(val_metrics['accuracy'])
@@ -536,13 +531,10 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
         """
         X_arr = np.asarray(X, dtype=np.float64)
-        if X_arr.ndim == 1:
-            # single sample -> shape (1, features)
-            X_batch = X_arr.reshape(1, -1)
-        elif X_arr.ndim == 2:
-            X_batch = X_arr
-        else:
-            raise ValueError("X must be 1D or 2D array of features")
+        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D unchanged
+        # optional: handle empty batch
+        if X_batch.shape[0] == 0:
+            return np.empty((0, self.n_classes), dtype=np.float64)
 
         # get quantum outputs shape (N, n_meas)
         quantum_outputs = self._batched_qcircuit(X_batch, self.weights)
@@ -837,20 +829,19 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         while True:
             # Define cost function with all parameters
             def cost(w_quantum, w1, b1, w2, b2):
-                quantum_outputs = np.array([qcircuit(x, w_quantum) for x in X_train])
-                
-                # Apply classical readout to each sample
-                logits_list = []
-                for qout in quantum_outputs:
-                    hidden = np.tanh(np.dot(qout, w1) + b1) if self.readout_activation == 'tanh' else np.dot(qout, w1) + b1
-                    logits = np.dot(hidden, w2) + b2
-                    logits_list.append(logits)
-                
-                logits_array = np.array(logits_list)
-                probabilities = np.array([self._softmax(logit) for logit in logits_array])
-                
-                # Cross-entropy loss
-                loss = -np.mean(y_train_one_hot * np.log(probabilities + 1e-9))
+                # get batched quantum outputs: shape (N_train, n_meas)
+                quantum_outputs = self._batched_qcircuit(X_train, w_quantum)
+
+                # vectorized classical readout using stored activation callable
+                hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)  # (N_train, hidden)
+                logits_array = np.dot(hidden, w2) + b2                          # (N_train, n_classes)
+
+                # batch softmax -> (N_train, n_classes)
+                probabilities = self._softmax(logits_array)
+
+                # Cross-entropy loss: sum over classes per sample, then mean
+                eps = 1e-9
+                loss = -np.mean(np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1))
                 return loss
             
             # Update all parameters jointly
@@ -872,15 +863,11 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                     val_metrics = compute_metrics(y_val, val_preds, self.n_classes)
                     
                     # Compute validation loss
-                    val_quantum_outputs = np.array([qcircuit(x, self.weights) for x in X_val])
-                    val_logits_list = []
-                    for qout in val_quantum_outputs:
-                        hidden = np.tanh(np.dot(qout, self.W1) + self.b1) if self.readout_activation == 'tanh' else np.dot(qout, self.W1) + self.b1
-                        logits = np.dot(hidden, self.W2) + self.b2
-                        val_logits_list.append(logits)
-                    val_logits_array = np.array(val_logits_list)
-                    val_probs = np.array([self._softmax(logit) for logit in val_logits_array])
-                    val_loss = -np.mean(y_val_one_hot * np.log(val_probs + 1e-9))
+                    val_quantum_outputs = self._batched_qcircuit(X_val, self.weights)  # (N_val, n_meas)
+                    val_hidden = self._activation_fn(np.dot(val_quantum_outputs, self.W1) + self.b1)
+                    val_logits_array = np.dot(val_hidden, self.W2) + self.b2
+                    val_probs = self._softmax(val_logits_array)
+                    val_loss = -np.mean(np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1))
                     
                     history['val_loss'].append(float(val_loss))
                     history['val_acc'].append(val_metrics['accuracy'])
@@ -1011,13 +998,10 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         Always returns a 2D array: (N, n_classes). For a single sample input it returns shape (1, n_classes).
         """
         X_arr = np.asarray(X, dtype=np.float64)
-        if X_arr.ndim == 1:
-            # single sample -> shape (1, features)
-            X_batch = X_arr.reshape(1, -1)
-        elif X_arr.ndim == 2:
-            X_batch = X_arr
-        else:
-            raise ValueError("X must be 1D or 2D array of features")
+        X_batch = np.atleast_2d(X_arr)   # 1D -> (1, K), 2D unchanged
+        # optional: handle empty batch
+        if X_batch.shape[0] == 0:
+            return np.empty((0, self.n_classes), dtype=np.float64)
 
         # get quantum outputs shape (N, n_meas)
         quantum_outputs = self._batched_qcircuit(X_batch, self.weights)
