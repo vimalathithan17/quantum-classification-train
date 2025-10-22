@@ -221,6 +221,19 @@ def _classical_readout(self, quantum_output):
 
 The classical parameters are included in the optimizer state and checkpointing system, ensuring they are properly saved and restored during training.
 
+### Pickling and QNode caching
+
+The QML model classes use a cached PennyLane QNode to avoid repeated re-creation overhead. Because the cached QNode is a nested function (a closure), it isn't picklable by default. To support model persistence with `joblib`/pickle and reliable serialization across processes, the classes implement custom `__getstate__` and `__setstate__` methods:
+
+- `__getstate__`: Removes the non-picklable `_qcircuit` (the cached QNode) and the stored `_activation_fn` callable from the instance state before pickling. This produces a pickle-friendly state that contains all numeric parameters (quantum weights, classical weights and optimizer state) but not the runtime QNode object.
+- `__setstate__`: Restores the numeric state and lazily recreates the cached QNode by calling the model's `_get_circuit()` factory. It also reinitializes the activation callable based on the `readout_activation` string.
+
+This design ensures pickled models are portable and can be unpickled in environments where PennyLane is available; if the device/QNode cannot be recreated during unpickle, the code falls back gracefully by setting the `_qcircuit` attribute to `None` and recreating it later on first use.
+
+Practical notes:
+- When saving models with `joblib.dump`, the saved file will contain all numeric parameters and can be safely reloaded with `joblib.load`. The cached QNode is recreated on-demand when the model is used (for inference or further training).
+- The activation function is restored from the configuration string (`readout_activation`) rather than pickling the callable itself to maximize portability.
+
 ---
 
 ## ⚡ Batched Evaluation Optimization
@@ -245,26 +258,26 @@ All quantum models have been optimized with efficient batched evaluation to sign
      ```
 
 2. **Batched Quantum Circuit Execution:**
-   - The `_batched_qcircuit` method provides intelligent batching:
-     ```python
-     def _batched_qcircuit(self, X, weights, n_jobs=None):
-         # Try true batched call first (fast path)
-         try:
-             qouts = qcircuit(X_batch, weights)
-             if qouts.ndim == 2:  # Successfully batched
-                 return qouts
-         except:
-             pass
-         
-         # Fallback to threaded parallel execution
-         results = Parallel(n_jobs=n_jobs, backend='threading')(
-             delayed(qcircuit)(X[i], weights) for i in range(N)
-         )
-         return np.vstack(results)
-     ```
-   - Attempts native batched execution first for maximum speed
-   - Falls back to threaded parallel execution when batching not supported
-   - Threading backend avoids pickling overhead (important for quantum circuits)
+  - The `_batched_qcircuit` method implements a two-stage strategy to maximize performance while remaining portable:
+    ```python
+    def _batched_qcircuit(self, X, weights, n_jobs=None):
+        # Fast-path: try true batched call first
+        try:
+            qouts = qcircuit(X_batch, weights)
+            qouts = np.asarray(qouts, dtype=np.float64)
+            if qouts.ndim == 2 and qouts.shape[0] == N:
+                return qouts
+        except Exception:
+            pass
+
+        # Sequential per-sample fallback (safe across devices)
+        results = [qcircuit(X_arr[i], weights) for i in range(N)]
+        stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
+        return stacked
+    ```
+  - Attempts native batched execution first for maximum speed
+  - Falls back to sequential per-sample evaluation when batched execution is not available or fails
+  - The sequential fallback is robust across PennyLane devices and avoids device-specific batching issues; it trades parallelism for correctness and portability
 
 3. **Stored Activation Functions:**
    - Activation functions stored as callables during initialization:
@@ -295,10 +308,10 @@ All quantum models have been optimized with efficient batched evaluation to sign
 
 ### Performance Benefits
 
-- **Training Speed:** 2-5x faster depending on batch size and model complexity
+- **Training Speed:** 2-5x faster depending on batch size and model complexity (on devices that support batching)
 - **Memory Efficiency:** Better memory access patterns with contiguous arrays
-- **Scalability:** Performance improvements increase with larger batch sizes
-- **Resource Utilization:** Threaded fallback efficiently uses multiple cores
+- **Scalability:** Performance improvements increase with larger batch sizes when the device supports batching
+- **Robustness:** The sequential fallback ensures correct behavior on devices without batched support or when batched execution fails
 
 ### Implementation Details
 
@@ -312,9 +325,8 @@ The optimizations are completely internal - all external APIs remain unchanged, 
 
 ### Configurable Parameters
 
-- **`n_jobs`:** Number of parallel jobs for fallback execution (default: -1 for all cores)
-  - Only used when batched execution is not available
-  - Threading backend used to avoid pickling overhead
+    - **`n_jobs`:** Reserved parameter for parallel fallback (present for backwards compatibility).
+        - The current implementation falls back to sequential per-sample evaluation when batching is unavailable. `n_jobs` is accepted by the API but is not used by the sequential fallback. It may be reintroduced in future versions if a safe parallel fallback is implemented.
 
 ---
 
@@ -556,11 +568,13 @@ python cfe_relupload.py --max_training_time 8 --checkpoint_frequency 25
   - Specificity (macro and weighted)
   - Confusion matrix per epoch
 
-**Outputs:**
-1. **CSV Export:** `history.csv` containing all metrics per epoch
-2. **Automatic Plots:**
-   - Loss curves (training and validation)
-   - F1 score curves (macro and weighted)
+**Output:** 
+    - Final trained meta-learner model as saved by the training script: `metalearner_model.joblib`
+    - Meta-learner scaler: `metalearner_scaler.joblib`
+    - Best hyperparameters if tuning was run: `best_metalearner_params.json`
+    - Per-trial comprehensive metrics during tuning: `trial_{trial_id}/metrics.json`
+
+Note: the inference helper (`inference.py`) expects a slightly different deployment layout: it looks for `meta_learner_final.joblib` and a JSON file `meta_learner_columns.json` that contains the exact column order used to train the meta-learner. The training script writes `metalearner_model.joblib`; before running `inference.py` you should create a deployment directory and copy/rename these artifacts so they match what `inference.py` expects (see README for exact commands).
    - Precision/recall curves
    - PNG format, saved to model directory
 

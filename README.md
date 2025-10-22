@@ -39,6 +39,28 @@ All quantum models now use efficient batched evaluation for improved performance
 - **Performance benefits:** Significantly faster training and inference, especially for larger batch sizes
 - **Backward compatible:** All external APIs remain unchanged; optimizations are internal
 
+### Pickling and QNode caching (important for saving/loading models)
+
+The quantum model classes cache a PennyLane QNode instance to avoid the overhead of re-creating it at every call. Since QNodes are not always picklable (especially if they are nested closures), the classes implement `__getstate__` and `__setstate__` to make model pickling robust:
+
+- `__getstate__`: Removes the cached `_qcircuit` QNode and any non-picklable callables (for example the stored `_activation_fn`) from the object's state before pickling. Numeric arrays and parameters (quantum weights, classical readout weights, biases) remain in the pickled state.
+- `__setstate__`: Restores the saved numeric state and attempts to recreate the cached QNode by calling the model's `_get_circuit()` factory. If the QNode or device cannot be recreated (e.g., PennyLane not installed in the target environment), `_qcircuit` is set to `None` and the object will recreate or fail gracefully later when used.
+
+This strategy makes `joblib.dump`/`joblib.load` and other pickle-based workflows safe and portable while preserving the runtime performance benefit of a cached QNode.
+
+### Batched QNode fast-path with sequential fallback
+
+`qml_models.py` implements a two-stage batched evaluation strategy in `_batched_qcircuit`:
+
+1. Fast-path batched call: The code attempts to call the QNode with an entire batch (shape (N, n_features)). If the device and QNode support batched execution (many PennyLane devices do), this is used and is the fastest path.
+2. Sequential fallback: If the batched call raises an exception or returns an unexpected shape, the code falls back to sequential per-sample evaluation by iterating through the batch and invoking the QNode for each sample. This fallback is safe for all QNodes and avoids rare device/serialization issues.
+
+Practical details:
+- The function also handles single-sample inputs and empty batches explicitly.
+- The fallback keeps code simple and robust: it avoids heavy pickling/parallelization overhead (no thread pool unless required) and ensures correct behavior across different PennyLane devices and versions.
+
+This combination yields good performance on devices that support true batching while retaining portability and correctness when batched evaluation is not available.
+
 ### Serializable Adam Optimizer
 A custom Adam optimizer with state persistence:
 - Full save/restore of optimizer state (momentum, velocity, timestep)
@@ -497,12 +519,12 @@ Notes:
 - **Per-Trial Artifacts:** Each trial saves comprehensive metrics to `final_model_and_predictions/trial_{trial_id}/metrics.json`
 
 Outputs (saved to `final_model_and_predictions/` by default):
-- `metalearner_model.joblib`
-- `metalearner_scaler.joblib`
+- `metalearner_model.joblib` (final trained meta-learner saved by `metalearner.py`)
+- `metalearner_scaler.joblib` (scaler used on meta-features)
 - `best_metalearner_params.json` (if tuning was run)
 - `trial_{trial_id}/metrics.json` (per-trial comprehensive metrics during tuning)
 
-Note: The default OUTPUT_DIR for metalearner.py is `final_model_and_predictions`. For inference, you'll need to manually copy/rename files to match what `inference.py` expects (see Step 6).
+Note: The default OUTPUT_DIR for `metalearner.py` is `final_model_and_predictions`. `metalearner.py` saves the meta-learner as `metalearner_model.joblib`, but the inference script `inference.py` expects the deployment directory to contain `meta_learner_final.joblib` and a `meta_learner_columns.json` file describing the exact column order used during meta-learner training. See Step 6 for the required copy/rename steps.
 
 ### 6) Prepare deployment directory and run inference on a new patient
 
@@ -515,13 +537,23 @@ Example:
 ```bash
 mkdir -p final_model_deployment
 
-# Meta learner + metadata (note the file renaming)
+# Meta learner + metadata (note the file renaming expected by `inference.py`)
+# `metalearner.py` writes `metalearner_model.joblib` to the OUTPUT_DIR. `inference.py` expects
+# `meta_learner_final.joblib` in the deployment directory, so copy-and-rename when preparing deployment:
 cp final_model_and_predictions/metalearner_model.joblib final_model_deployment/meta_learner_final.joblib
+cp final_model_and_predictions/metalearner_scaler.joblib final_model_deployment/metalearner_scaler.joblib
 cp master_label_encoder/label_encoder.joblib final_model_deployment/
 
-# You also need to create meta_learner_columns.json manually with the column order
-# This file should contain a JSON array of the column names in the exact order used during training
-# Example content: ["pred_CNV_BRCA", "pred_CNV_LUAD", ..., "is_missing_CNV", ...]
+# Create `meta_learner_columns.json` with the column order used during training.
+# This is a JSON array of column names (strings) that exactly matches the column order the meta-learner
+# was trained on. Typical columns are per-base-learner probability columns plus missingness flags.
+# Example content:
+# ["pred_CNV_BRCA", "pred_CNV_LUAD", "pred_Prot_BRCA", ..., "is_missing_CNV", "is_missing_Prot"]
+
+# If you want to automate generating `meta_learner_columns.json`, one approach is to reconstruct it from
+# the OOF prediction CSVs used for training (they contain column names in the required format). For a quick
+# manual workflow, copy the header row from one of the `train_oof_preds_*.csv` files (or concat them and add
+# any indicator columns) into a JSON array in the same order used during training.
 
 # Copy selected base learner artifacts (examples):
 cp base_learner_outputs_app1_standard/pipeline_CNV.joblib final_model_deployment/
