@@ -201,6 +201,35 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
         return qcircuit
 
+    def __getstate__(self):
+        """Prevent pickling of the cached QNode (nested function)."""
+        state = self.__dict__.copy()
+        # _qcircuit (a QNode) is not picklable when it's a nested function; remove it
+        state.pop('_qcircuit', None)
+        # _activation_fn may be a wrapped numpy/pennylane function (non-picklable); remove and recreate on unpickle
+        state.pop('_activation_fn', None)
+        return state
+
+    def __setstate__(self, state):
+        # Restore state and recreate cached QNode lazily
+        self.__dict__.update(state)
+        try:
+            self._qcircuit = self._get_circuit()
+        except Exception:
+            # If device or pennylane isn't available during unpickle, set to None
+            self._qcircuit = None
+        # Recreate activation callable from readout_activation
+        try:
+            if getattr(self, 'readout_activation', 'tanh') == 'tanh':
+                self._activation_fn = np.tanh
+            elif getattr(self, 'readout_activation', None) == 'relu':
+                self._activation_fn = relu
+            else:
+                self._activation_fn = identity
+        except Exception:
+            # Fallback
+            self._activation_fn = identity
+
     def _activation(self, x):
         """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
         return self._activation_fn(x)
@@ -218,7 +247,11 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = self._qcircuit
+        qcircuit = getattr(self, '_qcircuit', None)
+        if qcircuit is None:
+            qcircuit = self._get_circuit()
+            self._qcircuit = qcircuit
+
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -239,16 +272,13 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             if qouts.ndim == 2 and qouts.shape[0] == N:
                 log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall through
+            # else fall through to sequential
         except Exception as e:
-            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
+            log.debug(f"qcircuit batched call failed, triggering fallback to sequential evaluation: {e}")
 
-        # Parallel fallback (threading avoids pickling qcircuit)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
+        # Fallback: sequential per-sample evaluation (safe for PennyLane qnodes)
+        log.debug("Falling back to sequential per-sample QNode evaluation")
+        results = [qcircuit(X_arr[i], weights) for i in range(N)]
         stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
         return stacked
 
@@ -700,6 +730,28 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             # Measure all qubits for classical readout
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
         return qcircuit
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('_qcircuit', None)
+        state.pop('_activation_fn', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        try:
+            self._qcircuit = self._get_circuit()
+        except Exception:
+            self._qcircuit = None
+        try:
+            if getattr(self, 'readout_activation', 'tanh') == 'tanh':
+                self._activation_fn = np.tanh
+            elif getattr(self, 'readout_activation', None) == 'relu':
+                self._activation_fn = relu
+            else:
+                self._activation_fn = identity
+        except Exception:
+            self._activation_fn = identity
     
     def _activation(self, x):
         """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
@@ -718,7 +770,11 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = self._qcircuit
+        qcircuit = getattr(self, '_qcircuit', None)
+        if qcircuit is None:
+            qcircuit = self._get_circuit()
+            self._qcircuit = qcircuit
+
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -739,16 +795,13 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
             if qouts.ndim == 2 and qouts.shape[0] == N:
                 log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall through
+            # else fall through to sequential
         except Exception as e:
-            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
+            log.debug(f"qcircuit batched call failed, triggering fallback to sequential evaluation: {e}")
 
-        # Parallel fallback (threading avoids pickling qcircuit)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
+        # Fallback: sequential per-sample evaluation (safe for PennyLane qnodes)
+        log.debug("Falling back to sequential per-sample QNode evaluation")
+        results = [qcircuit(X_arr[i], weights) for i in range(N)]
         stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
         return stacked
 
@@ -1215,6 +1268,28 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
             # Measure all qubits for classical readout
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
         return qcircuit
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('_qcircuit', None)
+        state.pop('_activation_fn', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        try:
+            self._qcircuit = self._get_circuit()
+        except Exception:
+            self._qcircuit = None
+        try:
+            if getattr(self, 'readout_activation', 'tanh') == 'tanh':
+                self._activation_fn = np.tanh
+            elif getattr(self, 'readout_activation', None) == 'relu':
+                self._activation_fn = relu
+            else:
+                self._activation_fn = identity
+        except Exception:
+            self._activation_fn = identity
     
     def _activation(self, x):
         """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
@@ -1233,7 +1308,10 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = self._qcircuit
+        qcircuit = getattr(self, '_qcircuit', None)
+        if qcircuit is None:
+            qcircuit = self._get_circuit()
+            self._qcircuit = qcircuit
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1256,14 +1334,11 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 return qouts
             # else fall through
         except Exception as e:
-            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
+            log.debug(f"qcircuit batched call failed, triggering fallback to sequential evaluation: {e}")
 
-        # Parallel fallback (threading avoids pickling qcircuit)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
+        # Fallback: sequential per-sample evaluation (safe for PennyLane qnodes)
+        log.debug("Falling back to sequential per-sample QNode evaluation")
+        results = [qcircuit(X_arr[i], weights) for i in range(N)]
         stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
         return stacked
 
@@ -1341,7 +1416,10 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
         # Use cached qnode for this fit session
-        qcircuit = self._qcircuit
+        qcircuit = getattr(self, '_qcircuit', None)
+        if qcircuit is None:
+            qcircuit = self._get_circuit()
+            self._qcircuit = qcircuit
         
         # Initialize training history
         history = {
@@ -1432,10 +1510,10 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                         raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
-                # Apply classical readout to each sample
+                # Apply classical readout to each sample using unified activation callable
                 logits_list = []
                 for qout in quantum_outputs:
-                    hidden = np.tanh(np.dot(qout, w1) + b1) if self.readout_activation == 'tanh' else np.dot(qout, w1) + b1
+                    hidden = self._activation_fn(np.dot(qout, w1) + b1)
                     logits = np.dot(hidden, w2) + b2
                     logits_list.append(logits)
                 
@@ -1469,7 +1547,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                                                    for f, m in zip(X_val_scaled, mask_val)])
                     val_logits_list = []
                     for qout in val_quantum_outputs:
-                        hidden = np.tanh(np.dot(qout, self.W1) + self.b1) if self.readout_activation == 'tanh' else np.dot(qout, self.W1) + self.b1
+                        hidden = self._activation_fn(np.dot(qout, self.W1) + self.b1)
                         logits = np.dot(hidden, self.W2) + self.b2
                         val_logits_list.append(logits)
                     val_logits_array = np.array(val_logits_list)
@@ -1742,6 +1820,28 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             # Measure all qubits for classical readout
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
         return qcircuit
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('_qcircuit', None)
+        state.pop('_activation_fn', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        try:
+            self._qcircuit = self._get_circuit()
+        except Exception:
+            self._qcircuit = None
+        try:
+            if getattr(self, 'readout_activation', 'tanh') == 'tanh':
+                self._activation_fn = np.tanh
+            elif getattr(self, 'readout_activation', None) == 'relu':
+                self._activation_fn = relu
+            else:
+                self._activation_fn = identity
+        except Exception:
+            self._activation_fn = identity
     
     def _activation(self, x):
         """Compatibility wrapper if other code calls _activation; delegates to stored callable."""
@@ -1760,7 +1860,11 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         Returns:
             np.ndarray shape (N, n_meas)
         """
-        qcircuit = self._qcircuit
+        qcircuit = getattr(self, '_qcircuit', None)
+        if qcircuit is None:
+            qcircuit = self._get_circuit()
+            self._qcircuit = qcircuit
+
         X_arr = np.asarray(X, dtype=np.float64)
 
         # Single sample
@@ -1781,16 +1885,13 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
             if qouts.ndim == 2 and qouts.shape[0] == N:
                 log.debug("qcircuit batched fast-path used")
                 return qouts
-            # else fall through
+            # else fall through to sequential
         except Exception as e:
-            log.debug(f"qcircuit batched call failed, falling back to parallel eval: {e}")
+            log.debug(f"qcircuit batched call failed, triggering fallback to sequential evaluation: {e}")
 
-        # Parallel fallback (threading avoids pickling qcircuit)
-        n_jobs = self.n_jobs if n_jobs is None else n_jobs
-        log.debug(f"Using joblib Parallel fallback with n_jobs={n_jobs}")
-        results = Parallel(n_jobs=n_jobs, backend='threading')(
-            delayed(qcircuit)(X_arr[i], weights) for i in range(N)
-        )
+        # Fallback: sequential per-sample evaluation (safe for PennyLane qnodes)
+        log.debug("Falling back to sequential per-sample QNode evaluation")
+        results = [qcircuit(X_arr[i], weights) for i in range(N)]
         stacked = np.vstack([np.asarray(r, dtype=np.float64) for r in results])
         return stacked
 
@@ -1959,10 +2060,10 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                         raise ValueError(f"W2 output dim ({w2.shape[1]}) != n_classes ({self.n_classes})")
                     self._shape_validated = True
 
-                # Apply classical readout to each sample
+                # Apply classical readout to each sample using unified activation callable
                 logits_list = []
                 for qout in quantum_outputs:
-                    hidden = np.tanh(np.dot(qout, w1) + b1) if self.readout_activation == 'tanh' else np.dot(qout, w1) + b1
+                    hidden = self._activation_fn(np.dot(qout, w1) + b1)
                     logits = np.dot(hidden, w2) + b2
                     logits_list.append(logits)
                 
