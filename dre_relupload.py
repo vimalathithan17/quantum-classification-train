@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split, cross_val_predict, Stratif
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
+from utils.masked_transformers import MaskedTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
@@ -169,7 +170,7 @@ for data_type in data_types:
     
     # Deterministic train/test split using the shared RANDOM_STATE
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
-    scaler = get_scaler(config.get('scaler', 'MinMax'))
+    scaler = MaskedTransformer(get_scaler(config.get('scaler', 'MinMax')))
 
     # --- Build the appropriate pipeline using TUNED params ---
     log.info("  - Using standard pipeline for all data types...")
@@ -178,9 +179,9 @@ for data_type in data_types:
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
     
     pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
+        ('imputer', MaskedTransformer(SimpleImputer(strategy='median'))),
         ('scaler', scaler),
-        ('pca', PCA(n_components=config['n_qubits'])),
+        ('pca', MaskedTransformer(PCA(n_components=config['n_qubits']))),
         ('qml', MulticlassQuantumClassifierDataReuploadingDR(
             n_qubits=config['n_qubits'], 
             n_layers=config['n_layers'], 

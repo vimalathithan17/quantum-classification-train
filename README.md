@@ -18,6 +18,24 @@ This repository implements a stacked ensemble that uses Quantum Machine Learning
 
 ## ✨ New Features
 
+## 🧾 Conventions & Quick changelog
+
+Read this short summary first — it captures the most important behavioral and artifact-name changes introduced recently.
+
+- Artifact naming (current):
+	- Approach 1 (pipeline-based): `pipeline_{datatype}.joblib` (full sklearn pipeline)
+	- Approach 2 (conditional models): `selected_features_{datatype}.joblib` (list of column names), `scaler_{datatype}.joblib` (may be `None`), and `qml_model_{datatype}.joblib`.
+
+- Scaler behavior: Conditional (Approach 2) models learn from missingness. Do NOT impute/scale before training them. Training scripts save a `scaler_{datatype}.joblib` artifact that may contain `None` to indicate no scaling is required at inference; `inference.py` will skip scaling and log an informational message.
+
+- Feature selection for CFE: LightGBM selection runs on the raw DataFrame (with NaNs). Do not impute/scale before LightGBM selection for conditional flows.
+
+- Tuning (Optuna): scalers are only suggested/tuned for Approach 1 (DRE). Approach 2 uses `scaler=None` during tuning.
+
+- Preprocessing helper: `MaskedTransformer` wraps sklearn transformers to fit only on rows with signal (not all-zero rows) and preserves row order on transform. It has a `fallback` option to control behavior when no non-zero rows are present.
+
+- Tests: An end-to-end integration test (`tests/test_conditional_e2e.py`) validates a minimal train→save→inference flow for conditional models. The test uses CSV and monkeypatches parquet reading to avoid requiring `pyarrow` in test environments.
+
 This repository now includes several advanced features for robust quantum machine learning:
 
 ### Classical Readout Head
@@ -295,7 +313,15 @@ Notes:
 - **Comprehensive metrics:** Each fold tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
 - **Per-trial artifacts:** Each trial saves fold-level metrics to `tuning_results/trial_{trial_id}/fold_{fold_num}_metrics.json`.
 - **Automatic cleanup:** Only the best trial and the latest 2 trials are kept to save disk space. Older trial directories are automatically removed.
-- **Unique W&B runs:** Each trial gets a unique W&B run name (e.g., `tune_DR_CNV_trial0`, `tune_DR_CNV_trial1`) for easy tracking.
+- **W&B run naming:** W&B run names are now descriptive and follow a fixed pattern (no trial suffix by default):
+	- Approach 1 (DRE): `tune_DRE_<datatype>_<qml_model>_q{qbits}_l{layers}_{scaler?}`
+		- Example: `tune_DRE_CNV_standard_q8_l3_MinMax`
+	- Approach 2 (CF/CFE): `tune_CF_<datatype>_<qml_model>_q{qbits}_l{layers}`
+		- Example: `tune_CF_Meth_reuploading_q6_l2`
+	- If you pass `--wandb_run_name` it will be used verbatim instead of the auto-generated pattern.
+
+- Important note about folding during tuning: the current `tune_models.py` implementation **instantiates one QML model per Optuna trial and reuses that same model instance across the inner CV folds** (i.e., the model's weights continue training from fold to fold within a trial). This differs from standard cross-validation where each fold trains a new model from scratch. The final training scripts (e.g., `dre_standard.py`) use `cross_val_predict`, which clones the estimator and therefore trains fresh model instances per fold for the outer CV.
+	- Implication: the tuning scores reported by `tune_models.py` reflect the outcome of sequential training across folds rather than independent fold-wise training. If you prefer orthodox CV (independent fresh models per fold) I can update `tune_models.py` to instantiate a fresh model inside each fold (recommended for strict CV correctness).
 
 Output: 
 - Best parameters: `tuning_results/best_params_{study_name}.json`
@@ -457,7 +483,7 @@ python dre_standard.py \
 Outputs (per data type):
 - `train_oof_preds_<datatype>.csv` (used to train meta-learner)
 - `test_preds_<datatype>.csv`
-- model artifacts: `pipeline_<datatype>.joblib` or `selector_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
+- model artifacts: `pipeline_<datatype>.joblib` or `selected_features_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
 - checkpoints (when using `--max_training_time`): `checkpoints_<datatype>/best_weights.joblib` and `checkpoints_<datatype>/checkpoint_step_*.joblib`
 
 ### 4) Curate the "best-of" predictions for the meta-learner
@@ -518,6 +544,27 @@ Notes:
 - **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location
 - **Per-Trial Artifacts:** Each trial saves comprehensive metrics to `final_model_and_predictions/trial_{trial_id}/metrics.json`
 
+Important note about Conditional Feature Encoding (CFE) and missingness
+--------------------------------------------------------------------
+
+- For Approach 2 (CFE / conditional models) this repository intentionally
+	performs LightGBM feature selection on the raw DataFrame (with NaNs)
+	so that LightGBM's native missing-value handling is used when computing
+	feature importances. Do NOT impute or scale prior to selection for CFE.
+
+- Conditional QML base-learners are designed to learn from missingness.
+	Therefore we do not perform imputation/scaling before training them. The
+	training scripts replace NaNs with numeric placeholders (0.0) and pass a
+	missingness mask alongside the numeric array to the QML model. This
+	preserves the missingness signal for the model to learn.
+
+- Saved artifact convention for Approach 2:
+	- Selected features are saved as `selected_features_{datatype}.joblib` (list of column names).
+	- The scaler artifact may be a sentinel `None` (saved to `scaler_{datatype}.joblib`) to
+		indicate that no sklearn scaling should be applied at inference time. `inference.py`
+		will detect this and skip scaling when `scaler is None`.
+
+
 Outputs (saved to `final_model_and_predictions/` by default):
 - `metalearner_model.joblib` (final trained meta-learner saved by `metalearner.py`)
 - `metalearner_scaler.joblib` (scaler used on meta-features)
@@ -557,7 +604,7 @@ cp master_label_encoder/label_encoder.joblib final_model_deployment/
 
 # Copy selected base learner artifacts (examples):
 cp base_learner_outputs_app1_standard/pipeline_CNV.joblib final_model_deployment/
-cp base_learner_outputs_app2_reuploading/selector_Prot.joblib final_model_deployment/
+cp base_learner_outputs_app2_reuploading/selected_features_Prot.joblib final_model_deployment/
 cp base_learner_outputs_app2_reuploading/scaler_Prot.joblib final_model_deployment/
 cp base_learner_outputs_app2_reuploading/qml_model_Prot.joblib final_model_deployment/
 ```
@@ -681,7 +728,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 		- Save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv` (unless `--skip_cross_validation` is used).
 			- Test predictions: `test_preds_{datatype}.csv` (unless `--cv_only` is used).
-			- Model artifacts: `selector_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib` (unless `--cv_only` is used).
+			- Model artifacts: `selected_features_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib` (unless `--cv_only` is used).
 			- Checkpoints (if `--max_training_time` is used): `checkpoints_{datatype}/best_weights.joblib` and `checkpoints_{datatype}/checkpoint_step_*.joblib`.
 
 5) `metalearner.py`
@@ -703,9 +750,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- Behavior: In `tune` mode, runs Optuna to find best hyperparameters and saves to `final_model_and_predictions/best_metalearner_params.json`. In `train` mode, loads tuned params (if available) or uses defaults, trains final meta-learner on combined meta-features and indicator features with automatic best model selection and optional checkpointing, and saves the model and metadata to `final_model_and_predictions/`.
 
 6) `inference.py`
-	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
+	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selected_features/scaler/qml_model files).
 	- `--patient_data_dir` (str, required): Path to a directory containing per-data-type parquet files named `data_<datatype>_.parquet` for the new patient. Missing files are tolerated (treated as missing data).
-	- Behavior: The script will detect whether a base-learner is saved as a `pipeline_{datatype}.joblib` (Approach 1) or as `selector_{datatype}.joblib` plus `scaler_...` and `qml_model_...` (Approach 2) and will combine base-learner predictions into meta-features and call the meta-learner to predict the final class.
+	- Behavior: The script will detect whether a base-learner is saved as a `pipeline_{datatype}.joblib` (Approach 1) or as `selected_features_{datatype}.joblib` plus `scaler_...` and `qml_model_...` (Approach 2) and will combine base-learner predictions into meta-features and call the meta-learner to predict the final class.
 	- Note: Due to a naming mismatch between what metalearner.py saves and what inference.py expects, you need to rename `metalearner_model.joblib` to `meta_learner_final.joblib` and manually create `meta_learner_columns.json` (see Step 6 above).
 
 Environment variables relevant to CLI behavior

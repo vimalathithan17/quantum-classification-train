@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
+from utils.masked_transformers import MaskedTransformer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the centralized logger
@@ -184,21 +185,20 @@ for data_type in data_types:
             y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
             # 1. Feature selection INSIDE the fold to prevent data leakage
-            imputer_for_fs = SimpleImputer(strategy='median')
-            X_train_fold_imputed = imputer_for_fs.fit_transform(X_train_fold)
-
+            # Use the raw features (with NaNs) for LightGBM feature importance so
+            # LightGBM can use its native handling of missingness. Do NOT impute
+            # or scale here for selection; this preserves missingness signal.
             n_qubits = config.get('n_qubits', 10)
 
-            log.info("      - Using LightGBM importance-based selection...")
-            scaler = get_scaler(config.get('scaler', 'MinMax'))
-            scaler.fit(X_train_fold_imputed)
-            X_train_fold_scaled = scaler.transform(X_train_fold_imputed)
-
+            log.info("      - Using LightGBM importance-based selection on raw data (no impute/scale)...")
             # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
             lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                                  n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-            actual_k = min(n_qubits, X_train_fold_scaled.shape[1])
-            lgb.fit(X_train_fold_scaled, y_train_fold)
+            # Pass the raw DataFrame values (contains np.nan) so LightGBM's native
+            # missing value handling is used for feature selection.
+            X_train_fold_for_selection = X_train_fold
+            actual_k = min(n_qubits, X_train_fold_for_selection.shape[1])
+            lgb.fit(X_train_fold_for_selection.values, y_train_fold)
             importances = lgb.feature_importances_
             top_idx = np.argsort(importances)[-actual_k:][::-1]
             selected_cols = X_train_fold.columns[top_idx]
@@ -206,16 +206,17 @@ for data_type in data_types:
             X_train_fold_selected = X_train_fold[selected_cols]
             X_val_fold_selected = X_val_fold[selected_cols]
 
-            # 2. Prepare data tuple (mask, fill, scale) for this fold
+            # 2. Prepare data tuple (mask, fill) for this fold.
+            # We do not perform imputation/scaling for the conditional QML model —
+            # the model will learn from the missingness mask. We still replace
+            # NaNs by 0.0 when forming the numeric input array (placeholder values).
             is_missing_train = X_train_fold_selected.isnull().astype(int).values
             X_train_filled = X_train_fold_selected.fillna(0.0).values
             is_missing_val = X_val_fold_selected.isnull().astype(int).values
             X_val_filled = X_val_fold_selected.fillna(0.0).values
-
-            scaler = get_scaler(config.get('scaler', 'MinMax'))
-            scaler.fit(X_train_filled)
-            X_train_scaled = scaler.transform(X_train_filled)
-            X_val_scaled = scaler.transform(X_val_filled)
+            # No scaling applied for conditional models; use filled arrays directly.
+            X_train_scaled = X_train_filled
+            X_val_scaled = X_val_filled
 
             # 3. Train model on this fold and predict on the validation part
             checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if args.max_training_time else None
@@ -250,20 +251,15 @@ for data_type in data_types:
 
     # --- Train Final Model on Full Training Data ---
     log.info("  - Training final model on full training data...")
-    # Re-run feature selection on the full training data to determine the final feature set
-    imputer_for_fs = SimpleImputer(strategy='median')
-    X_train_imputed = imputer_for_fs.fit_transform(X_train)
-
+    # Re-run feature selection on the full training data — again use raw data
+    # (with NaNs) so LightGBM can incorporate missingness when computing importances.
     n_qubits = config.get('n_qubits', 10)
-    log.info("    - Using LightGBM importance-based selection for final model...")
-    scaler_for_fs = get_scaler(config.get('scaler', 'MinMax'))
-    scaler_for_fs.fit(X_train_imputed)
-    X_train_scaled_for_selection = scaler_for_fs.transform(X_train_imputed)
-
+    log.info("    - Using LightGBM importance-based selection for final model on raw data (no impute/scale)...")
     lgb_final = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                                n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-    actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
-    lgb_final.fit(X_train_scaled_for_selection, y_train)
+    X_train_for_selection = X_train
+    actual_k = min(n_qubits, X_train_for_selection.shape[1])
+    lgb_final.fit(X_train_for_selection.values, y_train)
     importances = lgb_final.feature_importances_
     top_idx = np.argsort(importances)[-actual_k:][::-1]
     final_selected_cols = X.columns[top_idx]
@@ -274,8 +270,9 @@ for data_type in data_types:
     X_train_selected = X_train[final_selected_cols]
     is_missing_train = X_train_selected.isnull().astype(int).values
     X_train_filled = X_train_selected.fillna(0.0).values
-    final_scaler = get_scaler(config.get('scaler', 'MinMax'))
-    X_train_scaled = final_scaler.fit_transform(X_train_filled)
+    # No final scaler for conditional models (they learn from missingness).
+    final_scaler = None
+    X_train_scaled = X_train_filled
     
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
     final_model = ConditionalMulticlassQuantumClassifierFS(
@@ -302,7 +299,8 @@ for data_type in data_types:
     X_test_selected = X_test[final_selected_cols]
     is_missing_test = X_test_selected.isnull().astype(int).values
     X_test_filled = X_test_selected.fillna(0.0).values
-    X_test_scaled = final_scaler.transform(X_test_filled)
+    # No scaler to apply; use filled arrays directly.
+    X_test_scaled = X_test_filled
 
     test_preds = final_model.predict_proba((X_test_scaled, is_missing_test))
     test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
@@ -310,10 +308,11 @@ for data_type in data_types:
     log.info("  - Saved test predictions.")
 
     # --- Save all components for inference ---
-    joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selector_{data_type}.joblib'))
+    joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
+    # Save a sentinel (None) for the scaler so inference can detect absence of scaling.
     joblib.dump(final_scaler, os.path.join(OUTPUT_DIR, f'scaler_{data_type}.joblib'))
     joblib.dump(final_model, os.path.join(OUTPUT_DIR, f'qml_model_{data_type}.joblib'))
-    log.info(f"  - Saved final selector, scaler, and QML model for {data_type}.")
+    log.info(f"  - Saved final selector (selected_features), scaler(sentinel), and QML model for {data_type}.")
 
     # --- Classification report on the hold-out test set ---
     try:

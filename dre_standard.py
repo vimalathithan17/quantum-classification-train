@@ -9,6 +9,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
+from utils.masked_transformers import MaskedTransformer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Import the centralized logger
@@ -182,9 +183,9 @@ for data_type in data_types:
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
     
     pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', scaler),
-        ('pca', PCA(n_components=config['n_qubits'])),
+        ('imputer', MaskedTransformer(SimpleImputer(strategy='median'))),
+        ('scaler', MaskedTransformer(scaler)),
+        ('pca', MaskedTransformer(PCA(n_components=config['n_qubits']))),
         ('qml', MulticlassQuantumClassifierDR(
             n_qubits=config['n_qubits'], 
             n_layers=config['n_layers'], 

@@ -44,6 +44,18 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
   - Optuna visualization plots (parameter importances, optimization history, etc.)
   - Per-trial fold metrics for best + latest 2 trials
 
+**Important implementation note (folding semantics):**
+
+- The current implementation of `tune_models.py` creates a single QML model instance per Optuna trial and uses that same instance across the inner CV folds (it calls `.fit()` repeatedly on the same object for each fold). This means the model's weights continue training across folds within the same trial rather than being freshly initialized for every fold.
+
+- Consequences:
+    - Reported mean validation scores reflect sequential training across folds and can differ from scores obtained by training independent, fresh models per fold.
+    - This approach was chosen for speed and to reuse checkpoints/optimizer state, but it is not the orthodox cross-validation pattern.
+
+- Final training scripts (`dre_standard.py`, `cfe_standard.py`, etc.) use scikit-learn's `cross_val_predict` or cloned estimators and therefore perform fresh (independent) training per outer fold; only the tuning script uses the sequential-weights pattern described above.
+
+- If you prefer strict CV correctness for tuning, we can update `tune_models.py` to instantiate a fresh model (and pipeline) inside each fold of the inner CV loop. This change is straightforward and recommended when you require fold-independence for hyperparameter selection.
+
 **Stage 3: Base-Learner Training**
 - **Approaches:** Dimensionality Reduction Encoding (DRE) and Conditional Feature Encoding (CFE)
 - **Scripts:** `dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`
@@ -55,6 +67,29 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
     4. Train a final model on the *entire* training set.
     5. Generate predictions on the hold-out test set.
 - **Output:** For each data type, the scripts save the OOF predictions, test predictions, and the final trained model artifacts (`.joblib` files) into a dedicated output directory (e.g., `base_learner_outputs_app1_standard/`).
+
+---
+
+### Data preprocessing, masking, and MaskedTransformer
+
+We made several coordinated changes to how preprocessing and missingness are handled across the pipeline to support conditional models and to avoid leaking information into scalers/dimensionality reducers.
+
+- MaskedTransformer (new): a small sklearn-style wrapper that "masks out" rows that are all-zero (or below an `eps` threshold) when fitting inner transformers (imputers, scalers, PCA, UMAP). It preserves row order and returns arrays of the same shape on transform by filling back transformed rows into their original positions. This prevents scalers / PCA from learning from artificially-zeroed rows that represent a missing modality for a sample.
+
+- Fallback behavior: `MaskedTransformer` exposes a `fallback` option (`'warn' | 'raise' | 'all'`) to control what happens when no non-zero rows are present during fit; by default it will warn and fall back to fitting on all rows.
+
+- Where used: The `MaskedTransformer` is used widely in base-learner pipelines (DRE flows and most pre-processing steps in CFE flows) to ensure scalers and PCA/UMAP fit only on rows with real signal. The `metalearner.py` intentionally keeps standard scalers unchanged (meta-features are dense and require regular scaling).
+
+- Per-sample masked loss in QML models: QML base-learners (conditional models) now compute per-sample losses and average only over the subset of samples that actually contain data for that modality (using an all-zero detection / missingness mask). This allows the model to forward-propagate all samples but ignore missing-modality rows when computing loss and backpropagating.
+
+- Artifact naming and sentinel scalers: For Approach 2 (CFE) the selected feature artifact is now saved as `selected_features_{datatype}.joblib`. Since conditional models do not use sklearn scalers, the training scripts save a sentinel `scaler_{datatype}.joblib` containing `None` so that `inference.py` can detect and skip scaling at inference time. `inference.py` was updated to handle `scaler is None` and log an info-level message when scaling is skipped.
+
+- LightGBM feature selection on raw data for CFE: Feature selection for conditional flows (Approach 2) is now performed on the raw DataFrame (with NaNs), so LightGBM can use its native missing-value handling when computing feature importances. Do not impute or scale before LightGBM selection for CFE.
+
+- Tuning change (Optuna): The hyperparameter tuning script `tune_models.py` was updated so that scaler hyperparameters are only suggested and used for Approach 1 (DRE). Approach 2 sets `scaler = None` during tuning and does not tune sklearn scalers (conditional models learn from missingness instead).
+
+- Tests: An end-to-end integration test (`tests/test_conditional_e2e.py`) was added to validate the entire train→save→inference path for conditional models (it uses a small synthetic artifact set and monkeypatches parquet reading to CSV during tests to avoid optional parquet engine dependencies).
+
 
 **Stage 4: Meta-Learner Training (`metalearner.py`)**
 - **Purpose:** To train a single, powerful "manager" model that learns from the predictions of the expert base-learners.

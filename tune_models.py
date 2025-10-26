@@ -13,6 +13,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, La
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
+from utils.masked_transformers import MaskedTransformer
 from lightgbm import LGBMClassifier
 from umap import UMAP
 
@@ -271,15 +272,24 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Log suggested parameters
+    # Only suggest scalers for Approach 1 (DRE). Conditional models (Approach 2)
+    # learn from missingness and should not be tuned with sklearn scalers.
     params = {
-        'scaler': trial.suggest_categorical('scaler', scaler_options),
         'n_qubits': trial.suggest_int('n_qubits', min_qbits, max_qbits, step=2),
         'n_layers': trial.suggest_int('n_layers', args.min_layers, args.max_layers)
     }
+    if args.approach == 1:
+        params['scaler'] = trial.suggest_categorical('scaler', scaler_options)
 
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
-    scaler = get_scaler(params['scaler'])
+    # Build scaler only for Approach 1; for Approach 2 keep scaler as None
+    if args.approach == 1:
+        scaler = get_scaler(params['scaler'])
+        # wrap scaler so it ignores all-zero rows during fit/transform
+        scaler = MaskedTransformer(scaler)
+    else:
+        scaler = None
     steps = args.steps  # Use steps from command-line arguments
     n_qubits = params['n_qubits']
     n_layers = params['n_layers']
@@ -291,32 +301,55 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     if args.approach == 1:
         steps_list = []
         # Common steps for Approach 1
-        steps_list.append(('imputer', SimpleImputer(strategy='median')))
+        steps_list.append(('imputer', MaskedTransformer(SimpleImputer(strategy='median'))))
         steps_list.append(('scaler', scaler))
 
         if args.dim_reducer == 'pca':
-            steps_list.append(('dim_reducer', PCA(n_components=n_qubits)))
+            steps_list.append(('dim_reducer', MaskedTransformer(PCA(n_components=n_qubits))))
         else:
-            steps_list.append(('dim_reducer', UMAP(n_components=n_qubits, random_state=RANDOM_STATE)))
+            steps_list.append(('dim_reducer', MaskedTransformer(UMAP(n_components=n_qubits, random_state=RANDOM_STATE))))
 
-        # Generate unique wandb run name for this trial
-        wandb_run_name = f"tune_DR_{args.datatype}_trial{trial.number}" if args.use_wandb else None
+        # Generate wandb run name for Approach 1 (DRE) per user's requested pattern
+        # Desired format: tune_DRE_<datatype>_<qml_model>_q{qbits}_l{layers}_{scaler}
+        if args.use_wandb:
+            base_name = f"tune_DRE_{args.datatype}_{args.qml_model}"
+            base_name += f"_q{n_qubits}_l{n_layers}"
+            scaler_name = params.get('scaler', None)
+            if scaler_name:
+                base_name += f"_{scaler_name}"
+            wandb_run_name = base_name
+        else:
+            wandb_run_name = None
+        # If user provided a custom wandb run name, respect it (do not append trial number)
         if args.wandb_run_name:
-            wandb_run_name = f"{args.wandb_run_name}_trial{trial.number}"
+            wandb_run_name = args.wandb_run_name
         
-        if args.qml_model == 'standard':
-            qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
-        else: # reuploading
-            qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
-            
-        pipeline = Pipeline(steps_list + [('qml', qml_model)])
-        
-        # Perform cross-validation on the entire pipeline
+        # Perform cross-validation with a FRESH model per fold (orthodox CV)
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-            
+
+            # Generate wandb run name for this fold
+            if args.use_wandb:
+                base_name = f"tune_DRE_{args.datatype}_{args.qml_model}_q{n_qubits}_l{n_layers}"
+                scaler_name = params.get('scaler', None)
+                if scaler_name:
+                    base_name += f"_{scaler_name}"
+                wandb_run_name_fold = f"{base_name}_f{fold+1}"
+            else:
+                wandb_run_name_fold = None
+            if args.wandb_run_name:
+                wandb_run_name_fold = args.wandb_run_name
+
+            # Instantiate fresh model for this fold
+            if args.qml_model == 'standard':
+                qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+            else:  # reuploading
+                qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+
+            pipeline = Pipeline(steps_list + [('qml', qml_model)])
+
             pipeline.fit(X_train, y_train)
             
             # predictions
@@ -379,55 +412,54 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
 
     elif args.approach == 2:
          
-        # Generate unique wandb run name for this trial
-        wandb_run_name = f"tune_CQFS_{args.datatype}_trial{trial.number}" if args.use_wandb else None
-        if args.wandb_run_name:
-            wandb_run_name = f"{args.wandb_run_name}_trial{trial.number}"
-        
-        if args.qml_model == 'standard':
-            qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
-        else: # reuploading
-            qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name)
-        
+        # For Approach 2: perform fold-specific selection and instantiate a fresh QML model per fold.
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: Starting training...")
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
             
-            # Perform fold-specific feature selection and preprocessing using LightGBM importances
-            temp_imputer = SimpleImputer(strategy='median')
-            X_train_imputed = temp_imputer.fit_transform(X_train)
 
-            # Scale the data *before* feature selection
-            scaler.fit(X_train_imputed)
-            X_train_scaled_for_selection = scaler.transform(X_train_imputed)
-
-            # Fit a LightGBM classifier to compute feature importances and pick top-k
-            # Use a lightweight LightGBM configuration: fewer trees, feature subsampling
-            lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7, 
+            # Perform fold-specific feature selection using raw features (with NaNs)
+            # so LightGBM can make use of native missing-value handling. Do NOT
+            # impute or scale prior to selection to preserve missingness signal.
+            log.info("    - Performing LightGBM selection on raw data (no impute/scale) for Approach 2...")
+            lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                                  n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
-            # Guard: if the number of features is less than requested, pick all
-            actual_k = min(n_qubits, X_train_scaled_for_selection.shape[1])
-            lgb.fit(X_train_scaled_for_selection, y_train)
+            X_train_for_selection = X_train
+            actual_k = min(n_qubits, X_train_for_selection.shape[1])
+            lgb.fit(X_train_for_selection.values, y_train)
             importances = lgb.feature_importances_
             top_idx = np.argsort(importances)[-actual_k:][::-1]
             selected_cols = X_train.columns[top_idx]
-            # Log selected features for this fold (Approach 2)
             log.info(f"    - Selected features (fold {fold+1}): {list(selected_cols)}")
 
             X_train_selected = X_train[selected_cols]
             X_val_selected = X_val[selected_cols]
 
-            # Prepare the data tuple (mask, fill, scale) correctly for the model
+            # Prepare the data tuple (mask, fill). Conditional models learn from
+            # missingness masks so we do NOT scale or impute during training.
             is_missing_train = X_train_selected.isnull().astype(int).values
             X_train_filled = X_train_selected.fillna(0.0).values
             is_missing_val = X_val_selected.isnull().astype(int).values
             X_val_filled = X_val_selected.fillna(0.0).values
 
-            # Re-fit the scaler on the *selected* training data before transforming
-            scaler.fit(X_train_filled)
-            X_train_scaled = scaler.transform(X_train_filled)
-            X_val_scaled = scaler.transform(X_val_filled)
+            # No scaling for conditional models; pass filled arrays directly.
+            X_train_scaled = X_train_filled
+            X_val_scaled = X_val_filled
+
+            # Generate wandb run name for this fold and instantiate a fresh QML model
+            if args.use_wandb:
+                base_name = f"tune_CF_{args.datatype}_{args.qml_model}_q{n_qubits}_l{n_layers}"
+                wandb_run_name_fold = f"{base_name}_f{fold+1}"
+            else:
+                wandb_run_name_fold = None
+            if args.wandb_run_name:
+                wandb_run_name_fold = args.wandb_run_name
+
+            if args.qml_model == 'standard':
+                qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+            else: # reuploading
+                qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
 
             qml_model.fit((X_train_scaled, is_missing_train), y_train.values)
             

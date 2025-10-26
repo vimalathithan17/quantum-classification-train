@@ -73,7 +73,14 @@ def make_single_prediction(model_dir, new_patient_data_dir):
             elif os.path.exists(features_path):
                 # --- Approach 2 Logic (Component-based) ---
                 log.info(f"    - Found Approach 2 components for {data_type}.")
-                scaler = joblib.load(os.path.join(model_dir, f'scaler_{data_type}.joblib'))
+                # Scaler may be None (sentinel) for conditional models which do
+                # not require scaling. Load if present; treat missing or None
+                # as a no-op (skip scaling).
+                scaler_path = os.path.join(model_dir, f'scaler_{data_type}.joblib')
+                if os.path.exists(scaler_path):
+                    scaler = joblib.load(scaler_path)
+                else:
+                    scaler = None
                 qml_model = joblib.load(os.path.join(model_dir, f'qml_model_{data_type}.joblib'))
                 selected_cols = joblib.load(features_path)
                 
@@ -88,8 +95,14 @@ def make_single_prediction(model_dir, new_patient_data_dir):
                 
                 is_missing_mask = X_new_selected.isnull().astype(int).values
                 X_filled = X_new_selected.fillna(0.0).values
-                X_scaled = scaler.transform(X_filled)
-                
+                # If scaler is None (or missing), do not scale — pass filled arrays
+                # directly. Otherwise, apply transform.
+                if scaler is None:
+                    log.info(f"No scaler found for {data_type} (scaler is None). Skipping scaling for conditional model input.")
+                    X_scaled = X_filled
+                else:
+                    X_scaled = scaler.transform(X_filled)
+
                 prediction_proba = qml_model.predict_proba((X_scaled, is_missing_mask))
             else:
                 log.critical(f"No model files found for {data_type} in '{model_dir}'. Cannot proceed.")

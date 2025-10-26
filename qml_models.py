@@ -445,7 +445,22 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
 
                 # Cross-entropy loss: sum over classes per sample, then mean
                 eps = 1e-9
-                loss = -np.mean(np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1))
+                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1)
+                # Detect samples that are all-zero (these correspond to missing data rows
+                # that were included to keep datasets aligned). Ignore them during loss
+                # computation so they don't contribute to backprop, but still run forward
+                # so their predictions are available for the meta-learner.
+                try:
+                    sample_has_data = np.any(X_train != 0, axis=1)
+                except Exception:
+                    # If X_train isn't array-like for some reason, fall back to using all samples
+                    sample_has_data = np.ones(per_sample_loss.shape[0], dtype=bool)
+
+                if np.any(sample_has_data):
+                    loss = np.mean(per_sample_loss[sample_has_data])
+                else:
+                    # If no samples have data (degenerate), fall back to mean of per-sample loss
+                    loss = np.mean(per_sample_loss)
                 return loss
             
             # Update all parameters jointly
@@ -976,7 +991,15 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
 
                 # Cross-entropy loss: sum over classes per sample, then mean
                 eps = 1e-9
-                loss = -np.mean(np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1))
+                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1)
+                try:
+                    sample_has_data = np.any(X_train != 0, axis=1)
+                except Exception:
+                    sample_has_data = np.ones(per_sample_loss.shape[0], dtype=bool)
+                if np.any(sample_has_data):
+                    loss = np.mean(per_sample_loss[sample_has_data])
+                else:
+                    loss = np.mean(per_sample_loss)
                 return loss
             
             # Update all parameters jointly
@@ -1520,8 +1543,39 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                 logits_array = np.array(logits_list)
                 probabilities = np.array([self._softmax(logit) for logit in logits_array])
                 
-                # Cross-entropy loss
-                loss = -np.mean(y_train_one_hot * np.log(probabilities + 1e-9))
+                # Cross-entropy loss computed only over samples that actually have data
+                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + 1e-9), axis=1)
+                # mask_train is a per-sample/per-feature indicator (1 -> missing). A sample has data
+                # if any feature is present (i.e., any mask value == 0).
+                # Consider a sample as "having data" if it is not an all-zero row.
+                # Some datasets include missing samples as all-zero rows (not NaN),
+                # so relying only on the `mask_train` (which flags NaNs) will miss
+                # those artificially zeroed samples. Treat any sample that is
+                # entirely zero across features as missing for loss/backprop.
+                try:
+                    sample_all_zero = np.all(X_train_scaled == 0, axis=1)
+                except Exception:
+                    sample_all_zero = np.zeros(per_sample_loss.shape[0], dtype=bool)
+                try:
+                    # If a feature-mask is available, combine both checks: a sample
+                    # is considered present if it's not all-zero OR mask indicates
+                    # at least one present feature. This is robust to different
+                    # upstream preprocessing pipelines.
+                    mask_present = np.any(mask_train == 0, axis=1)
+                except Exception:
+                    mask_present = np.ones(per_sample_loss.shape[0], dtype=bool)
+
+                sample_has_data = (~sample_all_zero) & mask_present
+                # Fallback: if mask_present is all False but there are non-zero rows,
+                # allow those through (this covers odd edge-cases).
+                nonzero_any = np.any(~sample_all_zero)
+                if not np.any(sample_has_data) and nonzero_any:
+                    sample_has_data = ~sample_all_zero
+
+                if np.any(sample_has_data):
+                    loss = np.mean(per_sample_loss[sample_has_data])
+                else:
+                    loss = np.mean(per_sample_loss)
                 return loss
             
             # Update all parameters jointly
@@ -1552,7 +1606,15 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                         val_logits_list.append(logits)
                     val_logits_array = np.array(val_logits_list)
                     val_probs = np.array([self._softmax(logit) for logit in val_logits_array])
-                    val_loss = -np.mean(y_val_one_hot * np.log(val_probs + 1e-9))
+                    val_per_sample_loss = -np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1)
+                    try:
+                        val_sample_has_data = np.any(X_val != 0, axis=1)
+                    except Exception:
+                        val_sample_has_data = np.ones(val_per_sample_loss.shape[0], dtype=bool)
+                    if np.any(val_sample_has_data):
+                        val_loss = np.mean(val_per_sample_loss[val_sample_has_data])
+                    else:
+                        val_loss = np.mean(val_per_sample_loss)
                     
                     history['val_loss'].append(float(val_loss))
                     history['val_acc'].append(val_metrics['accuracy'])
@@ -2070,8 +2132,24 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                 logits_array = np.array(logits_list)
                 probabilities = np.array([self._softmax(logit) for logit in logits_array])
                 
-                # Cross-entropy loss
-                loss = -np.mean(y_train_one_hot * np.log(probabilities + 1e-9))
+                # Cross-entropy loss computed only over samples that have data
+                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + 1e-9), axis=1)
+                try:
+                    sample_all_zero = np.all(X_train_scaled == 0, axis=1)
+                except Exception:
+                    sample_all_zero = np.zeros(per_sample_loss.shape[0], dtype=bool)
+                try:
+                    mask_present = np.any(mask_train == 0, axis=1)
+                except Exception:
+                    mask_present = np.ones(per_sample_loss.shape[0], dtype=bool)
+
+                sample_has_data = (~sample_all_zero) & mask_present
+                if not np.any(sample_has_data) and np.any(~sample_all_zero):
+                    sample_has_data = ~sample_all_zero
+                if np.any(sample_has_data):
+                    loss = np.mean(per_sample_loss[sample_has_data])
+                else:
+                    loss = np.mean(per_sample_loss)
                 return loss
 
             # Update all parameters jointly
@@ -2102,7 +2180,23 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                         val_logits_list.append(logits)
                     val_logits_array = np.array(val_logits_list)
                     val_probs = np.array([self._softmax(logit) for logit in val_logits_array])
-                    val_loss = -np.mean(y_val_one_hot * np.log(val_probs + 1e-9))
+                    val_per_sample_loss = -np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1)
+                    try:
+                        val_all_zero = np.all(X_val_scaled == 0, axis=1)
+                    except Exception:
+                        val_all_zero = np.zeros(val_per_sample_loss.shape[0], dtype=bool)
+                    try:
+                        val_mask_present = np.any(mask_val == 0, axis=1)
+                    except Exception:
+                        val_mask_present = np.ones(val_per_sample_loss.shape[0], dtype=bool)
+
+                    val_sample_has_data = (~val_all_zero) & val_mask_present
+                    if not np.any(val_sample_has_data) and np.any(~val_all_zero):
+                        val_sample_has_data = ~val_all_zero
+                    if np.any(val_sample_has_data):
+                        val_loss = np.mean(val_per_sample_loss[val_sample_has_data])
+                    else:
+                        val_loss = np.mean(val_per_sample_loss)
                     
                     history['val_loss'].append(float(val_loss))
                     history['val_acc'].append(val_metrics['accuracy'])
