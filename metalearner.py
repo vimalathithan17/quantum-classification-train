@@ -207,10 +207,41 @@ def assemble_meta_data(preds_dirs, indicator_file):
                 log.warning(f"No prediction files found in '{preds_dir}'. Skipping.")
                 continue
 
+            def _load_pred_file(path):
+                """Read a predictions CSV and set case_id as the index (do not include it as a feature)."""
+                df = pd.read_csv(path)
+                # If case_id column exists, set it as the index and drop the column from features
+                if 'case_id' in df.columns:
+                    df = df.set_index('case_id')
+                else:
+                    # If first column looks like an id column, set it as index
+                    first_col = df.columns[0]
+                    if first_col.lower() in ('case_id', 'caseid', 'id'):
+                        df = df.set_index(first_col)
+
+                # Ensure we don't accidentally include an index named case_id as a column
+                if 'case_id' in df.columns:
+                    df = df.drop(columns=['case_id'])
+
+                # Drop duplicate indices if present (keep first occurrence)
+                if df.index.duplicated().any():
+                    log.warning(f"Duplicate case_id values found in {path}; keeping first occurrence")
+                    df = df[~df.index.duplicated(keep='first')]
+
+                return df
+
             for f in oof_files:
-                oof_preds_list.append(pd.read_csv(os.path.join(preds_dir, f), index_col=0))
+                p = os.path.join(preds_dir, f)
+                try:
+                    oof_preds_list.append(_load_pred_file(p))
+                except Exception as e:
+                    log.error(f"Failed to read OOF predictions from {p}: {e}")
             for f in test_files:
-                test_preds_list.append(pd.read_csv(os.path.join(preds_dir, f), index_col=0))
+                p = os.path.join(preds_dir, f)
+                try:
+                    test_preds_list.append(_load_pred_file(p))
+                except Exception as e:
+                    log.error(f"Failed to read test predictions from {p}: {e}")
         except FileNotFoundError:
             log.error(f"Prediction directory not found: '{preds_dir}'. Skipping.")
             continue
@@ -219,9 +250,15 @@ def assemble_meta_data(preds_dirs, indicator_file):
         log.error("No out-of-fold prediction files found in any of the provided directories.")
         return None, None, None, None, None
 
-    # Concatenate all found predictions
-    X_meta_train_preds = pd.concat(oof_preds_list, axis=1)
-    X_meta_test_preds = pd.concat(test_preds_list, axis=1)
+    # Concatenate all found predictions (align by case_id index)
+    if oof_preds_list:
+        X_meta_train_preds = pd.concat(oof_preds_list, axis=1, join='outer')
+    else:
+        X_meta_train_preds = pd.DataFrame()
+    if test_preds_list:
+        X_meta_test_preds = pd.concat(test_preds_list, axis=1, join='outer')
+    else:
+        X_meta_test_preds = pd.DataFrame()
 
     # Join with indicator features
     X_meta_train = X_meta_train_preds.join(indicators).dropna()
@@ -371,6 +408,23 @@ def main():
     global OUTPUT_DIR
     OUTPUT_DIR = ensure_writable_results_dir(OUTPUT_DIR)
     log.info(f"Using output directory: {OUTPUT_DIR}")
+    # Print and save assembled meta-features for inspection
+    try:
+        train_feats_file = os.path.join(OUTPUT_DIR, 'meta_features_train.csv')
+        test_feats_file = os.path.join(OUTPUT_DIR, 'meta_features_test.csv')
+        # Save with index (case_id) preserved
+        X_meta_train.to_csv(train_feats_file, index=True)
+        X_meta_test.to_csv(test_feats_file, index=True)
+        log.info(f"Saved assembled meta features to '{train_feats_file}' and '{test_feats_file}'")
+        # Log a concise preview (columns and first few rows)
+        log.info(f"Meta-train shape: {X_meta_train.shape}; columns: {list(X_meta_train.columns)}")
+        try:
+            log.info("Meta-train sample:\n" + X_meta_train.head().to_string())
+        except Exception:
+            # to_string can fail on very large / exotic dtypes; fall back to shape only
+            log.info(f"Meta-train preview unavailable; shape={X_meta_train.shape}")
+    except Exception as e:
+        log.error(f"Failed to save or print assembled meta-features: {e}")
     if args.mode == 'tune':
         log.info(f"--- Starting Hyperparameter Tuning for Meta-Learner ({args.n_trials} trials) ---")
 
