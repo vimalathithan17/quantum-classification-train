@@ -368,6 +368,60 @@ def assemble_meta_data(preds_dirs, indicator_file):
     indicator_cols = [c for c in indicators.columns if str(c).startswith('is_missing_')]
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols
 
+
+def _build_mask_from_indicators(df, base_cols, indicator_cols):
+    """Build a mask array that aligns per-column with base prediction columns.
+
+    The base prediction columns have names like 'pred_{datatype}_{class}'. The
+    indicator columns are per-datatype with names like 'is_missing_{datatype}_'.
+    This function expands the per-datatype indicators into a per-prediction
+    mask (repeating each indicator for the number of class-columns produced by
+    that base learner) so the resulting mask has the same shape as the base
+    predictions matrix.
+    """
+    if len(indicator_cols) == 0:
+        # No indicators available; assume all present
+        return _np.ones((len(df), len(base_cols)), dtype=float)
+
+    # Prepare mapping from normalized datatype -> full indicator column name
+    indicator_map = {}
+    for ic in indicator_cols:
+        key = ic.replace('is_missing_', '').strip('_').lower()
+        indicator_map[key] = ic
+
+    mask_columns = []
+    # If the df doesn't contain the indicator columns (e.g., when passing a
+    # subset DataFrame), fall back to zeros/ones appropriately
+    indicators_df = df[indicator_cols].copy() if all(c in df.columns for c in indicator_cols) else None
+
+    for col in base_cols:
+        # Expect pattern 'pred_{datatype}_{class...}', extract datatype
+        rem = col[len('pred_'):] if col.startswith('pred_') else col
+        datatype = rem.split('_', 1)[0].lower()
+
+        ind_col = indicator_map.get(datatype)
+        if ind_col is None:
+            # Try fuzzy match (substring) as a fallback
+            for k, v in indicator_map.items():
+                if datatype in k or k in datatype:
+                    ind_col = v
+                    break
+
+        if indicators_df is None or ind_col is None or ind_col not in indicators_df.columns:
+            # Default to "present" (1.0) if we can't find an indicator
+            mask_columns.append(_np.ones(len(df), dtype=float))
+        else:
+            # indicators were inverted earlier in assemble_meta_data so values
+            # represent presence (1.0) or absence (0.0). Use them directly.
+            mask_columns.append(indicators_df[ind_col].astype(float).values)
+
+    # Stack into a 2D numpy array with shape (n_samples, n_base_cols)
+    if mask_columns:
+        mask_arr = _np.column_stack(mask_columns)
+    else:
+        mask_arr = _np.empty((len(df), 0))
+    return mask_arr
+
 def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_cols=None):
     """Defines one trial for tuning the meta-learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
@@ -432,14 +486,21 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     # For gated variants always split into base-predictions and indicator mask
     base_cols = [c for c in X_train_df.columns if c not in indicator_cols]
     X_base_train = X_train_df[base_cols].values
-    X_mask_train = X_train_df[indicator_cols].values
+    # Build a mask that matches the shape of X_base_train (one column per base-pred)
+    X_mask_train = _build_mask_from_indicators(X_train_df, base_cols, indicator_cols)
+    log.info(f"Trial {trial.number}: X_base_train shape={X_base_train.shape}, X_mask_train shape={X_mask_train.shape}")
+    if X_base_train.shape != X_mask_train.shape:
+        raise ValueError(f"Shape mismatch before fit: base_preds {X_base_train.shape} vs mask {X_mask_train.shape}")
     model.fit((X_base_train, X_mask_train), y_train.values)
 
     log.info(f"Trial {trial.number}: Evaluating...")
     # Construct validation inputs for gated model the same way
     base_cols_val = [c for c in X_val_df.columns if c not in indicator_cols]
     X_base_val = X_val_df[base_cols_val].values
-    X_mask_val = X_val_df[indicator_cols].values
+    X_mask_val = _build_mask_from_indicators(X_val_df, base_cols_val, indicator_cols)
+    log.info(f"Trial {trial.number}: X_base_val shape={X_base_val.shape}, X_mask_val shape={X_mask_val.shape}")
+    if X_base_val.shape != X_mask_val.shape:
+        raise ValueError(f"Shape mismatch before predict: base_preds {X_base_val.shape} vs mask {X_mask_val.shape}")
     predictions = model.predict((X_base_val, X_mask_val))
     
     # Compute comprehensive metrics
@@ -648,7 +709,10 @@ def main():
         # Fit the gated model: always split into base preds and indicator mask
         base_cols = [c for c in X_meta_train.columns if c not in indicator_cols]
         X_base = X_meta_train[base_cols].values
-        X_mask = X_meta_train[indicator_cols].values
+        X_mask = _build_mask_from_indicators(X_meta_train, base_cols, indicator_cols)
+        log.info(f"Final training: X_base shape={X_base.shape}, X_mask shape={X_mask.shape}")
+        if X_base.shape != X_mask.shape:
+            raise ValueError(f"Shape mismatch before final fit: base_preds {X_base.shape} vs mask {X_mask.shape}")
         final_model.fit((X_base, X_mask), y_meta_train.values)
 
         # Log best weights step if available
@@ -667,7 +731,10 @@ def main():
         log.info("--- Evaluating on Test Set ---")
         base_cols = [c for c in X_meta_test.columns if c not in indicator_cols]
         X_base_test = X_meta_test[base_cols].values
-        X_mask_test = X_meta_test[indicator_cols].values
+        X_mask_test = _build_mask_from_indicators(X_meta_test, base_cols, indicator_cols)
+        log.info(f"Final evaluation: X_base_test shape={X_base_test.shape}, X_mask_test shape={X_mask_test.shape}")
+        if X_base_test.shape != X_mask_test.shape:
+            raise ValueError(f"Shape mismatch before final predict: base_preds {X_base_test.shape} vs mask {X_mask_test.shape}")
         test_predictions = final_model.predict((X_base_test, X_mask_test))
         test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
