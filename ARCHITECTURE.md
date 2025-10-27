@@ -100,10 +100,17 @@ We made several coordinated changes to how preprocessing and missingness are han
 - **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
 - **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location, ensuring training can proceed in restricted environments.
 - **Output:** 
-  - Final trained meta-learner model (`metalearner_model.joblib`)
-  - Meta-learner scaler (`metalearner_scaler.joblib`)
-  - Best hyperparameters if tuning was run (`best_metalearner_params.json`)
+    - Final trained meta-learner model (`metalearner_model.joblib`)
+    - Best hyperparameters if tuning was run (`best_metalearner_params.json`)
   - Per-trial comprehensive metrics during tuning (`trial_{trial_id}/metrics.json`)
+
+**Notes & CLI additions:**
+- The meta-learner intentionally does not save or require a scaler; meta-features are probabilities (0..1) from base learners plus indicator features.
+- New CLI flags supported by `metalearner.py`:
+    - `--meta_model_type` — force `standard` or `reuploading` for final training (overrides tuned value).
+    - `--meta_n_layers` — force number of ansatz layers for final training (overrides tuned value).
+    - `--meta_n_qubits` — force number of qubits (defaults to the number of meta-features if not provided).
+    - `--learning_rate` — if provided, a fixed learning rate is used during tuning (trials keep this LR) and final training. This allows running tuning while controlling only the LR externally.
 
 **Stage 5: Inference (`inference.py`)**
 - **Purpose:** To predict the cancer type for a new, unseen patient.

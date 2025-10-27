@@ -16,6 +16,7 @@ from sklearn.metrics import (
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 import numpy as _np  # local alias to avoid shadowing pennylane.numpy
+import sys
 
 # Import the centralized logger
 from logging_utils import log
@@ -235,24 +236,33 @@ def assemble_meta_data(preds_dirs, indicator_file):
     
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, scaler_options):
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     """Defines one trial for tuning the meta-learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Log suggested parameters
+    # Meta-features are probabilities (0..1) from base learners plus indicator features.
+    # They do not require additional scaling; don't tune scalers for the meta-learner.
+    # qml_model and n_layers remain tunable. Use a fixed learning rate if provided
     params = {
-        'scaler': trial.suggest_categorical('scaler', scaler_options),
         'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
         'n_layers': trial.suggest_int('n_layers', 3, 6),
-        'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-1, log=True)
     }
+    # Use CLI-provided learning_rate (default 0.5) for tuning — we do not sample LR in Optuna
+    params['learning_rate'] = float(args.learning_rate)
     params['steps'] = 100  # Fixed number of steps for tuning
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
-    # Create and fit the scaler
-    scaler = get_scaler(params['scaler'])
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
+    # NOTE: Do not scale meta-features — base learner outputs are probabilities [0,1]
+    X_train_scaled = X_train.values if isinstance(X_train, pd.DataFrame) else X_train
+    X_val_scaled = X_val.values if isinstance(X_val, pd.DataFrame) else X_val
+
+    # Construct a clear W&B run name for the meta-learner (no trial suffix by default)
+    wandb_name = None
+    if args.use_wandb:
+        wandb_name = f"meta_{params['qml_model']}_q{X_train.shape[1]}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
+    if args.wandb_run_name:
+        wandb_name = args.wandb_run_name
 
     model_params = {
         'n_qubits': X_train.shape[1], 
@@ -264,7 +274,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, scaler_opt
         'validation_frequency': args.validation_frequency,
         'use_wandb': args.use_wandb,
         'wandb_project': args.wandb_project,
-        'wandb_run_name': f'metalearner_tune_trial{trial.number}' if args.use_wandb else None
+        'wandb_run_name': wandb_name
     }
     
     if params['qml_model'] == 'standard':
@@ -338,6 +348,15 @@ def main():
     parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
     parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
     parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
+    # New CLI args for meta-learner training/tuning
+    parser.add_argument('--meta_model_type', type=str, choices=['standard', 'reuploading'], default=None,
+                        help="Force meta-learner model type for final training (overrides tuned value).")
+    parser.add_argument('--meta_n_layers', type=int, default=None,
+                        help="Force number of layers for meta-learner during final training (overrides tuned value).")
+    parser.add_argument('--meta_n_qubits', type=int, default=None,
+                        help="Force number of qubits to use for the meta-learner (defaults to n_meta_features).")
+    parser.add_argument('--learning_rate', type=float, default=0.5,
+                        help="Fixed learning rate to use for both tuning and final training (default: 0.5). If passed on the CLI it will override tuned params for final training.")
     args = parser.parse_args()
 
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le = assemble_meta_data(args.preds_dir, args.indicator_file)
@@ -352,39 +371,31 @@ def main():
     global OUTPUT_DIR
     OUTPUT_DIR = ensure_writable_results_dir(OUTPUT_DIR)
     log.info(f"Using output directory: {OUTPUT_DIR}")
-
     if args.mode == 'tune':
         log.info(f"--- Starting Hyperparameter Tuning for Meta-Learner ({args.n_trials} trials) ---")
-        
-        # --- Scaler selection logic ---
-        scaler_map = {'s': 'Standard', 'm': 'MinMax', 'r': 'Robust'}
-        scaler_options = [scaler_map[char] for char in args.scalers if char in scaler_map]
-        if not scaler_options:
-            log.error("No valid scalers specified. Use 's', 'm', or 'r'. Exiting.")
-            return
-        log.info(f"Using scalers: {scaler_options}")
 
-        # Split training data for validation during tuning
+        # Split training data for validation during tuning (stratified)
         X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
             X_meta_train, y_meta_train, test_size=0.25, random_state=RANDOM_STATE, stratify=y_meta_train
         )
-        
+
         study_name = 'qml_metalearner_tuning'
-        
+
         # Ensure database file is writable
         writable_journal_path = ensure_writable_db(TUNING_JOURNAL_FILE)
         log.info(f"Using journal file: {writable_journal_path}")
-        
+
         storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
-        
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args, scaler_options), n_trials=args.n_trials)
+
+        # Use a fixed learning rate for tuning if provided via CLI; objective will read args.learning_rate
+        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
         log.info(f"Best value (weighted F1): {study.best_value:.4f}")
-        
-        # Save best parameters
+
+        # Save best parameters (learning_rate isn't included if fixed via CLI)
         params_file = os.path.join(OUTPUT_DIR, 'best_metalearner_params.json')
         with open(params_file, 'w') as f:
             json.dump(study.best_params, f, indent=4)
@@ -400,22 +411,32 @@ def main():
         except FileNotFoundError:
             log.warning(f"Best parameter file not found at '{params_path}'. Using default parameters.")
             # Define sensible defaults if tuning was skipped
-            params = {'scaler': 'Standard', 'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.05, 'steps': 100}
+            params = {'scaler': 'Standard', 'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.5, 'steps': 100}
 
         # Override steps if provided via command line
         if args.override_steps:
             params['steps'] = args.override_steps
             log.info(f"Overriding training steps with: {args.override_steps}")
+        # Do NOT scale meta-features: base-learner outputs are probabilities in [0,1]
+        X_meta_train_scaled = X_meta_train.values
 
-        # Create and fit the scaler on the full training data
-        scaler = get_scaler(params.get('scaler', 'Standard'))
-        log.info(f"Using scaler: {params.get('scaler', 'Standard')}")
-        X_meta_train_scaled = scaler.fit_transform(X_meta_train)
+        # Allow CLI overrides for final training params
+        if args.meta_model_type:
+            params['qml_model'] = args.meta_model_type
+            log.info(f"Overriding qml_model with CLI value: {args.meta_model_type}")
+        if args.meta_n_layers:
+            params['n_layers'] = args.meta_n_layers
+            log.info(f"Overriding n_layers with CLI value: {args.meta_n_layers}")
+        # Only override tuned params if the learning_rate was explicitly provided on the CLI
+        if '--learning_rate' in sys.argv:
+            params['learning_rate'] = float(args.learning_rate)
+            log.info(f"Overriding learning_rate with CLI value: {params['learning_rate']}")
 
         # Prepare model with loaded or default parameters
+        n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else X_meta_train.shape[1]
         checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if args.max_training_time else None
         model_params = {
-            'n_qubits': X_meta_train.shape[1],
+            'n_qubits': n_qubits,
             'n_layers': params['n_layers'],
             'learning_rate': params['learning_rate'],
             'steps': params['steps'],
@@ -429,9 +450,10 @@ def main():
             'validation_frequency': args.validation_frequency,
             'use_wandb': args.use_wandb,
             'wandb_project': args.wandb_project,
-            'wandb_run_name': args.wandb_run_name or 'metalearner_train'
+            # Construct a clear W&B run name for the final training run
+            'wandb_run_name': args.wandb_run_name or f"meta_train_{params.get('qml_model','model')}_q{n_qubits}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
         }
-        
+
         if params['qml_model'] == 'standard':
             final_model = MulticlassQuantumClassifierDR(**model_params)
         else:
@@ -439,23 +461,22 @@ def main():
 
         log.info(f"Training final {params['qml_model']} model with parameters: {json.dumps(model_params, indent=2)}")
         final_model.fit(X_meta_train_scaled, y_meta_train.values)
-        
+
         # Log best weights step if available
         if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
             log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
-        
-        # Save the trained model and scaler
+
+        # Save the trained model
         model_path = os.path.join(OUTPUT_DIR, 'metalearner_model.joblib')
         joblib.dump(final_model, model_path)
         log.info(f"Final meta-learner model saved to '{model_path}'")
-        
-        scaler_path = os.path.join(OUTPUT_DIR, 'metalearner_scaler.joblib')
-        joblib.dump(scaler, scaler_path)
-        log.info(f"Final meta-learner scaler saved to '{scaler_path}'")
 
-        # Evaluate and save final predictions
+        # Note: we do not save a scaler for the meta-learner because inputs are
+        # already probabilities (0..1) from base learners plus indicator features.
+
+        # Evaluate and save final predictions (no scaler applied)
         log.info("--- Evaluating on Test Set ---")
-        X_meta_test_scaled = scaler.transform(X_meta_test)
+        X_meta_test_scaled = X_meta_test.values if isinstance(X_meta_test, pd.DataFrame) else X_meta_test
         test_predictions = final_model.predict(X_meta_test_scaled)
         test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")

@@ -533,6 +533,16 @@ python metalearner.py --preds_dir final_ensemble_predictions --indicator_file in
 python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --max_training_time 11 --use_wandb --wandb_project qml_metalearner --checkpoint_fallback_dir /tmp/metalearner_checkpoints --verbose
 ```
 
+Additional useful CLI options for `metalearner.py`:
+
+```bash
+# Force the meta-learner model type and layers for final training (overrides tuned params)
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --meta_model_type reuploading --meta_n_layers 4
+
+# Use a fixed learning rate for both tuning (if provided) and final training
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --n_trials 50 --learning_rate 0.02
+```
+
 Notes:
 - If tuning was run, the script loads parameters from `final_model_and_predictions/best_metalearner_params.json`
 - If no tuned parameters exist, the script uses sensible defaults
@@ -567,9 +577,10 @@ Important note about Conditional Feature Encoding (CFE) and missingness
 
 Outputs (saved to `final_model_and_predictions/` by default):
 - `metalearner_model.joblib` (final trained meta-learner saved by `metalearner.py`)
-- `metalearner_scaler.joblib` (scaler used on meta-features)
 - `best_metalearner_params.json` (if tuning was run)
 - `trial_{trial_id}/metrics.json` (per-trial comprehensive metrics during tuning)
+
+Note: We intentionally do not save a meta-learner scaler. Meta-features are probabilities (0..1) from base learners plus indicator features; scaling is not required and can distort probability semantics.
 
 Note: The default OUTPUT_DIR for `metalearner.py` is `final_model_and_predictions`. `metalearner.py` saves the meta-learner as `metalearner_model.joblib`, but the inference script `inference.py` expects the deployment directory to contain `meta_learner_final.joblib` and a `meta_learner_columns.json` file describing the exact column order used during meta-learner training. See Step 6 for the required copy/rename steps.
 
