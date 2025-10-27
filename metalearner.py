@@ -271,11 +271,97 @@ def assemble_meta_data(preds_dirs, indicator_file):
     if not X_meta_train_preds.empty:
         pred_cols = [c for c in X_meta_train_preds.columns if str(c).startswith(pred_prefix)]
         if pred_cols:
-            X_meta_train_preds = X_meta_train_preds[pred_cols]
+            # To avoid collinearity given that each base learner's class
+            # probabilities sum to 1, drop one class-column per base-learner
+            # (e.g. the last sorted class) to make the feature matrix full-rank
+            def _drop_one_per_base(pred_cols_list, encoder_last_class=None):
+                """Return (keep_cols, dropped_map) where dropped_map maps datatype -> dropped_column
+
+                We prefer to drop the column that corresponds to the encoder's last class
+                (encoder_last_class) for each base learner. If that class isn't present
+                among the base-learner's columns, fall back to dropping the last
+                lexicographic column to keep behavior deterministic.
+                """
+                by_dt = {}
+                for c in pred_cols_list:
+                    rem = c[len(pred_prefix):] if c.startswith(pred_prefix) else c
+                    dt = rem.split('_', 1)[0]
+                    by_dt.setdefault(dt, []).append(c)
+                keep = []
+                dropped_map = {}
+                for dt, cols in by_dt.items():
+                    cols_sorted = sorted(cols)
+                    if len(cols_sorted) <= 1:
+                        # nothing to drop
+                        keep.extend(cols_sorted)
+                        dropped_map[dt] = None
+                        continue
+
+                    # Try to find the column corresponding to encoder_last_class
+                    chosen_drop = None
+                    if encoder_last_class is not None:
+                        # construct candidate column name(s) that may match class label
+                        # columns are like 'pred_{datatype}_{classname}'
+                        for c in cols_sorted:
+                            rem = c[len(pred_prefix):] if c.startswith(pred_prefix) else c
+                            parts = rem.split('_')
+                            # class label may contain underscores; compare suffix join
+                            cls_part = '_'.join(parts[1:]) if len(parts) > 1 else ''
+                            if str(cls_part) == str(encoder_last_class):
+                                chosen_drop = c
+                                break
+                    if chosen_drop is None:
+                        # Fallback: drop last lexicographic column
+                        chosen_drop = cols_sorted[-1]
+
+                    dropped_map[dt] = chosen_drop
+                    for c in cols_sorted:
+                        if c != chosen_drop:
+                            keep.append(c)
+
+                return keep, dropped_map
+
+            # Use encoder's last class as preferred drop candidate
+            encoder_last = None
+            try:
+                encoder_last = le.classes_[-1]
+            except Exception:
+                encoder_last = None
+
+            reduced_pred_cols, dropped_map = _drop_one_per_base(pred_cols, encoder_last)
+            dropped_cols = [v for v in dropped_map.values() if v]
+            if dropped_cols:
+                log.info(f"Dropped one redundant class column per base-learner: {dropped_cols}")
+            X_meta_train_preds = X_meta_train_preds[reduced_pred_cols]
+
+            # Persist mapping for traceability
+            try:
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
+                mapping_path = os.path.join(OUTPUT_DIR, 'dropped_pred_columns.json')
+                with open(mapping_path, 'w') as mf:
+                    json.dump(dropped_map, mf, indent=2)
+                log.info(f"Saved dropped-columns mapping to {mapping_path}")
+            except Exception as e:
+                log.warning(f"Failed to persist dropped-columns mapping to {OUTPUT_DIR}: {e}")
     if not X_meta_test_preds.empty:
         pred_cols_test = [c for c in X_meta_test_preds.columns if str(c).startswith(pred_prefix)]
         if pred_cols_test:
-            X_meta_test_preds = X_meta_test_preds[pred_cols_test]
+            # Apply the same column-dropping decision determined on the
+            # training set so feature sets align. Ensure test set has the
+            # identical columns and order; fill missing columns with zeros.
+            if 'reduced_pred_cols' in locals():
+                try:
+                    # Reindex test columns to match reduced_pred_cols order; missing cols -> NaN
+                    X_meta_test_preds = X_meta_test_preds.reindex(columns=reduced_pred_cols)
+                    # Replace missing predictions with 0.0 so the feature shapes align
+                    X_meta_test_preds = X_meta_test_preds.fillna(0.0)
+                except Exception:
+                    # If reindexing fails for any reason, fall back to intersection
+                    reduced_test_cols = [c for c in reduced_pred_cols if c in X_meta_test_preds.columns]
+                    X_meta_test_preds = X_meta_test_preds[reduced_test_cols]
+            else:
+                # Fallback: if training-side reduction wasn't computed, just keep test preds as-is
+                X_meta_test_preds = X_meta_test_preds[pred_cols_test]
 
     # Join with indicator features. Use inner join to keep only aligned samples
     # that have both predictions and indicator rows. Ensure indices are named
@@ -366,6 +452,30 @@ def assemble_meta_data(preds_dirs, indicator_file):
     # the 'is_missing_' prefix) so callers can split meta-features into
     # base-learner outputs and indicator masks when needed.
     indicator_cols = [c for c in indicators.columns if str(c).startswith('is_missing_')]
+    # Sanity-check: ensure that for the assembled training set the number of
+    # base prediction columns matches the mask that would be constructed from
+    # the indicators. This detects misalignment early and provides a clear
+    # error message rather than letting downstream gated models fail.
+    try:
+        base_cols_train = [c for c in X_meta_train.columns if c not in indicator_cols]
+        mask_check = _build_mask_from_indicators(X_meta_train, base_cols_train, indicator_cols)
+        if mask_check.shape != (len(X_meta_train), len(base_cols_train)):
+            raise ValueError(f"Assembled meta-train base_preds shape { (len(X_meta_train), len(base_cols_train)) } does not match mask shape {mask_check.shape}")
+    except Exception as e:
+        log.error(f"Meta-data assembly sanity check failed: {e}")
+        # Propagate the error since downstream training would fail; caller may catch
+        raise
+
+    # Persist final feature column list for traceability (helps map model inputs)
+    try:
+        feats_path = os.path.join(OUTPUT_DIR, 'meta_train_feature_columns.json')
+        with open(feats_path, 'w') as fh:
+            json.dump({'base_prediction_columns': base_cols_train, 'indicator_columns': indicator_cols}, fh, indent=2)
+        log.info(f"Saved meta-train feature columns to {feats_path}")
+    except Exception:
+        # Non-fatal; continue
+        pass
+
     return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols
 
 

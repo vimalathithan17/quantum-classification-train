@@ -102,7 +102,26 @@ We made several coordinated changes to how preprocessing and missingness are han
 - **Output:** 
     - Final trained meta-learner model (`metalearner_model.joblib`)
     - Best hyperparameters if tuning was run (`best_metalearner_params.json`)
-  - Per-trial comprehensive metrics during tuning (`trial_{trial_id}/metrics.json`)
+    - Per-trial comprehensive metrics during tuning (`trial_{trial_id}/metrics.json`)
+
+Recent hardening and traceability improvements
+---------------------------------------------
+
+To make the meta-learner assembly and gating semantics more robust and auditable, the following changes were made:
+
+- Mask expansion parity: The per-datatype indicator columns (named `is_missing_{datatype}_`) are expanded into a per-prediction mask that aligns one-to-one with the base prediction columns (those beginning with `pred_`). This ensures gated meta-learners that accept `(base_preds, mask)` tuples receive masks with exactly the same shape as the base prediction matrix.
+
+- Degeneracy removal (drop one class column per base learner): Because each base learner outputs a probability distribution across classes (columns sum to 1), one class column per base learner is linearly dependent on the others. To avoid perfect multicollinearity we now drop exactly one class column per base learner when assembling the meta-feature matrix. The chosen column is the one that corresponds to the master label encoder's last class when available; otherwise we fall back to a deterministic lexicographic choice. This preserves all information (the dropped probability can be recovered from the remaining ones) while improving numerical stability for classical learners.
+
+- Persisted traceability: The mapping of dropped columns (datatype -> dropped column name) is written to `OUTPUT_DIR/dropped_pred_columns.json` so you can map model inputs back to original base-learner outputs for interpretation.
+
+- Train/test alignment: The same reduced column set (determined on the training side) is enforced on the test-side features. If some columns are missing in the test predictions they are reindexed and filled with zeros so train/test feature ordering and shapes always match.
+
+- Sanity checks: `assemble_meta_data(...)` now validates that the assembled base prediction columns match the mask shape produced from the indicators. If a mismatch is detected, the assembler raises a clear error and logs diagnostic information to help find the root cause rather than failing later inside model code.
+
+- Artifact of final column ordering: For reproducibility we persist the final `base_prediction_columns` and `indicator_columns` to `OUTPUT_DIR/meta_train_feature_columns.json` so the exact inputs used to train the meta-learner are recorded.
+
+These changes were made to reduce debugging overhead (clear early errors), improve numerical stability for the classical meta-learner, and make model inputs auditable for downstream analysis and explainability.
 
 **Notes & CLI additions:**
 - The meta-learner intentionally does not save or require a scaler; meta-features are probabilities (0..1) from base learners plus indicator features.
