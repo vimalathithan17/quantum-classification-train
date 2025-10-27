@@ -6,7 +6,7 @@ import joblib
 import json
 import shutil
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
+# No feature scaling required for meta-learner (base learner outputs are probabilities)
 from sklearn.metrics import (
     accuracy_score, 
     classification_report,
@@ -22,7 +22,10 @@ import sys
 from logging_utils import log
 
 # Import both DR model types for experimentation
-from qml_models import MulticlassQuantumClassifierDR, MulticlassQuantumClassifierDataReuploadingDR
+from qml_models import (
+    GatedMulticlassQuantumClassifierDR,
+    GatedMulticlassQuantumClassifierDataReuploadingDR,
+)
 
 # Environment-configurable directories
 ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
@@ -153,20 +156,6 @@ def ensure_writable_results_dir(results_dir):
     return results_dir
 
 
-def get_scaler(scaler_name):
-    """Returns a scaler object from a string name."""
-    if not scaler_name:
-        return MinMaxScaler()
-    s = scaler_name.strip().lower()
-    if s in ('m', 'minmax', 'min_max', 'minmaxscaler'):
-        return MinMaxScaler()
-    if s in ('s', 'standard', 'standardscaler'):
-        return StandardScaler()
-    if s in ('r', 'robust', 'robustscaler'):
-        return RobustScaler()
-    return MinMaxScaler()
-
-
 def assemble_meta_data(preds_dirs, indicator_file):
     """Loads and combines base learner predictions from multiple directories."""
     log.info(f"--- Assembling data from: {preds_dirs} ---")
@@ -192,6 +181,20 @@ def assemble_meta_data(preds_dirs, indicator_file):
     labels_categorical = indicators['class']
     labels = pd.Series(le.transform(labels_categorical), index=labels_categorical.index)
     indicators = indicators.drop(columns=['class'])
+    # The indicator file encodes missingness: 1 == data missing for that base learner.
+    # Convert these missingness indicators into inclusion masks where
+    # mask == 1 means the base-learner output is present and should be used.
+    # This makes downstream code (which multiplies base_preds * mask) straightforward.
+    try:
+        # Fill NaNs conservatively as "not missing" (0) before inversion
+        indicators = indicators.fillna(0)
+        # Ensure numeric type then invert: missing(1) -> present(0) -> invert -> present(1)
+        indicators = 1.0 - indicators.astype(float)
+        # Clip to {0,1} in case of non-binary values
+        indicators = indicators.clip(0.0, 1.0)
+    except Exception:
+        # If something goes wrong, leave indicators as-is and let consumers fail loudly
+        log.warning("Failed to convert indicator missingness to inclusion masks; leaving original values")
 
     oof_preds_list = []
     test_preds_list = []
@@ -213,11 +216,14 @@ def assemble_meta_data(preds_dirs, indicator_file):
                 # If case_id column exists, set it as the index and drop the column from features
                 if 'case_id' in df.columns:
                     df = df.set_index('case_id')
+                    # Standardize index name for downstream joins
+                    df.index.name = 'case_id'
                 else:
                     # If first column looks like an id column, set it as index
                     first_col = df.columns[0]
                     if first_col.lower() in ('case_id', 'caseid', 'id'):
                         df = df.set_index(first_col)
+                        df.index.name = 'case_id'
 
                 # Ensure we don't accidentally include an index named case_id as a column
                 if 'case_id' in df.columns:
@@ -260,20 +266,109 @@ def assemble_meta_data(preds_dirs, indicator_file):
     else:
         X_meta_test_preds = pd.DataFrame()
 
-    # Join with indicator features
-    X_meta_train = X_meta_train_preds.join(indicators).dropna()
-    X_meta_test = X_meta_test_preds.join(indicators).dropna()
+    # Filter prediction columns to those that look like base-learner outputs
+    pred_prefix = 'pred_'
+    if not X_meta_train_preds.empty:
+        pred_cols = [c for c in X_meta_train_preds.columns if str(c).startswith(pred_prefix)]
+        if pred_cols:
+            X_meta_train_preds = X_meta_train_preds[pred_cols]
+    if not X_meta_test_preds.empty:
+        pred_cols_test = [c for c in X_meta_test_preds.columns if str(c).startswith(pred_prefix)]
+        if pred_cols_test:
+            X_meta_test_preds = X_meta_test_preds[pred_cols_test]
+
+    # Join with indicator features. Use inner join to keep only aligned samples
+    # that have both predictions and indicator rows. Ensure indices are named
+    # consistently and unique.
+    if not X_meta_train_preds.empty:
+        X_meta_train_preds.index.name = 'case_id'
+    if not X_meta_test_preds.empty:
+        X_meta_test_preds.index.name = 'case_id'
+
+    X_meta_train = X_meta_train_preds.join(indicators, how='inner') if not X_meta_train_preds.empty else pd.DataFrame()
+    X_meta_test = X_meta_test_preds.join(indicators, how='inner') if not X_meta_test_preds.empty else pd.DataFrame()
+
+    # Drop any rows with missing values after the join (conservative)
+    if not X_meta_train.empty:
+        X_meta_train = X_meta_train.dropna()
+    if not X_meta_test.empty:
+        X_meta_test = X_meta_test.dropna()
+
+    # Validate resulting datasets
+    if X_meta_train.empty:
+        log.error("Assembled meta-training set is empty after joining predictions and indicators. Check input files and indices (case_id).")
+        return None, None, None, None, None
+
+    if X_meta_test.empty:
+        log.warning("Assembled meta-test set is empty after joining predictions and indicators. Continuing but test set will be empty.")
     
-    # Align labels with the final set of samples
-    y_meta_train = labels.loc[X_meta_train.index]
-    y_meta_test = labels.loc[X_meta_test.index]
+    # Align labels with the final set of samples. Use reindex to avoid KeyErrors
+    # and drop any samples without labels (should be rare).
+    y_meta_train = labels.reindex(X_meta_train.index)
+    missing_train_labels = y_meta_train.isna().sum()
+    if missing_train_labels > 0:
+        log.warning(f"{missing_train_labels} samples in meta-train have no label after alignment; dropping them")
+        keep_idx = y_meta_train.dropna().index
+        X_meta_train = X_meta_train.loc[keep_idx]
+        y_meta_train = y_meta_train.loc[keep_idx]
+
+    if not X_meta_test.empty:
+        y_meta_test = labels.reindex(X_meta_test.index)
+        missing_test_labels = y_meta_test.isna().sum()
+        if missing_test_labels > 0:
+            log.warning(f"{missing_test_labels} samples in meta-test have no label after alignment; dropping them")
+            keep_idx = y_meta_test.dropna().index
+            X_meta_test = X_meta_test.loc[keep_idx]
+            y_meta_test = y_meta_test.loc[keep_idx]
+    else:
+        y_meta_test = pd.Series(dtype=int)
 
     log.info(f"Meta-training data shape: {X_meta_train.shape}")
     log.info(f"Meta-test data shape: {X_meta_test.shape}")
     
-    return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le
+    # Ensure indices are named and unique for safe reindexing downstream
+    for df_name, df in (('train', X_meta_train), ('test', X_meta_test)):
+        if df is not None and not df.empty:
+            df.index.name = 'case_id'
+            if df.index.duplicated().any():
+                dup_count = df.index.duplicated().sum()
+                log.warning(f"{dup_count} duplicated case_id(s) found in meta-{df_name}; keeping first occurrence")
+                df = df[~df.index.duplicated(keep='first')]
+            if df_name == 'train':
+                X_meta_train = df
+            else:
+                X_meta_test = df
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
+    # Align and coerce labels to int, dropping any samples without labels
+    y_meta_train = y_meta_train.reindex(X_meta_train.index)
+    if y_meta_train.isna().any():
+        missing = int(y_meta_train.isna().sum())
+        log.warning(f"Dropping {missing} meta-train sample(s) with missing labels after reindexing")
+        keep_idx = y_meta_train.dropna().index
+        X_meta_train = X_meta_train.loc[keep_idx]
+        y_meta_train = y_meta_train.loc[keep_idx]
+    # Ensure integer dtype for labels
+    y_meta_train = y_meta_train.astype(int)
+
+    if not X_meta_test.empty:
+        y_meta_test = y_meta_test.reindex(X_meta_test.index)
+        if y_meta_test.isna().any():
+            missing = int(y_meta_test.isna().sum())
+            log.warning(f"Dropping {missing} meta-test sample(s) with missing labels after reindexing")
+            keep_idx = y_meta_test.dropna().index
+            X_meta_test = X_meta_test.loc[keep_idx]
+            y_meta_test = y_meta_test.loc[keep_idx]
+        y_meta_test = y_meta_test.astype(int)
+    else:
+        y_meta_test = pd.Series(dtype=int)
+
+    # Also return the list of indicator column names (only those following
+    # the 'is_missing_' prefix) so callers can split meta-features into
+    # base-learner outputs and indicator masks when needed.
+    indicator_cols = [c for c in indicators.columns if str(c).startswith('is_missing_')]
+    return X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols
+
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_cols=None):
     """Defines one trial for tuning the meta-learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
@@ -282,7 +377,8 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     # They do not require additional scaling; don't tune scalers for the meta-learner.
     # qml_model and n_layers remain tunable. Use a fixed learning rate if provided
     params = {
-        'qml_model': trial.suggest_categorical('qml_model', ['standard', 'reuploading']),
+        # Only gated variants are considered in this workflow
+        'qml_model': trial.suggest_categorical('qml_model', ['gated_standard', 'gated_reuploading']),
         'n_layers': trial.suggest_int('n_layers', 3, 6),
     }
     # Use CLI-provided learning_rate (default 0.5) for tuning — we do not sample LR in Optuna
@@ -291,21 +387,33 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
     # NOTE: Do not scale meta-features — base learner outputs are probabilities [0,1]
-    X_train_scaled = X_train.values if isinstance(X_train, pd.DataFrame) else X_train
-    X_val_scaled = X_val.values if isinstance(X_val, pd.DataFrame) else X_val
+    # Keep DataFrame form so we can split base preds and indicators when using the gated model.
+    X_train_df = X_train if isinstance(X_train, pd.DataFrame) else pd.DataFrame(X_train)
+    X_val_df = X_val if isinstance(X_val, pd.DataFrame) else pd.DataFrame(X_val)
 
     # Construct a clear W&B run name for the meta-learner (no trial suffix by default)
     wandb_name = None
     if args.use_wandb:
-        wandb_name = f"meta_{params['qml_model']}_q{X_train.shape[1]}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
+        # Use DataFrame shape if available for clarity
+        n_meta_feats = X_train_df.shape[1]
+        wandb_name = f"meta_{params['qml_model']}_q{n_meta_feats}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
     if args.wandb_run_name:
         wandb_name = args.wandb_run_name
 
+    # Determine n_qubits: for gated variants we only need qubits for base-learner outputs
+    if params['qml_model'].startswith('gated'):
+        if indicator_cols is None:
+            raise ValueError("indicator_cols must be provided when using the gated meta-learner")
+        base_cols = [c for c in X_train_df.columns if c not in indicator_cols]
+        n_qubits_effective = len(base_cols)
+    else:
+        n_qubits_effective = X_train_df.shape[1]
+
     model_params = {
-        'n_qubits': X_train.shape[1], 
-        'n_layers': params['n_layers'], 
-        'learning_rate': params['learning_rate'], 
-        'steps': params['steps'], 
+        'n_qubits': n_qubits_effective,
+        'n_layers': params['n_layers'],
+        'learning_rate': params['learning_rate'],
+        'steps': params['steps'],
         'n_classes': n_classes,
         'verbose': args.verbose,
         'validation_frequency': args.validation_frequency,
@@ -313,17 +421,26 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args):
         'wandb_project': args.wandb_project,
         'wandb_run_name': wandb_name
     }
-    
-    if params['qml_model'] == 'standard':
-        model = MulticlassQuantumClassifierDR(**model_params)
-    else: # reuploading
-        model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
-    
+
+    # Instantiate gated variant according to the trial suggestion
+    if params['qml_model'] == 'gated_standard':
+        model = GatedMulticlassQuantumClassifierDR(**model_params)
+    else:  # gated_reuploading
+        model = GatedMulticlassQuantumClassifierDataReuploadingDR(**model_params)
+
     log.info(f"Trial {trial.number}: Training {params['qml_model']} model...")
-    model.fit(X_train_scaled, y_train.values)
-    
+    # For gated variants always split into base-predictions and indicator mask
+    base_cols = [c for c in X_train_df.columns if c not in indicator_cols]
+    X_base_train = X_train_df[base_cols].values
+    X_mask_train = X_train_df[indicator_cols].values
+    model.fit((X_base_train, X_mask_train), y_train.values)
+
     log.info(f"Trial {trial.number}: Evaluating...")
-    predictions = model.predict(X_val_scaled)
+    # Construct validation inputs for gated model the same way
+    base_cols_val = [c for c in X_val_df.columns if c not in indicator_cols]
+    X_base_val = X_val_df[base_cols_val].values
+    X_mask_val = X_val_df[indicator_cols].values
+    predictions = model.predict((X_base_val, X_mask_val))
     
     # Compute comprehensive metrics
     accuracy = float(accuracy_score(y_val.values, predictions))
@@ -374,7 +491,6 @@ def main():
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
     parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
     parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
-    parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
     parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation during tuning (use simple train/val split).")
     parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
@@ -386,8 +502,8 @@ def main():
     parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
     parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
     # New CLI args for meta-learner training/tuning
-    parser.add_argument('--meta_model_type', type=str, choices=['standard', 'reuploading'], default=None,
-                        help="Force meta-learner model type for final training (overrides tuned value).")
+    parser.add_argument('--meta_model_type', type=str, choices=['gated_standard', 'gated_reuploading'], default=None,
+                        help="Force meta-learner model type for final training (overrides tuned value). Only gated variants are supported.")
     parser.add_argument('--meta_n_layers', type=int, default=None,
                         help="Force number of layers for meta-learner during final training (overrides tuned value).")
     parser.add_argument('--meta_n_qubits', type=int, default=None,
@@ -396,7 +512,7 @@ def main():
                         help="Fixed learning rate to use for both tuning and final training (default: 0.5). If passed on the CLI it will override tuned params for final training.")
     args = parser.parse_args()
 
-    X_meta_train, y_meta_train, X_meta_test, y_meta_test, le = assemble_meta_data(args.preds_dir, args.indicator_file)
+    X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols = assemble_meta_data(args.preds_dir, args.indicator_file)
     if X_meta_train is None:
         log.critical("Failed to assemble meta-dataset. Exiting.")
         return
@@ -443,7 +559,7 @@ def main():
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
 
         # Use a fixed learning rate for tuning if provided via CLI; objective will read args.learning_rate
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args), n_trials=args.n_trials)
+        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args, indicator_cols), n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
@@ -465,17 +581,17 @@ def main():
         except FileNotFoundError:
             log.warning(f"Best parameter file not found at '{params_path}'. Using default parameters.")
             # Define sensible defaults if tuning was skipped
-            params = {'scaler': 'Standard', 'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.5, 'steps': 100}
+            params = {'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.5, 'steps': 100}
 
         # Override steps if provided via command line
         if args.override_steps:
             params['steps'] = args.override_steps
             log.info(f"Overriding training steps with: {args.override_steps}")
-        # Do NOT scale meta-features: base-learner outputs are probabilities in [0,1]
-        X_meta_train_scaled = X_meta_train.values
+    # Do NOT scale meta-features: base-learner outputs are probabilities in [0,1]
 
         # Allow CLI overrides for final training params
         if args.meta_model_type:
+            # CLI must specify gated variants; accept legacy names too and map them
             params['qml_model'] = args.meta_model_type
             log.info(f"Overriding qml_model with CLI value: {args.meta_model_type}")
         if args.meta_n_layers:
@@ -487,7 +603,21 @@ def main():
             log.info(f"Overriding learning_rate with CLI value: {params['learning_rate']}")
 
         # Prepare model with loaded or default parameters
-        n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else X_meta_train.shape[1]
+        # Normalize/Map qml_model to gated variants if necessary
+        if not str(params.get('qml_model', '')).startswith('gated'):
+            # map legacy values to gated variants
+            if params.get('qml_model') == 'standard':
+                params['qml_model'] = 'gated_standard'
+            else:
+                # default map reuploading (or any other) -> gated_reuploading
+                params['qml_model'] = 'gated_reuploading'
+
+        # Determine effective n_qubits. For gated variants we only need qubits for base preds
+        if params['qml_model'].startswith('gated'):
+            n_base = X_meta_train.shape[1] - len(indicator_cols)
+            n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else n_base
+        else:
+            n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else X_meta_train.shape[1]
         checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if args.max_training_time else None
         model_params = {
             'n_qubits': n_qubits,
@@ -508,13 +638,18 @@ def main():
             'wandb_run_name': args.wandb_run_name or f"meta_train_{params.get('qml_model','model')}_q{n_qubits}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
         }
 
-        if params['qml_model'] == 'standard':
-            final_model = MulticlassQuantumClassifierDR(**model_params)
-        else:
-            final_model = MulticlassQuantumClassifierDataReuploadingDR(**model_params)
+        # Instantiate only gated variants
+        if params['qml_model'] == 'gated_standard':
+            final_model = GatedMulticlassQuantumClassifierDR(**model_params)
+        else:  # gated_reuploading
+            final_model = GatedMulticlassQuantumClassifierDataReuploadingDR(**model_params)
 
         log.info(f"Training final {params['qml_model']} model with parameters: {json.dumps(model_params, indent=2)}")
-        final_model.fit(X_meta_train_scaled, y_meta_train.values)
+        # Fit the gated model: always split into base preds and indicator mask
+        base_cols = [c for c in X_meta_train.columns if c not in indicator_cols]
+        X_base = X_meta_train[base_cols].values
+        X_mask = X_meta_train[indicator_cols].values
+        final_model.fit((X_base, X_mask), y_meta_train.values)
 
         # Log best weights step if available
         if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
@@ -530,8 +665,10 @@ def main():
 
         # Evaluate and save final predictions (no scaler applied)
         log.info("--- Evaluating on Test Set ---")
-        X_meta_test_scaled = X_meta_test.values if isinstance(X_meta_test, pd.DataFrame) else X_meta_test
-        test_predictions = final_model.predict(X_meta_test_scaled)
+        base_cols = [c for c in X_meta_test.columns if c not in indicator_cols]
+        X_base_test = X_meta_test[base_cols].values
+        X_mask_test = X_meta_test[indicator_cols].values
+        test_predictions = final_model.predict((X_base_test, X_mask_test))
         test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
 
