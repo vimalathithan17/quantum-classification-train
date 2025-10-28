@@ -1309,38 +1309,131 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
         base_preds, mask = X
         base_preds = np.atleast_2d(np.asarray(base_preds, dtype=np.float64))
         mask = np.atleast_2d(np.asarray(mask, dtype=np.float64))
-        if base_preds.shape != mask.shape:
-            raise ValueError("base_preds and mask must have same shape")
 
+        # Ensure shapes align
+        if base_preds.shape != mask.shape:
+            raise ValueError(f"base_preds shape {base_preds.shape} and mask shape {mask.shape} must match")
+
+        # Store classes
         self.classes_ = np.unique(y)
+
+        # Set default fallback dir based on checkpoint dir name
+        if self.checkpoint_dir and not self.checkpoint_fallback_dir:
+            checkpoint_name = os.path.basename(self.checkpoint_dir.rstrip('/'))
+            self.checkpoint_fallback_dir = checkpoint_name
+
+        # Ensure checkpoint directory is writable
+        checkpoint_dir, used_fallback = _ensure_writable_checkpoint_dir(
+            self.checkpoint_dir, self.checkpoint_fallback_dir
+        )
+
+        # Initialize W&B logging if requested
+        wandb = _initialize_wandb(
+            self.use_wandb, self.wandb_project, self.wandb_run_name,
+            config_dict={
+                'n_qubits': self.n_qubits,
+                'n_layers': self.n_layers,
+                'n_classes': self.n_classes,
+                'learning_rate': self.learning_rate,
+                'steps': self.steps,
+                'hidden_size': self.hidden_size,
+                'readout_activation': self.readout_activation
+            }
+        )
+
+        # Initialize parameters now we know number of base features
         self._initialize_params_if_needed(base_preds.shape)
 
-        # Split train/val if requested
+        # Split into train/validation if requested
         if self.validation_frac > 0:
-            X_train, X_val, mask_train, mask_val, y_train, y_val = train_test_split(
+            X_train_base, X_val_base, mask_train, mask_val, y_train, y_val = train_test_split(
                 base_preds, mask, y, test_size=self.validation_frac, stratify=y, random_state=42
             )
         else:
-            X_train, mask_train, y_train = base_preds, mask, y
-            X_val, mask_val, y_val = None, None, None
+            X_train_base, mask_train, y_train = base_preds, mask, y
+            X_val_base, mask_val, y_val = None, None, None
+
+        # Check for empty training set after split
+        if X_train_base.shape[0] == 0:
+            raise ValueError("Empty training set after split; reduce validation_frac or provide more data")
+
+        # Ensure validation data is also at least 2D
+        if X_val_base is not None:
+            X_val_base = np.atleast_2d(np.asarray(X_val_base, dtype=np.float64))
+            mask_val = np.atleast_2d(np.asarray(mask_val, dtype=np.float64))
 
         y_train_one_hot = np.eye(self.n_classes)[y_train]
         if y_val is not None:
             y_val_one_hot = np.eye(self.n_classes)[y_val]
 
+        # Use custom Adam optimizer for serializability
         opt = AdamSerializable(lr=self.learning_rate)
 
-        history = {'train_loss': [], 'val_loss': []}
+        # Initialize training history
+        history = {
+            'train_loss': [],
+            'val_loss': [],
+            'train_acc': [],
+            'val_acc': [],
+            'val_prec_macro': [],
+            'val_prec_weighted': [],
+            'val_rec_macro': [],
+            'val_rec_weighted': [],
+            'val_f1_macro': [],
+            'val_f1_weighted': [],
+            'val_spec_macro': [],
+            'val_spec_weighted': []
+        }
 
+        # Handle resume logic
         start_step = 0
+        if self.resume and checkpoint_dir:
+            checkpoint_path = None
+            if self.resume == 'best':
+                checkpoint_path = find_best_checkpoint(checkpoint_dir)
+            elif self.resume == 'latest':
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
+            elif self.resume == 'auto':
+                checkpoint_path = find_latest_checkpoint(checkpoint_dir)
+                if checkpoint_path is None:
+                    checkpoint_path = find_best_checkpoint(checkpoint_dir)
+
+            if checkpoint_path and os.path.exists(checkpoint_path):
+                try:
+                    checkpoint = load_checkpoint(checkpoint_path)
+                    self.weights = checkpoint['weights_quantum']
+                    if 'weights_classical' in checkpoint:
+                        self.W1 = checkpoint['weights_classical']['W1']
+                        self.b1 = checkpoint['weights_classical']['b1']
+                        self.W2 = checkpoint['weights_classical']['W2']
+                        self.b2 = checkpoint['weights_classical']['b2']
+                    if 'optimizer_state' in checkpoint and checkpoint['optimizer_state'] is not None:
+                        opt.set_state(checkpoint['optimizer_state'])
+                        start_step = checkpoint.get('step', 0) + 1
+                        log.info(f"  Resumed from step {start_step} with optimizer state")
+                    else:
+                        opt.set_lr(self.learning_rate * 0.1)
+                        log.info(f"  Loaded weights but no optimizer state - reduced LR to {opt.lr}")
+                    if 'history' in checkpoint:
+                        history = checkpoint['history']
+                    if 'best_val_metric' in checkpoint:
+                        self.best_metric = checkpoint['best_val_metric']
+                    log.info(f"  Successfully loaded checkpoint from {checkpoint_path}")
+                except Exception as e:
+                    log.warning(f"  Failed to load checkpoint: {e}")
+
+        start_time = time.time()
         step = start_step
         patience_counter = 0
 
+        # Training loop
         while True:
             def cost(w_quantum, w1, b1, w2, b2):
-                X_masked = X_train * mask_train
-                quantum_outputs = self._batched_qcircuit(X_masked, w_quantum)
+                # Apply mask to training inputs
+                X_train_masked = X_train_base * mask_train
+                quantum_outputs = self._batched_qcircuit(X_train_masked, w_quantum)
 
+                # Shape validation (done once)
                 if not self._shape_validated:
                     if w1.shape[0] != self.n_meas:
                         raise ValueError(f"W1 shape mismatch: expected {self.n_meas} rows, got {w1.shape[0]}")
@@ -1354,35 +1447,166 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
                 hidden = self._activation_fn(np.dot(quantum_outputs, w1) + b1)
                 logits_array = np.dot(hidden, w2) + b2
                 probabilities = self._softmax(logits_array)
-                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + 1e-9), axis=1)
-                loss = np.mean(per_sample_loss)
+
+                eps = 1e-9
+                per_sample_loss = -np.sum(y_train_one_hot * np.log(probabilities + eps), axis=1)
+
+                try:
+                    sample_has_data = np.any(X_train_masked != 0, axis=1)
+                except Exception:
+                    sample_has_data = np.ones(per_sample_loss.shape[0], dtype=bool)
+
+                if np.any(sample_has_data):
+                    loss = np.mean(per_sample_loss[sample_has_data])
+                else:
+                    loss = np.mean(per_sample_loss)
                 return loss
 
             (self.weights, self.W1, self.b1, self.W2, self.b2), current_loss = opt.step_and_cost(
                 cost, self.weights, self.W1, self.b1, self.W2, self.b2
             )
 
+            # Compute training metrics periodically
             if step % self.validation_frequency == 0 or step == 0:
+                train_preds = self.predict((X_train_base, mask_train))
+                train_metrics = compute_metrics(y_train, train_preds, self.n_classes)
+
                 history['train_loss'].append(float(current_loss))
-                if X_val is not None:
-                    X_masked_val = X_val * mask_val
-                    val_quantum_outputs = self._batched_qcircuit(X_masked_val, self.weights)
+                history['train_acc'].append(train_metrics['accuracy'])
+
+                # Validation metrics
+                if X_val_base is not None:
+                    val_preds = self.predict((X_val_base, mask_val))
+                    val_metrics = compute_metrics(y_val, val_preds, self.n_classes)
+
+                    # Compute validation loss
+                    X_val_masked = X_val_base * mask_val
+                    val_quantum_outputs = self._batched_qcircuit(X_val_masked, self.weights)
                     val_hidden = self._activation_fn(np.dot(val_quantum_outputs, self.W1) + self.b1)
-                    val_logits = np.dot(val_hidden, self.W2) + self.b2
-                    val_probs = self._softmax(val_logits)
+                    val_logits_array = np.dot(val_hidden, self.W2) + self.b2
+                    val_probs = self._softmax(val_logits_array)
                     val_loss = -np.mean(np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1))
+
                     history['val_loss'].append(float(val_loss))
-                if self.verbose:
-                    log.info(f"  [GatedReupload] Step {step}/{self.steps} - Loss: {current_loss:.4f}")
+                    history['val_acc'].append(val_metrics['accuracy'])
+                    history['val_prec_macro'].append(val_metrics['precision_macro'])
+                    history['val_prec_weighted'].append(val_metrics['precision_weighted'])
+                    history['val_rec_macro'].append(val_metrics['recall_macro'])
+                    history['val_rec_weighted'].append(val_metrics['recall_weighted'])
+                    history['val_f1_macro'].append(val_metrics['f1_macro'])
+                    history['val_f1_weighted'].append(val_metrics['f1_weighted'])
+                    history['val_spec_macro'].append(val_metrics['specificity_macro'])
+                    history['val_spec_weighted'].append(val_metrics['specificity_weighted'])
+
+                    # Log validation metrics to W&B
+                    if wandb:
+                        wandb.log({
+                            'step': step,
+                            'train_loss': history['train_loss'][-1],
+                            'train_acc': history['train_acc'][-1],
+                            'val_loss': history['val_loss'][-1],
+                            'val_acc': history['val_acc'][-1],
+                            'val_f1_weighted': history['val_f1_weighted'][-1],
+                            'val_prec_weighted': history['val_prec_weighted'][-1],
+                            'val_rec_weighted': history['val_rec_weighted'][-1]
+                        })
+
+                    # Check if this is the best model based on selection metric
+                    current_metric = val_metrics[self.selection_metric]
+                    if current_metric > self.best_metric:
+                        self.best_metric = current_metric
+                        self.best_weights = self.weights.copy()
+                        self.best_weights_classical = {
+                            'W1': self.W1.copy(),
+                            'b1': self.b1.copy(),
+                            'W2': self.W2.copy(),
+                            'b2': self.b2.copy()
+                        }
+                        self.best_step = step
+                        patience_counter = 0
+
+                        if checkpoint_dir:
+                            checkpoint_data = {
+                                'step': step,
+                                'weights_quantum': self.best_weights,
+                                'weights_classical': self.best_weights_classical,
+                                'optimizer_state': opt.get_state(),
+                                'rng_state': np.random.get_state(),
+                                'best_val_metric': self.best_metric,
+                                'metric_name': self.selection_metric,
+                                'history': history,
+                                'meta': {
+                                    'lr': self.learning_rate,
+                                    'hidden_size': self.hidden_size,
+                                    'n_layers': self.n_layers,
+                                    'date': datetime.now().isoformat()
+                                }
+                            }
+                            save_best_checkpoint(checkpoint_dir, checkpoint_data)
+                    else:
+                        patience_counter += 1
+
+            # Periodic checkpoint
+            if checkpoint_dir and step > 0 and step % self.checkpoint_frequency == 0:
+                checkpoint_data = {
+                    'step': step,
+                    'weights_quantum': self.weights,
+                    'weights_classical': {
+                        'W1': self.W1,
+                        'b1': self.b1,
+                        'W2': self.W2,
+                        'b2': self.b2
+                    },
+                    'optimizer_state': opt.get_state(),
+                    'rng_state': np.random.get_state(),
+                    'best_val_metric': self.best_metric,
+                    'metric_name': self.selection_metric,
+                    'history': history,
+                    'meta': {
+                        'lr': self.learning_rate,
+                        'hidden_size': self.hidden_size,
+                        'n_layers': self.n_layers
+                    }
+                }
+                save_periodic_checkpoint(checkpoint_dir, step, checkpoint_data, self.keep_last_n)
+
+                # Save history CSV and plots
+                if len(history['train_loss']) > 0:
+                    save_metrics_to_csv(history, checkpoint_dir)
+                    plot_training_curves(history, checkpoint_dir)
+
+            if self.verbose and (step % self.validation_frequency == 0 or step == self.steps - 1):
+                elapsed = time.time() - start_time
+                val_info = ""
+                if X_val_base is not None and len(history['val_loss']) > 0:
+                    val_info = f" - Val Loss: {history['val_loss'][-1]:.4f} - Val {self.selection_metric}: {history[f'val_{self.selection_metric}'][-1]:.4f}"
+                log.info(f"  [GatedReupload] Step {step:>{len(str(self.steps))}}/{self.steps} - Loss: {current_loss:.4f}{val_info} - Time: {elapsed:.1f}s")
 
             step += 1
+
+            # Check stopping conditions
             if self.patience and patience_counter >= self.patience:
+                log.info(f"  Early stopping triggered at step {step} (patience={self.patience})")
                 break
+
             if self.max_training_time:
-                # simplified time check omitted for brevity
-                pass
-            if step >= self.steps:
-                break
+                elapsed_hours = (time.time() - start_time) / 3600
+                if elapsed_hours >= self.max_training_time:
+                    log.info(f"  [GatedReupload] Reached max training time of {self.max_training_time:.2f} hours at step {step}")
+                    break
+            else:
+                if step >= self.steps:
+                    break
+
+        # Load best weights if available
+        if self.best_weights is not None:
+            self.weights = self.best_weights
+            if self.best_weights_classical is not None:
+                self.W1 = self.best_weights_classical['W1']
+                self.b1 = self.best_weights_classical['b1']
+                self.W2 = self.best_weights_classical['W2']
+                self.b2 = self.best_weights_classical['b2']
+            log.info(f"  [GatedReupload] Loaded best weights from step {self.best_step} with {self.selection_metric}: {self.best_metric:.4f}")
 
         return self
 
