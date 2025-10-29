@@ -757,7 +757,20 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 self._activation_fn = identity
         except Exception:
             self._activation_fn = identity
-
+            
+    def _softmax(self, x):
+        X = np.asarray(x, dtype=np.float64)
+        if X.ndim == 1:
+            shift = X - np.max(X)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift)
+        elif X.ndim == 2:
+            shift = X - np.max(X, axis=1, keepdims=True)
+            exp_shift = np.exp(shift)
+            return exp_shift / np.sum(exp_shift, axis=1, keepdims=True)
+        else:
+            raise ValueError("softmax input must be 1D or 2D array")
+    
     def _initialize_params_if_needed(self, base_preds_shape):
         # base_preds_shape: (N, n_base)
         n_base = int(base_preds_shape[1])
