@@ -586,6 +586,16 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
         'wandb_run_name': wandb_name
     }
 
+    # Log meta-feature composition and chosen qubit count for traceability
+    try:
+        log.info(f"Trial {trial.number}: total_meta_features={X_train_df.shape[1]}")
+        log.info(f"Trial {trial.number}: indicator_cols ({len(indicator_cols)}): {indicator_cols}")
+        log.info(f"Trial {trial.number}: base_cols ({len(base_cols)}): {base_cols}")
+        log.info(f"Trial {trial.number}: computed n_qubits_effective={n_qubits_effective}; model_params['n_qubits']={model_params.get('n_qubits')}")
+    except Exception:
+        # non-fatal logging failure should not stop tuning
+        pass
+
     # Instantiate gated variant according to the trial suggestion
     if params['qml_model'] == 'gated_standard':
         model = GatedMulticlassQuantumClassifierDR(**model_params)

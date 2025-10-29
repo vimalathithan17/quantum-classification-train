@@ -55,13 +55,6 @@ If you don't set these, the defaults will be used:
 - TUNING_RESULTS_DIR: `tuning_results`
 - ENCODER_DIR: `master_label_encoder`
 
-Recent additions
-----------------
-- A classical meta-learner implementation and a matching Optuna-based training script were added (`classic_metalearner.py` and `classic_metalearner_train.py`). The classical learner mirrors the QML meta-learner API and supports gated masking semantics, checkpointing, W&B integration, an internal `validation_fraction` split, and best-model selection by weighted F1.
-- The `metalearner.py` assembly logic was hardened: per-datatype indicator columns are expanded into a per-prediction mask that aligns with the base prediction columns. To avoid perfect multicollinearity (each base learner's class probabilities sum to 1), one class-column per base-learner is dropped deterministically (the column corresponding to the master encoder's last class when available). The mapping of dropped columns is persisted to `OUTPUT_DIR/dropped_pred_columns.json` for traceability.
-- The meta-assembly step now performs a sanity check to ensure base prediction columns and the generated mask have matching shapes; the final feature column lists are persisted to `OUTPUT_DIR/meta_train_feature_columns.json`.
-- A focused unit test was added at `tests/test_metalearner_assembly.py` which verifies assembly, mask alignment, and the presence of the dropped-columns mapping file.
-
 ---
 
 ## Full workflow (commands)
