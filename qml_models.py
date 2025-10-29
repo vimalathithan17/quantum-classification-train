@@ -417,7 +417,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         step = start_step
         patience_counter = 0
         
-        
+        # Training loop
         while True:
             # Define cost function with all parameters
             def cost(w_quantum, w1, b1, w2, b2):
@@ -599,13 +599,6 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 if step >= self.steps:
                     break
         
-        finally:
-            if wandb:
-                try:
-                    wandb.finish()
-                except Exception as e:
-                    log.warning(f"Failed to finish wandb run: {e}")
-
         # Load best weights if available
         if self.best_weights is not None:
             self.weights = self.best_weights
@@ -768,13 +761,8 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     def _initialize_params_if_needed(self, base_preds_shape):
         # base_preds_shape: (N, n_base)
         n_base = int(base_preds_shape[1])
-        # If n_qubits was provided at construction, it must match the
-        # number of base prediction columns. Otherwise, infer from data.
         if self.n_qubits is None:
             self.n_qubits = n_base
-        else:
-            if int(self.n_qubits) != n_base:
-                raise ValueError(f"Provided n_qubits ({self.n_qubits}) does not match number of base prediction columns ({n_base}).")
         if self.dev is None:
             self.dev = qml.device('default.qubit', wires=self.n_qubits)
         if self._qcircuit is None:
@@ -865,16 +853,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         )
 
         # Initialize parameters now we know number of base features
-        try:
-            self._initialize_params_if_needed(base_preds.shape)
-        except Exception:
-            # Ensure wandb is finished before propagating the exception
-            if wandb:
-                try:
-                    wandb.finish()
-                except Exception:
-                    pass
-            raise
+        self._initialize_params_if_needed(base_preds.shape)
 
         # Split into train/validation if requested
         if self.validation_frac > 0:
@@ -1130,14 +1109,6 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 if step >= self.steps:
                     break
 
-        finally:
-            # Ensure W&B run is finalized so runs are not left open in the UI
-            if wandb:
-                try:
-                    wandb.finish()
-                except Exception as e:
-                    log.warning(f"Failed to finish wandb run: {e}")
-
         # Load best weights if available
         if self.best_weights is not None:
             self.weights = self.best_weights
@@ -1275,13 +1246,8 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
 
     def _initialize_params_if_needed(self, base_preds_shape):
         n_base = int(base_preds_shape[1])
-        # If n_qubits was provided at construction, it must match the
-        # number of base prediction columns. Otherwise, infer from data.
         if self.n_qubits is None:
             self.n_qubits = n_base
-        else:
-            if int(self.n_qubits) != n_base:
-                raise ValueError(f"Provided n_qubits ({self.n_qubits}) does not match number of base prediction columns ({n_base}).")
         if self.dev is None:
             self.dev = qml.device('default.qubit', wires=self.n_qubits)
         if self._qcircuit is None:
@@ -1376,16 +1342,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
         )
 
         # Initialize parameters now we know number of base features
-        try:
-            self._initialize_params_if_needed(base_preds.shape)
-        except Exception:
-            # Ensure wandb is finished before propagating the exception
-            if wandb:
-                try:
-                    wandb.finish()
-                except Exception:
-                    pass
-            raise
+        self._initialize_params_if_needed(base_preds.shape)
 
         # Split into train/validation if requested
         if self.validation_frac > 0:
