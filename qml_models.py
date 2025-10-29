@@ -417,9 +417,8 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         step = start_step
         patience_counter = 0
         
-        # Training loop
-        try:
-            while True:
+        
+        while True:
             # Define cost function with all parameters
             def cost(w_quantum, w1, b1, w2, b2):
                 # get batched quantum outputs: shape (N_train, n_meas)
@@ -960,8 +959,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         patience_counter = 0
 
         # Training loop
-        try:
-            while True:
+        while True:
             def cost(w_quantum, w1, b1, w2, b2):
                 # Apply mask to training inputs
                 X_train_masked = X_train_base * mask_train
