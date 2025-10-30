@@ -543,7 +543,6 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     params = {
         # Only gated variants are considered in this workflow
         'qml_model': trial.suggest_categorical('qml_model', ['gated_standard', 'gated_reuploading']),
-        'n_layers': trial.suggest_int('n_layers', 3, 6),
     }
     # Use CLI-provided learning_rate (default 0.5) for tuning — we do not sample LR in Optuna
     params['learning_rate'] = float(args.learning_rate)
@@ -573,34 +572,29 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     else:
         n_qubits_effective = X_train_df.shape[1]
 
-    # Allow Optuna to search n_qubits within CLI-provided bounds (clamped to available features)
-    # Defaults: minqbits=1, maxqbits=None (interpreted as available features)
+    # Allow Optuna to search n_layers within CLI-provided bounds (clamped to sensible defaults)
     try:
-        min_q = max(1, int(args.minqbits)) if getattr(args, 'minqbits', None) is not None else 1
+        min_layers = int(args.minlayers) if getattr(args, 'minlayers', None) is not None else 3
     except Exception:
-        min_q = 1
+        min_layers = 3
     try:
-        # If maxqbits not provided, allow up to the available features
-        if getattr(args, 'maxqbits', None) is None:
-            max_q = n_qubits_effective
-        else:
-            max_q = int(args.maxqbits)
+        max_layers = int(args.maxlayers) if getattr(args, 'maxlayers', None) is not None else 6
     except Exception:
-        max_q = n_qubits_effective
+        max_layers = 6
 
-    # Clamp bounds to the available number of qubits/features
-    if max_q > n_qubits_effective:
-        max_q = n_qubits_effective
-    if min_q > max_q:
+    # Clamp and sanitize
+    if min_layers < 1:
+        min_layers = 1
+    if max_layers < min_layers:
         # Fallback to sensible defaults if user provided inconsistent bounds
-        min_q = 1
-        max_q = n_qubits_effective
+        min_layers = 3
+        max_layers = 6
 
-    # Let Optuna sample n_qubits within [min_q, max_q]
-    params['n_qubits'] = trial.suggest_int('n_qubits', min_q, max_q)
+    # Let Optuna sample n_layers within [min_layers, max_layers]
+    params['n_layers'] = trial.suggest_int('n_layers', min_layers, max_layers)
 
     model_params = {
-        'n_qubits': params.get('n_qubits', n_qubits_effective),
+        'n_qubits': n_qubits_effective,
         'n_layers': params['n_layers'],
         'learning_rate': params['learning_rate'],
         'steps': params['steps'],
@@ -715,10 +709,10 @@ def main():
                         help="Force number of layers for meta-learner during final training (overrides tuned value).")
     parser.add_argument('--meta_n_qubits', type=int, default=None,
                         help="Force number of qubits to use for the meta-learner (defaults to n_meta_features).")
-    parser.add_argument('--minqbits', type=int, default=1,
-                        help="Minimum number of qubits to consider during tuning (default: 1).")
-    parser.add_argument('--maxqbits', type=int, default=None,
-                        help="Maximum number of qubits to consider during tuning. If not set, the maximum will be the number of available meta-features.")
+    parser.add_argument('--minlayers', type=int, default=3,
+                        help="Minimum number of layers to consider during tuning (default: 3).")
+    parser.add_argument('--maxlayers', type=int, default=6,
+                        help="Maximum number of layers to consider during tuning (default: 6).")
     parser.add_argument('--learning_rate', type=float, default=0.5,
                         help="Fixed learning rate to use for both tuning and final training (default: 0.5). If passed on the CLI it will override tuned params for final training.")
     args = parser.parse_args()
