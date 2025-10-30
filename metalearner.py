@@ -554,15 +554,6 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     X_train_df = X_train if isinstance(X_train, pd.DataFrame) else pd.DataFrame(X_train)
     X_val_df = X_val if isinstance(X_val, pd.DataFrame) else pd.DataFrame(X_val)
 
-    # Construct a clear W&B run name for the meta-learner (no trial suffix by default)
-    wandb_name = None
-    if args.use_wandb:
-        # Use DataFrame shape if available for clarity
-        n_meta_feats = X_train_df.shape[1]
-        wandb_name = f"meta_{params['qml_model']}_q{n_meta_feats}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
-    if args.wandb_run_name:
-        wandb_name = args.wandb_run_name
-
     # Determine n_qubits: for gated variants we only need qubits for base-learner outputs
     if params['qml_model'].startswith('gated'):
         if indicator_cols is None:
@@ -592,6 +583,15 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
 
     # Let Optuna sample n_layers within [min_layers, max_layers]
     params['n_layers'] = trial.suggest_int('n_layers', min_layers, max_layers)
+
+    # Construct a clear W&B run name for the meta-learner (no trial suffix by default)
+    wandb_name = None
+    if args.use_wandb:
+        # Use DataFrame shape if available for clarity
+        n_meta_feats = X_train_df.shape[1]
+        wandb_name = f"meta_{params['qml_model']}_q{n_qubits_effective}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
+    if args.wandb_run_name:
+        wandb_name = args.wandb_run_name
 
     model_params = {
         'n_qubits': n_qubits_effective,
