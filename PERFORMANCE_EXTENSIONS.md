@@ -144,9 +144,9 @@ class ClassicalFeatureEncoder(nn.Module):
         )
     
     def forward(self, x, mask=None):
-        # Handle missing modalities
-        if mask is not None and mask.sum() == 0:
-            # Return learnable "missing" token
+        # Handle missing modalities (mask: 1 = missing, 0 = present)
+        if mask is not None and mask.sum() == mask.numel():
+            # Return learnable "missing" token if all features are masked
             return self.missing_token.expand(x.shape[0], -1)
         return self.encoder(x)
 ```
@@ -475,24 +475,24 @@ def nt_xent_loss(z_i, z_j, temperature=0.5):
     
     # Create mask for positive pairs
     # For index i, positive is at i+N (or i-N if i>=N)
-    batch_size = z_i.shape[0]
-    mask = torch.zeros((2 * batch_size, 2 * batch_size), dtype=torch.bool)
-    for i in range(batch_size):
-        mask[i, i + batch_size] = 1
-        mask[i + batch_size, i] = 1
+    N = z_i.shape[0]
+    mask = torch.zeros((2 * N, 2 * N), dtype=torch.bool, device=z_i.device)
+    for i in range(N):
+        mask[i, i + N] = 1
+        mask[i + N, i] = 1
     
     # Remove self-similarity (diagonal)
     similarity_matrix = similarity_matrix / temperature
-    similarity_matrix = similarity_matrix - torch.eye(2 * batch_size, device=z_i.device) * 1e9
+    similarity_matrix = similarity_matrix - torch.eye(2 * N, device=z_i.device) * 1e9
     
     # Compute loss
     # For each sample, the numerator is similarity with its positive pair
-    # Denominator is sum of similarities with all other samples
-    positives = similarity_matrix[mask].view(2 * batch_size, -1)  # (2N, 1)
-    negatives = similarity_matrix[~mask].view(2 * batch_size, -1)  # (2N, 2N-2)
+    # Denominator is sum of similarities with all other samples (excluding self)
+    positives = similarity_matrix[mask].view(2 * N, 1)  # Extract positive pairs
+    negatives = similarity_matrix[~mask].view(2 * N, 2 * N - 2)  # All non-positive, non-self pairs
     
     logits = torch.cat([positives, negatives], dim=1)
-    labels = torch.zeros(2 * batch_size, dtype=torch.long, device=z_i.device)
+    labels = torch.zeros(2 * N, dtype=torch.long, device=z_i.device)
     
     loss = F.cross_entropy(logits, labels)
     return loss
@@ -1431,6 +1431,6 @@ The approaches outlined here are grounded in solid research, have clear implemen
 ---
 
 **Document Version**: 1.0  
-**Date**: December 14, 2025  
+**Date**: December 14, 2024  
 **Authors**: Quantum Classification Team  
 **Status**: Ready for Review and Implementation  
