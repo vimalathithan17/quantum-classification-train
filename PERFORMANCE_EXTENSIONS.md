@@ -142,6 +142,8 @@ class ClassicalFeatureEncoder(nn.Module):
             nn.Linear(512, embed_dim),
             nn.LayerNorm(embed_dim)
         )
+        # Learnable token for missing modality
+        self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
     
     def forward(self, x, mask=None):
         # Handle missing modalities (mask: 1 = missing, 0 = present)
@@ -471,30 +473,19 @@ def nt_xent_loss(z_i, z_j, temperature=0.5):
     representations = torch.cat([z_i, z_j], dim=0)  # (2*batch_size, projection_dim)
     
     # Compute similarity matrix
-    similarity_matrix = torch.matmul(representations, representations.T)  # (2N, 2N)
+    similarity_matrix = torch.matmul(representations, representations.T) / temperature  # (2N, 2N)
     
     # Create mask for positive pairs
     # For index i, positive is at i+N (or i-N if i>=N)
     N = z_i.shape[0]
-    mask = torch.zeros((2 * N, 2 * N), dtype=torch.bool, device=z_i.device)
-    for i in range(N):
-        mask[i, i + N] = 1
-        mask[i + N, i] = 1
+    labels = torch.cat([torch.arange(N, 2*N), torch.arange(N)], dim=0).to(z_i.device)
     
-    # Remove self-similarity (diagonal)
-    similarity_matrix = similarity_matrix / temperature
-    similarity_matrix = similarity_matrix - torch.eye(2 * N, device=z_i.device) * 1e9
+    # Mask out diagonal (self-similarity)
+    mask_diag = torch.eye(2 * N, dtype=torch.bool, device=z_i.device)
+    similarity_matrix.masked_fill_(mask_diag, -1e9)
     
-    # Compute loss
-    # For each sample, the numerator is similarity with its positive pair
-    # Denominator is sum of similarities with all other samples (excluding self)
-    positives = similarity_matrix[mask].view(2 * N, 1)  # Extract positive pairs
-    negatives = similarity_matrix[~mask].view(2 * N, 2 * N - 2)  # All non-positive, non-self pairs
-    
-    logits = torch.cat([positives, negatives], dim=1)
-    labels = torch.zeros(2 * N, dtype=torch.long, device=z_i.device)
-    
-    loss = F.cross_entropy(logits, labels)
+    # Standard cross-entropy loss (InfoNCE)
+    loss = F.cross_entropy(similarity_matrix, labels)
     return loss
 ```
 
