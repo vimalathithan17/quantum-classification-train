@@ -198,17 +198,15 @@ def _per_class_specificity(cm_arr):
     return speci
 
 
-def _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial_number, 
-                                 acc, f1_weighted, f1_macro, prec_weighted, prec_macro, 
-                                 rec_weighted, rec_macro, spec_macro, spec_weighted):
+def _log_fold_metrics_to_wandb(trial_wandb_run, fold, acc, f1_weighted, f1_macro, 
+                                 prec_weighted, prec_macro, rec_weighted, rec_macro, 
+                                 spec_macro, spec_weighted):
     """
     Log fold-level metrics to wandb trial run.
     
     Args:
         trial_wandb_run: Active wandb run object
         fold: Fold index (0-based)
-        n_splits: Total number of folds
-        trial_number: Trial number
         acc: Accuracy score
         f1_weighted: Weighted F1 score
         f1_macro: Macro F1 score
@@ -471,9 +469,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
             
             # Log fold metrics to trial-level wandb run
-            _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial.number,
-                                       acc, f1_weighted, f1_macro, prec_weighted, prec_macro,
-                                       rec_weighted, rec_macro, spec_macro, spec_weighted)
+            _log_fold_metrics_to_wandb(trial_wandb_run, fold, acc, f1_weighted, f1_macro,
+                                       prec_weighted, prec_macro, rec_weighted, rec_macro,
+                                       spec_macro, spec_weighted)
             
             # Save per-fold metrics to disk
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
@@ -591,9 +589,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
             
             # Log fold metrics to trial-level wandb run
-            _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial.number,
-                                       acc, f1_weighted, f1_macro, prec_weighted, prec_macro,
-                                       rec_weighted, rec_macro, spec_macro, spec_weighted)
+            _log_fold_metrics_to_wandb(trial_wandb_run, fold, acc, f1_weighted, f1_macro,
+                                       prec_weighted, prec_macro, rec_weighted, rec_macro,
+                                       spec_macro, spec_weighted)
             
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
             os.makedirs(fold_dir, exist_ok=True)
@@ -811,8 +809,9 @@ def main():
                 for trial in study.trials:
                     if trial.state == optuna.trial.TrialState.COMPLETE:
                         all_trials_summary[f'all_trials/trial_{trial.number}_mean_f1'] = trial.value
-                        all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits', 'N/A')
-                        all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers', 'N/A')
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits', 0)
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers', 0)
+                        # Note: scaler is a string, so we keep 'N/A' as default for this parameter
                         all_trials_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params.get('scaler', 'N/A')
                 
                 if all_trials_summary:
