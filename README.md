@@ -283,7 +283,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--scalers` (str, default `smr`): String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--n_trials` (int, default 9): Number of NEW Optuna trials to run (if study exists, these are added to existing trials).
-	- `--total_trials` (int, optional): Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total.
+	- `--total_trials` (int, optional): Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total. Mutually exclusive with `--n_trials` - use one or the other.
 	- `--study_name` (str, optional): Override the auto-generated study name.
 	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
 	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
@@ -396,8 +396,8 @@ Environment variables relevant to CLI behavior
 | `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
-| `--n_trials` | int | No | `9` | - | Number of NEW Optuna trials to run. |
-| `--total_trials` | int | No | `None` | - | Target TOTAL number of trials (computes remaining if study exists). |
+| `--n_trials` | int | No | `9` | - | Number of NEW Optuna trials to run (mutually exclusive with `--total_trials`). |
+| `--total_trials` | int | No | `None` | - | Target TOTAL number of trials (computes remaining if study exists, mutually exclusive with `--n_trials`). |
 | `--study_name` | str | No | `None` | - | Override the auto-generated study name. |
 | `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
@@ -417,7 +417,7 @@ Environment variables relevant to CLI behavior
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
+# Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges (uses default steps of 100)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6
 
 # Tune with Weights & Biases logging and custom study name
