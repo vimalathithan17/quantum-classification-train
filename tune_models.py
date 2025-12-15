@@ -198,6 +198,44 @@ def _per_class_specificity(cm_arr):
     return speci
 
 
+def _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial_number, 
+                                 acc, f1_weighted, f1_macro, prec_weighted, prec_macro, 
+                                 rec_weighted, rec_macro, spec_macro, spec_weighted):
+    """
+    Log fold-level metrics to wandb trial run.
+    
+    Args:
+        trial_wandb_run: Active wandb run object
+        fold: Fold index (0-based)
+        n_splits: Total number of folds
+        trial_number: Trial number
+        acc: Accuracy score
+        f1_weighted: Weighted F1 score
+        f1_macro: Macro F1 score
+        prec_weighted: Weighted precision
+        prec_macro: Macro precision
+        rec_weighted: Weighted recall
+        rec_macro: Macro recall
+        spec_macro: Macro specificity
+        spec_weighted: Weighted specificity
+    """
+    if trial_wandb_run:
+        try:
+            wandb.log({
+                f'fold_{fold+1}/accuracy': acc,
+                f'fold_{fold+1}/f1_weighted': f1_weighted,
+                f'fold_{fold+1}/f1_macro': float(f1_macro),
+                f'fold_{fold+1}/precision_weighted': float(prec_weighted),
+                f'fold_{fold+1}/precision_macro': float(prec_macro),
+                f'fold_{fold+1}/recall_weighted': float(rec_weighted),
+                f'fold_{fold+1}/recall_macro': float(rec_macro),
+                f'fold_{fold+1}/specificity_macro': spec_macro,
+                f'fold_{fold+1}/specificity_weighted': spec_weighted,
+            })
+        except Exception as e:
+            log.warning(f"Failed to log fold metrics to wandb: {e}")
+
+
 def cleanup_old_trials(results_dir, study, keep_best=True, keep_latest_n=2):
     """
     Clean up old trial directories, keeping only the best trial and the latest N trials.
@@ -433,21 +471,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
             
             # Log fold metrics to trial-level wandb run
-            if trial_wandb_run:
-                try:
-                    wandb.log({
-                        f'fold_{fold+1}/accuracy': acc,
-                        f'fold_{fold+1}/f1_weighted': f1_weighted,
-                        f'fold_{fold+1}/f1_macro': float(f1_macro),
-                        f'fold_{fold+1}/precision_weighted': float(prec_weighted),
-                        f'fold_{fold+1}/precision_macro': float(prec_macro),
-                        f'fold_{fold+1}/recall_weighted': float(rec_weighted),
-                        f'fold_{fold+1}/recall_macro': float(rec_macro),
-                        f'fold_{fold+1}/specificity_macro': spec_macro,
-                        f'fold_{fold+1}/specificity_weighted': spec_weighted,
-                    })
-                except Exception as e:
-                    log.warning(f"Failed to log fold metrics to wandb: {e}")
+            _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial.number,
+                                       acc, f1_weighted, f1_macro, prec_weighted, prec_macro,
+                                       rec_weighted, rec_macro, spec_macro, spec_weighted)
             
             # Save per-fold metrics to disk
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
@@ -565,21 +591,9 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
             
             # Log fold metrics to trial-level wandb run
-            if trial_wandb_run:
-                try:
-                    wandb.log({
-                        f'fold_{fold+1}/accuracy': acc,
-                        f'fold_{fold+1}/f1_weighted': f1_weighted,
-                        f'fold_{fold+1}/f1_macro': float(f1_macro),
-                        f'fold_{fold+1}/precision_weighted': float(prec_weighted),
-                        f'fold_{fold+1}/precision_macro': float(prec_macro),
-                        f'fold_{fold+1}/recall_weighted': float(rec_weighted),
-                        f'fold_{fold+1}/recall_macro': float(rec_macro),
-                        f'fold_{fold+1}/specificity_macro': spec_macro,
-                        f'fold_{fold+1}/specificity_weighted': spec_weighted,
-                    })
-                except Exception as e:
-                    log.warning(f"Failed to log fold metrics to wandb: {e}")
+            _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial.number,
+                                       acc, f1_weighted, f1_macro, prec_weighted, prec_macro,
+                                       rec_weighted, rec_macro, spec_macro, spec_weighted)
             
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
             os.makedirs(fold_dir, exist_ok=True)
@@ -792,17 +806,18 @@ def main():
                     'total_trials': len(study.trials),
                 })
                 
-                # Log all trial results for comparison
+                # Log all trial results for comparison in a single batch
+                all_trials_summary = {}
                 for trial in study.trials:
                     if trial.state == optuna.trial.TrialState.COMPLETE:
-                        trial_summary = {
-                            f'all_trials/trial_{trial.number}_mean_f1': trial.value,
-                            f'all_trials/trial_{trial.number}_n_qubits': trial.params.get('n_qubits'),
-                            f'all_trials/trial_{trial.number}_n_layers': trial.params.get('n_layers'),
-                        }
+                        all_trials_summary[f'all_trials/trial_{trial.number}_mean_f1'] = trial.value
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits')
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers')
                         if 'scaler' in trial.params:
-                            trial_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params['scaler']
-                        wandb.log(trial_summary)
+                            all_trials_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params['scaler']
+                
+                if all_trials_summary:
+                    wandb.log(all_trials_summary)
                 
                 log.info(f"Logged study summary to W&B: {summary_run_name}")
                 wandb.finish()
