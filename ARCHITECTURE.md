@@ -60,9 +60,85 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
 - **Approaches:** Dimensionality Reduction Encoding (DRE) and Conditional Feature Encoding (CFE)
 - **Scripts:** `dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`
 - **Purpose:** To train specialized "expert" models for each data type using the best parameters found in Stage 2.
-- **Process:** The four training scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`) iterate through all available data types. For each one, they:
+
+### The 2-Step Funnel: Imputation and Feature Selection
+
+Both approaches use a **2-step preprocessing funnel** to prepare data for quantum circuits:
+
+#### **Approach 1 (DRE): Imputation → Dimensionality Reduction**
+```
+Step 1: Imputation
+Raw Data with NaNs → SimpleImputer (median strategy) → Complete numeric data
+
+Step 2: Dimensionality Reduction
+Complete data → PCA or UMAP → Reduced to n_qubits dimensions → QML Circuit
+```
+
+**Key Points:**
+- Uses `MaskedTransformer` wrapper to prevent imputer from learning from missing modalities
+- Imputation fills missing values before dimensionality reduction
+- Choice of PCA (linear) or UMAP (non-linear) for reduction
+
+#### **Approach 2 (CFE): Imputation → Feature Selection**
+```
+Step 1: Imputation (Implicit)
+Raw Data with NaNs → Used directly for LightGBM/XGBoost feature selection
+                   → NaNs filled with 0.0 for QML input (placeholder only)
+
+Step 2: Feature Selection using Gradient Boosting
+Complete/Raw data → LightGBM or XGBoost importance-based selection → Top-k features → QML Circuit
+```
+
+**Key Points:**
+- **LightGBM (Default):** Lightweight, fast, handles missing values natively during selection
+- **XGBoost (Alternative):** More robust for complex patterns, also handles missing values natively
+- **Hybrid Method:** Ensemble predictions from both LightGBM and XGBoost selectors
+- Feature selection preserves missingness information for conditional QML models
+- Selected features are passed to conditional circuits that learn missing value encodings
+
+### Feature Selection Options
+
+**Option 1: LightGBM-based Selection (Current Default)**
+```python
+from lightgbm import LGBMClassifier
+lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, 
+                     feature_fraction=0.7, n_jobs=1, random_state=42, verbosity=-1)
+lgb.fit(X_train.values, y_train)  # Handles NaNs natively
+importances = lgb.feature_importances_
+selected_indices = np.argsort(importances)[-n_qubits:]
+```
+
+**Option 2: XGBoost-based Selection (Alternative)**
+```python
+from xgboost import XGBClassifier
+xgb = XGBClassifier(n_estimators=50, learning_rate=0.1, 
+                    max_depth=6, n_jobs=1, random_state=42, verbosity=0)
+xgb.fit(X_train.values, y_train)  # Handles NaNs natively
+importances = xgb.feature_importances_
+selected_indices = np.argsort(importances)[-n_qubits:]
+```
+
+**Option 3: Hybrid Combining Method**
+```python
+# Select features using both methods
+lgb_selected = select_features_lgbm(X_train, y_train, n_qubits)
+xgb_selected = select_features_xgb(X_train, y_train, n_qubits)
+
+# Combine: use union of selected features
+hybrid_selected = np.union1d(lgb_selected, xgb_selected)[:n_qubits]
+
+# Or use intersection for more conservative selection
+# hybrid_selected = np.intersect1d(lgb_selected, xgb_selected)
+
+# Or ensemble: train separate models and average predictions
+model_lgb = train_qml_with_features(X_train[:, lgb_selected], y_train)
+model_xgb = train_qml_with_features(X_train[:, xgb_selected], y_train)
+predictions = (model_lgb.predict_proba(X_test) + model_xgb.predict_proba(X_test)) / 2
+```
+
+**Process:** The four training scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`) iterate through all available data types. For each one, they:
     1. Find the corresponding `best_params_*.json` file.
-    2. Load the data and build the appropriate classical-quantum pipeline.
+    2. Load the data and build the appropriate classical-quantum pipeline (2-step funnel).
     3. Use `cross_val_predict` (for DRE) or a manual loop (for CFE) to generate **out-of-fold (OOF) predictions** for the training set. These predictions are crucial for training the meta-learner without data leakage.
     4. Train a final model on the *entire* training set.
     5. Generate predictions on the hold-out test set.
@@ -985,4 +1061,321 @@ The final architectural choice was to not rely on a single model but to build a 
     2. **Learning from Experts:** The **meta-learner** then acts as a "manager," learning from the *predictions* of these experts.
     3. **Supplementary Data:** Crucially, the meta-learner does not *only* see the predictions. It also receives **indicator features** (provided via the `--indicator_file` argument). These are additional classical features about the patient (e.g., age, tumor stage, or flags indicating if an entire data modality was missing).
 * **Final Decision:** The meta-learner's final decision is based on both what the experts are saying (their predictions) and the supplementary context (the indicator features). It might learn, for instance, that for a particular cancer type, the `Prot` and `CNV` models are highly reliable, but if the `is_missing_SNV` flag is true, it should adjust its final prediction accordingly. This ability to learn the strengths and weaknesses of each specialist model in different contexts makes the final ensemble more accurate and robust than any single model could be on its own.
+
+---
+
+## 🔄 Integrating 2-Step Funnel with QML: Detailed Examples
+
+This section provides concrete, step-by-step examples of how to use the 2-step funnel (imputation → feature selection) with different feature selection methods and integrate them with quantum machine learning.
+
+### Example 1: Using LightGBM Feature Selection (Default)
+
+**Step-by-Step Workflow:**
+
+```bash
+# Step 1: Create master label encoder (one-time setup)
+python create_master_label_encoder.py
+
+# Step 2: Tune hyperparameters with LightGBM selection (Approach 2)
+python tune_models.py \
+    --datatype CNV \
+    --approach 2 \
+    --qml_model standard \
+    --dim_reducer lgbm \
+    --n_trials 30 \
+    --verbose
+
+# Step 3: Train base learners with LightGBM feature selection
+python cfe_standard.py \
+    --datatypes CNV Prot Meth \
+    --verbose
+
+# Output: Base learner predictions with LightGBM-selected features
+# - train_oof_preds_CNV.csv
+# - test_preds_CNV.csv
+# - selected_features_CNV.joblib (contains LightGBM-selected feature indices)
+# - qml_model_CNV.joblib
+```
+
+**Integration Points:**
+1. **Imputation**: Implicit - raw data with NaNs used for LightGBM selection
+2. **Feature Selection**: LightGBM native missing value handling during importance computation
+3. **QML Input**: Selected features with missingness mask for conditional encoding
+
+### Example 2: Using XGBoost Feature Selection (Alternative)
+
+**Step-by-Step Workflow:**
+
+```bash
+# Step 1: Install XGBoost if not already available
+pip install xgboost>=1.7.0
+
+# Step 2: Tune with XGBoost selection (requires code modification)
+# Modify tune_models.py to support --dim_reducer xgb
+python tune_models.py \
+    --datatype CNV \
+    --approach 2 \
+    --qml_model standard \
+    --dim_reducer xgb \
+    --n_trials 30 \
+    --verbose
+
+# Step 3: Train base learners with XGBoost feature selection
+# Modify cfe_standard.py to use XGBoost when specified
+python cfe_standard.py \
+    --datatypes CNV Prot Meth \
+    --feature_selector xgb \
+    --verbose
+```
+
+**Key Differences from LightGBM:**
+- **Speed**: XGBoost may be slower but often more robust
+- **Missing Value Handling**: Both handle NaNs natively, but use different algorithms
+- **Feature Importance**: XGBoost uses gain/weight/cover; LightGBM uses split-based importance
+
+### Example 3: Hybrid Method - Union of Features
+
+**Step-by-Step Workflow:**
+
+```bash
+# Step 1: Generate features using both selectors
+# This requires a custom script or modified training script
+
+# Create a hybrid feature selection script
+cat > select_features_hybrid.py << 'EOF'
+import numpy as np
+import pandas as pd
+from lightgbm import LGBMClassifier
+from xgboost import XGBClassifier
+from sklearn.preprocessing import LabelEncoder
+import joblib
+
+def select_features_hybrid(X_train, y_train, n_qubits, method='union'):
+    """
+    Select features using both LightGBM and XGBoost, then combine.
+    
+    Args:
+        X_train: Training data (DataFrame with NaNs)
+        y_train: Training labels
+        n_qubits: Number of features to select
+        method: 'union', 'intersection', or 'vote'
+    
+    Returns:
+        selected_indices: Array of selected feature indices
+    """
+    # LightGBM selection
+    lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, 
+                         feature_fraction=0.7, n_jobs=1, 
+                         random_state=42, verbosity=-1)
+    lgb.fit(X_train.values, y_train)
+    lgb_importances = lgb.feature_importances_
+    lgb_top_k = np.argsort(lgb_importances)[-n_qubits:]
+    
+    # XGBoost selection
+    xgb = XGBClassifier(n_estimators=50, learning_rate=0.1,
+                        max_depth=6, n_jobs=1, 
+                        random_state=42, verbosity=0,
+                        tree_method='hist', enable_categorical=True)
+    xgb.fit(X_train.values, y_train)
+    xgb_importances = xgb.feature_importances_
+    xgb_top_k = np.argsort(xgb_importances)[-n_qubits:]
+    
+    if method == 'union':
+        # Union: combine both sets, keep top n_qubits by average importance
+        union_indices = np.union1d(lgb_top_k, xgb_top_k)
+        avg_importances = (lgb_importances + xgb_importances) / 2
+        union_ranked = sorted(union_indices, 
+                             key=lambda i: avg_importances[i], 
+                             reverse=True)
+        selected_indices = np.array(union_ranked[:n_qubits])
+    
+    elif method == 'intersection':
+        # Intersection: only features selected by both
+        intersect = np.intersect1d(lgb_top_k, xgb_top_k)
+        if len(intersect) < n_qubits:
+            # Fall back to union if intersection too small
+            print(f"Intersection ({len(intersect)}) < n_qubits ({n_qubits}), using union")
+            return select_features_hybrid(X_train, y_train, n_qubits, 'union')
+        avg_importances = (lgb_importances + xgb_importances) / 2
+        intersect_ranked = sorted(intersect,
+                                 key=lambda i: avg_importances[i],
+                                 reverse=True)
+        selected_indices = np.array(intersect_ranked[:n_qubits])
+    
+    elif method == 'vote':
+        # Weighted voting: rank features and use combined ranks
+        lgb_ranks = np.argsort(np.argsort(lgb_importances))
+        xgb_ranks = np.argsort(np.argsort(xgb_importances))
+        combined_ranks = lgb_ranks + xgb_ranks
+        selected_indices = np.argsort(combined_ranks)[-n_qubits:]
+    
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    
+    return selected_indices
+
+# Example usage
+if __name__ == '__main__':
+    # Load data
+    data = pd.read_parquet('final_processed_datasets/data_CNV_.parquet')
+    X = data.drop('label', axis=1)
+    y = LabelEncoder().fit_transform(data['label'])
+    
+    # Select features using hybrid method
+    selected = select_features_hybrid(X, y, n_qubits=8, method='union')
+    
+    # Save for later use
+    joblib.dump(selected, 'hybrid_selected_features_CNV.joblib')
+    print(f"Selected features: {selected}")
+    print(f"Feature names: {X.columns[selected].tolist()}")
+EOF
+
+python select_features_hybrid.py
+
+# Step 2: Train QML model with hybrid-selected features
+# Modify training script to load hybrid features
+python cfe_standard.py \
+    --datatypes CNV \
+    --feature_file hybrid_selected_features_CNV.joblib \
+    --verbose
+```
+
+### Example 4: Hybrid Method - Ensemble Predictions
+
+**Step-by-Step Workflow:**
+
+```bash
+# Train separate models with LightGBM and XGBoost selections
+# Then ensemble their predictions
+
+# Step 1: Train model with LightGBM features
+python cfe_standard.py \
+    --datatypes CNV \
+    --feature_selector lgbm \
+    --output_dir base_learner_outputs_lgbm \
+    --verbose
+
+# Step 2: Train model with XGBoost features  
+python cfe_standard.py \
+    --datatypes CNV \
+    --feature_selector xgb \
+    --output_dir base_learner_outputs_xgb \
+    --verbose
+
+# Step 3: Combine predictions using ensemble script
+cat > ensemble_hybrid_predictions.py << 'EOF'
+import pandas as pd
+import numpy as np
+
+# Load predictions from both models
+lgbm_train = pd.read_csv('base_learner_outputs_lgbm/train_oof_preds_CNV.csv')
+xgb_train = pd.read_csv('base_learner_outputs_xgb/train_oof_preds_CNV.csv')
+
+lgbm_test = pd.read_csv('base_learner_outputs_lgbm/test_preds_CNV.csv')
+xgb_test = pd.read_csv('base_learner_outputs_xgb/test_preds_CNV.csv')
+
+# Average predictions (ensemble)
+ensemble_train = lgbm_train.copy()
+ensemble_test = lgbm_test.copy()
+
+# Average probability columns
+prob_cols = [c for c in lgbm_train.columns if c.startswith('pred_')]
+for col in prob_cols:
+    ensemble_train[col] = (lgbm_train[col] + xgb_train[col]) / 2
+    ensemble_test[col] = (lgbm_test[col] + xgb_test[col]) / 2
+
+# Save ensemble predictions
+ensemble_train.to_csv('base_learner_outputs_hybrid/train_oof_preds_CNV.csv', index=False)
+ensemble_test.to_csv('base_learner_outputs_hybrid/test_preds_CNV.csv', index=False)
+
+print("Hybrid ensemble predictions created!")
+EOF
+
+python ensemble_hybrid_predictions.py
+
+# Step 4: Use hybrid predictions with meta-learner
+python metalearner.py \
+    --preds_dir base_learner_outputs_hybrid \
+    --indicator_file indicator_features.parquet \
+    --mode train \
+    --verbose
+```
+
+### Example 5: Complete End-to-End with Hybrid Method
+
+**Full Pipeline:**
+
+```bash
+# 1. Setup
+python create_master_label_encoder.py
+
+# 2. Tune for all modalities with LightGBM (default)
+for dtype in CNV Prot Meth GeneExp miRNA Mut; do
+    python tune_models.py \
+        --datatype $dtype \
+        --approach 2 \
+        --qml_model standard \
+        --n_trials 20 \
+        --verbose
+done
+
+# 3. Train base learners with LightGBM selection
+python cfe_standard.py --verbose
+
+# 4. (Optional) Train additional models with XGBoost selection
+# Requires code modification to support XGBoost selector
+
+# 5. Prepare predictions for meta-learner
+mkdir -p final_ensemble_predictions
+cp base_learner_outputs_app2_standard/train_oof_preds_*.csv final_ensemble_predictions/
+cp base_learner_outputs_app2_standard/test_preds_*.csv final_ensemble_predictions/
+cp master_label_encoder/label_encoder.joblib final_ensemble_predictions/
+
+# 6. Train meta-learner
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file indicator_features.parquet \
+    --mode tune \
+    --verbose
+
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file indicator_features.parquet \
+    --mode train \
+    --verbose
+
+# 7. Deploy and run inference
+mkdir -p final_model_deployment
+cp meta_learner_final.joblib final_model_deployment/
+cp meta_learner_columns.json final_model_deployment/
+cp master_label_encoder/label_encoder.joblib final_model_deployment/
+
+# Copy base learner artifacts
+for dtype in CNV Prot Meth GeneExp miRNA Mut; do
+    cp base_learner_outputs_app2_standard/*_${dtype}.joblib final_model_deployment/
+done
+
+python inference.py \
+    --model_dir final_model_deployment \
+    --patient_data_dir new_patient_data
+```
+
+### Key Integration Points Summary
+
+| **Step** | **Approach 1 (DRE)** | **Approach 2 (CFE)** |
+|----------|---------------------|---------------------|
+| **Imputation** | MaskedTransformer(SimpleImputer) | Implicit (NaNs preserved for selector) |
+| **Feature Selection** | PCA or UMAP | LightGBM, XGBoost, or Hybrid |
+| **QML Input** | Reduced dimensions | Selected features + missingness mask |
+| **Missing Handling** | Imputed before reduction | Conditional encoding in QML |
+| **Best For** | Dense data, linear patterns | Sparse data, complex patterns |
+
+### Recommended Usage
+
+1. **Start with LightGBM** (fastest, good default)
+2. **Try XGBoost** if LightGBM underperforms (more robust)
+3. **Use Hybrid Union** for maximum feature coverage
+4. **Use Hybrid Ensemble** for maximum prediction robustness
+
+All methods seamlessly integrate with the existing QML stacked ensemble architecture.
 

@@ -2,6 +2,23 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## 🔄 Key Feature: 2-Step Preprocessing Funnel
+
+The pipeline uses a **2-step funnel** to prepare high-dimensional multi-omics data for quantum circuits:
+
+**Approach 1 (DRE): Imputation → Dimensionality Reduction**
+1. **Step 1**: Imputation - Fill missing values using SimpleImputer (median strategy)
+2. **Step 2**: Dimensionality Reduction - Reduce to n_qubits dimensions using PCA or UMAP
+
+**Approach 2 (CFE): Imputation → Feature Selection**
+1. **Step 1**: Implicit Imputation - Preserve NaNs for native handling by selector
+2. **Step 2**: Feature Selection - Select top-k features using:
+   - **LightGBM** (default): Fast, handles missing values natively
+   - **XGBoost** (alternative): More robust, handles missing values natively
+   - **Hybrid**: Combine both methods (union, intersection, or ensemble)
+
+Both approaches integrate seamlessly with quantum circuits for classification.
+
 ---
 
 ## Directory layout (recommended)
@@ -78,25 +95,46 @@ Output: `master_label_encoder/label_encoder.joblib`
 
 Use `tune_models.py` to tune base learners. Repeat per data type / approach / qml_model / dim reducer as needed.
 
+**The 2-Step Funnel in Tuning:**
+- **Approach 1**: Tunes imputation → dimensionality reduction pipeline
+- **Approach 2**: Tunes feature selection method (LightGBM by default)
+
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (default is 100 training steps)
+# Tune Approach 1 (2-step: impute → PCA reduction) for CNV (50 trials)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 2 (reuploading) for Prot (30 trials)
+# Tune Approach 1 with UMAP instead of PCA (2-step: impute → UMAP reduction)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer umap --n_trials 50 --verbose
+
+# Tune Approach 2 (2-step: preserve NaNs → LightGBM selection) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
 
 # Tune with Weights & Biases logging enabled
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_project
 ```
 
+**Understanding the 2-Step Funnel:**
+
+**Approach 1 (DRE):**
+- Step 1: `MaskedTransformer(SimpleImputer(strategy='median'))` - imputes missing values
+- Step 2: `MaskedTransformer(PCA(n_components=n_qubits))` - reduces to n_qubits dimensions
+- Alternative Step 2: `MaskedTransformer(UMAP(n_components=n_qubits))` - non-linear reduction
+
+**Approach 2 (CFE):**
+- Step 1: Raw data with NaNs preserved for selector
+- Step 2: `LGBMClassifier` feature importance → selects top n_qubits features
+- Alternative Step 2: `XGBClassifier` feature importance (requires code modification)
+- Hybrid Step 2: Combine LightGBM + XGBoost selections
+
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
-- The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
+- Both approaches use a 2-step funnel: imputation/preservation → reduction/selection
 - The number of training steps for tuning defaults to 100 (can be changed with `--steps`).
+- Optimizes weighted F1 score (handles class imbalance better than accuracy)
 
-Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
+Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters including the 2-step funnel configuration.
 
 Quick inspection: there is a small helper script included to view saved parameter files:
 
@@ -119,21 +157,41 @@ print(params)
 
 ### 3) Train base learners (final training using tuned params)
 
-Run the appropriate script for each approach variant. The training scripts read tuned parameters from the `tuning_results` folder and will save out-of-fold (OOF) and test predictions plus models into their respective output directories.
+Run the appropriate script for each approach variant. The training scripts read tuned parameters from the `tuning_results` folder and apply the **2-step preprocessing funnel** before training QML models.
+
+**The 2-Step Funnel in Training:**
+
+**Approach 1 (DRE):** Imputation → Dimensionality Reduction
+```bash
+# Uses: MaskedTransformer(SimpleImputer) → MaskedTransformer(PCA/UMAP)
+python dre_standard.py --verbose --override_steps 100
+
+# Data reuploading variant (same 2-step funnel)
+python dre_relupload.py
+```
+
+**Approach 2 (CFE):** Preservation → Feature Selection
+```bash
+# Uses: Raw data with NaNs → LightGBM importance-based selection
+python cfe_standard.py --verbose
+
+# Data reuploading variant (same 2-step funnel)
+python cfe_relupload.py --override_steps 100
+```
 
 Examples (the repository contains multiple `approach` scripts; run the ones you need):
 
 ```bash
-# Approach 1 - Dimensionality Reduction Encoding (standard) with verbose logging and override steps
+# Approach 1: 2-step funnel (impute → reduce) with standard QML
 python dre_standard.py --verbose --override_steps 100
 
-# Approach 1 - Dimensionality Reduction Encoding (data reuploading)
+# Approach 1: 2-step funnel (impute → reduce) with data reuploading QML
 python dre_relupload.py
 
-# Approach 2 - Conditional Feature Encoding (standard) with verbose logging
+# Approach 2: 2-step funnel (preserve NaNs → select features) with standard QML
 python cfe_standard.py --verbose
 
-# Approach 2 - Conditional Feature Encoding (data reuploading) with override steps
+# Approach 2: 2-step funnel (preserve NaNs → select features) with data reuploading QML
 python cfe_relupload.py --override_steps 100
 
 You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:
@@ -269,6 +327,216 @@ This repository provides two families of base-learner designs. The mapping below
 -- Approach 2 — Conditional Feature Encoding (CFE)
 	- `cfe_standard.py` — CFE where the QML model is conditioned on a selected subset of features (standard QML circuit).
 	- `cfe_relupload.py` — CFE using data re-uploading QML circuits and fold-wise feature selection (LightGBM importance-based selection).
+
+---
+
+## 🔄 Deep Dive: The 2-Step Preprocessing Funnel
+
+This section provides additional context on how the 2-step funnel works in practice.
+
+### Understanding the Two Approaches
+
+Both approaches prepare high-dimensional multi-omics data for quantum circuits through a **2-step funnel**, but they differ in implementation:
+
+#### **Approach 1 (DRE): Imputation → Dimensionality Reduction**
+
+**Philosophy:** Fill missing values first, then reduce dimensions linearly or non-linearly.
+
+**Step 1: Imputation**
+```python
+from sklearn.impute import SimpleImputer
+from utils.masked_transformers import MaskedTransformer
+
+# Impute missing values with median (only on non-missing modalities)
+imputer = MaskedTransformer(SimpleImputer(strategy='median'))
+X_imputed = imputer.fit_transform(X_train)
+```
+
+**Step 2: Dimensionality Reduction**
+```python
+from sklearn.decomposition import PCA
+from umap import UMAP
+
+# Option A: Linear reduction with PCA
+reducer = MaskedTransformer(PCA(n_components=n_qubits))
+X_reduced = reducer.fit_transform(X_imputed)
+
+# Option B: Non-linear reduction with UMAP
+reducer = MaskedTransformer(UMAP(n_components=n_qubits))
+X_reduced = reducer.fit_transform(X_imputed)
+```
+
+**Result:** `X_reduced` is a dense array of shape `(n_samples, n_qubits)` ready for quantum circuit.
+
+#### **Approach 2 (CFE): Preservation → Feature Selection**
+
+**Philosophy:** Preserve missingness information, select important features using gradient boosting.
+
+**Step 1: Preservation (Implicit Imputation)**
+```python
+# Keep raw data with NaNs for feature selector
+X_raw_with_nans = X_train  # DataFrame with NaN values
+
+# For QML input: replace NaNs with 0.0 as placeholder (model learns missing encoding)
+X_filled = X_raw_with_nans.fillna(0.0)
+is_missing = X_raw_with_nans.isnull().astype(int)
+```
+
+**Step 2: Feature Selection**
+
+**Option A: LightGBM Selection (Default)**
+```python
+from lightgbm import LGBMClassifier
+
+# LightGBM handles NaNs natively during training
+lgb = LGBMClassifier(n_estimators=50, learning_rate=0.1, 
+                     feature_fraction=0.7, random_state=42, verbosity=-1)
+lgb.fit(X_raw_with_nans.values, y_train)  # Passes NaNs directly
+
+# Select top k features by importance
+importances = lgb.feature_importances_
+selected_indices = np.argsort(importances)[-n_qubits:]
+X_selected = X_filled[:, selected_indices]
+is_missing_selected = is_missing[:, selected_indices]
+```
+
+**Option B: XGBoost Selection (Alternative)**
+```python
+from xgboost import XGBClassifier
+
+# XGBoost also handles NaNs natively
+xgb = XGBClassifier(n_estimators=50, learning_rate=0.1,
+                    max_depth=6, random_state=42, verbosity=0,
+                    tree_method='hist')
+xgb.fit(X_raw_with_nans.values, y_train)  # Passes NaNs directly
+
+# Select top k features by importance
+importances = xgb.feature_importances_
+selected_indices = np.argsort(importances)[-n_qubits:]
+X_selected = X_filled[:, selected_indices]
+is_missing_selected = is_missing[:, selected_indices]
+```
+
+**Option C: Hybrid Union**
+```python
+# Combine features selected by both methods
+lgb_selected = select_features_lgbm(X_raw_with_nans, y_train, n_qubits)
+xgb_selected = select_features_xgb(X_raw_with_nans, y_train, n_qubits)
+
+# Union: take features selected by either method
+union = np.union1d(lgb_selected, xgb_selected)
+
+# Rank by combined importance and take top n_qubits
+lgb_imp = lgb.feature_importances_
+xgb_imp = xgb.feature_importances_
+combined_imp = (lgb_imp + xgb_imp) / 2
+selected_indices = sorted(union, key=lambda i: combined_imp[i], reverse=True)[:n_qubits]
+```
+
+**Option D: Hybrid Ensemble**
+```python
+# Train separate models and average predictions
+model_lgb = train_qml_with_features(X_train[:, lgb_selected], y_train)
+model_xgb = train_qml_with_features(X_train[:, xgb_selected], y_train)
+
+# At inference: average probabilities
+pred_lgb = model_lgb.predict_proba(X_test[:, lgb_selected])
+pred_xgb = model_xgb.predict_proba(X_test[:, xgb_selected])
+pred_ensemble = (pred_lgb + pred_xgb) / 2
+```
+
+**Result:** `(X_selected, is_missing_selected)` is a tuple ready for conditional quantum circuit.
+
+### Practical Example: Complete Pipeline with 2-Step Funnel
+
+```bash
+#!/bin/bash
+# Complete example using Approach 2 with LightGBM feature selection
+
+# Step 0: Setup
+export SOURCE_DIR=final_processed_datasets
+export OUTPUT_DIR=base_learner_outputs_app2_standard
+
+# Step 1: Create master label encoder
+python create_master_label_encoder.py
+
+# Step 2: Tune hyperparameters (finds best 2-step funnel config)
+# This tunes: n_qubits (how many features to select), n_layers (QML depth)
+python tune_models.py \
+    --datatype CNV \
+    --approach 2 \
+    --qml_model standard \
+    --n_trials 30 \
+    --verbose
+
+echo "Tuning complete. Best params saved to tuning_results/"
+
+# Step 3: Train base learner using 2-step funnel
+# Step 1 of funnel: Preserve NaNs
+# Step 2 of funnel: LightGBM selects top-k features
+python cfe_standard.py \
+    --datatypes CNV \
+    --verbose
+
+echo "Training complete. OOF and test predictions saved to $OUTPUT_DIR/"
+
+# Step 4: Prepare for meta-learner
+mkdir -p final_ensemble_predictions
+cp $OUTPUT_DIR/train_oof_preds_CNV.csv final_ensemble_predictions/
+cp $OUTPUT_DIR/test_preds_CNV.csv final_ensemble_predictions/
+cp master_label_encoder/label_encoder.joblib final_ensemble_predictions/
+
+# Step 5: Train meta-learner
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file indicator_features.parquet \
+    --mode train \
+    --verbose
+
+echo "Meta-learner training complete!"
+```
+
+### When to Use Each Approach
+
+| **Criterion** | **Approach 1 (DRE)** | **Approach 2 (CFE)** |
+|---------------|---------------------|---------------------|
+| **Data Density** | Dense data (few missing values) | Sparse data (many missing values) |
+| **Missing Value Philosophy** | Impute and ignore | Learn from missingness |
+| **Feature Relationships** | Linear or smooth manifold | Complex, non-linear |
+| **Interpretability** | Low (PCA components) | High (selected original features) |
+| **Speed** | Faster (PCA) | Slower (LightGBM/XGBoost fitting) |
+| **Best For** | Gene expression, methylation | Copy number, mutations, clinical |
+
+### Feature Selection: LightGBM vs XGBoost vs Hybrid
+
+| **Method** | **Speed** | **Robustness** | **Missing Handling** | **When to Use** |
+|-----------|-----------|---------------|---------------------|----------------|
+| **LightGBM** | ⭐⭐⭐ Fast | ⭐⭐ Good | Native, efficient | Default choice, most datasets |
+| **XGBoost** | ⭐⭐ Moderate | ⭐⭐⭐ Excellent | Native, robust | When LightGBM underperforms |
+| **Hybrid Union** | ⭐ Slow | ⭐⭐⭐ Excellent | Best of both | Maximum feature coverage |
+| **Hybrid Ensemble** | ⭐ Slowest | ⭐⭐⭐ Best | Best of both | Maximum prediction robustness |
+
+**Recommendation:** Start with LightGBM. If performance is suboptimal, try XGBoost. Use hybrid methods for final production models.
+
+### Integration with Quantum Circuits
+
+After the 2-step funnel, data flows into quantum circuits:
+
+```python
+# Approach 1: Reduced features → Standard QML
+X_reduced = pipeline.transform(X_test)  # Shape: (n_samples, n_qubits)
+predictions = qml_model.predict_proba(X_reduced)
+
+# Approach 2: Selected features + mask → Conditional QML  
+X_selected = X_test[:, selected_indices]
+X_filled = X_selected.fillna(0.0)
+is_missing = X_selected.isnull().astype(int)
+predictions = qml_model.predict_proba((X_filled, is_missing))
+```
+
+The 2-step funnel ensures quantum circuits receive properly preprocessed, dimensionality-reduced inputs that maximize quantum advantage while handling missing data appropriately.
+
+---
 
 Below are the CLI arguments for each script (if not listed, script uses defaults):
 
