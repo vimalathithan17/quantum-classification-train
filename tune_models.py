@@ -222,15 +222,15 @@ def _log_fold_metrics_to_wandb(trial_wandb_run, fold, n_splits, trial_number,
     if trial_wandb_run:
         try:
             wandb.log({
-                f'fold_{fold+1}/accuracy': acc,
-                f'fold_{fold+1}/f1_weighted': f1_weighted,
+                f'fold_{fold+1}/accuracy': float(acc),
+                f'fold_{fold+1}/f1_weighted': float(f1_weighted),
                 f'fold_{fold+1}/f1_macro': float(f1_macro),
                 f'fold_{fold+1}/precision_weighted': float(prec_weighted),
                 f'fold_{fold+1}/precision_macro': float(prec_macro),
                 f'fold_{fold+1}/recall_weighted': float(rec_weighted),
                 f'fold_{fold+1}/recall_macro': float(rec_macro),
-                f'fold_{fold+1}/specificity_macro': spec_macro,
-                f'fold_{fold+1}/specificity_weighted': spec_weighted,
+                f'fold_{fold+1}/specificity_macro': float(spec_macro),
+                f'fold_{fold+1}/specificity_weighted': float(spec_weighted),
             })
         except Exception as e:
             log.warning(f"Failed to log fold metrics to wandb: {e}")
@@ -811,10 +811,9 @@ def main():
                 for trial in study.trials:
                     if trial.state == optuna.trial.TrialState.COMPLETE:
                         all_trials_summary[f'all_trials/trial_{trial.number}_mean_f1'] = trial.value
-                        all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits')
-                        all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers')
-                        if 'scaler' in trial.params:
-                            all_trials_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params['scaler']
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits', 'N/A')
+                        all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers', 'N/A')
+                        all_trials_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params.get('scaler', 'N/A')
                 
                 if all_trials_summary:
                     wandb.log(all_trials_summary)
