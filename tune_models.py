@@ -16,6 +16,7 @@ from sklearn.pipeline import Pipeline
 from utils.masked_transformers import MaskedTransformer
 from lightgbm import LGBMClassifier
 from umap import UMAP
+import wandb
 
 # Additional imports for comprehensive metrics
 from sklearn.metrics import (
@@ -283,6 +284,44 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
 
     log.info(f"Trial {trial.number} Parameters: {json.dumps(params, indent=2)}")
 
+    # Initialize trial-level wandb run if requested
+    trial_wandb_run = None
+    if args.use_wandb:
+        try:
+            # Create a descriptive run name for the trial
+            approach_name = "DRE" if args.approach == 1 else "CF"
+            trial_run_name = f"trial_{trial.number}_{approach_name}_{args.datatype}_{args.qml_model}"
+            if args.approach == 1 and 'scaler' in params:
+                trial_run_name += f"_{params['scaler']}"
+            trial_run_name += f"_q{params['n_qubits']}_l{params['n_layers']}"
+            
+            # Initialize wandb for this trial
+            trial_wandb_run = wandb.init(
+                project=args.wandb_project,
+                name=trial_run_name,
+                config={
+                    'trial_number': trial.number,
+                    'approach': args.approach,
+                    'datatype': args.datatype,
+                    'qml_model': args.qml_model,
+                    'dim_reducer': args.dim_reducer if args.approach == 1 else None,
+                    'n_qubits': params['n_qubits'],
+                    'n_layers': params['n_layers'],
+                    'scaler': params.get('scaler', None),
+                    'steps': args.steps,
+                    'min_qbits': min_qbits,
+                    'max_qbits': max_qbits,
+                    'min_layers': args.min_layers,
+                    'max_layers': args.max_layers,
+                },
+                reinit=True,
+                group=f"tuning_{args.datatype}_app{args.approach}_{args.qml_model}"
+            )
+            log.info(f"Initialized trial-level W&B run: {trial_run_name}")
+        except Exception as e:
+            log.warning(f"Failed to initialize trial-level wandb: {e}")
+            trial_wandb_run = None
+
     # Build scaler only for Approach 1; for Approach 2 keep scaler as None
     if args.approach == 1:
         scaler = get_scaler(params['scaler'])
@@ -392,6 +431,23 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
 
             # logging
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
+            
+            # Log fold metrics to trial-level wandb run
+            if trial_wandb_run:
+                try:
+                    wandb.log({
+                        f'fold_{fold+1}/accuracy': acc,
+                        f'fold_{fold+1}/f1_weighted': f1_weighted,
+                        f'fold_{fold+1}/f1_macro': float(f1_macro),
+                        f'fold_{fold+1}/precision_weighted': float(prec_weighted),
+                        f'fold_{fold+1}/precision_macro': float(prec_macro),
+                        f'fold_{fold+1}/recall_weighted': float(rec_weighted),
+                        f'fold_{fold+1}/recall_macro': float(rec_macro),
+                        f'fold_{fold+1}/specificity_macro': spec_macro,
+                        f'fold_{fold+1}/specificity_weighted': spec_weighted,
+                    })
+                except Exception as e:
+                    log.warning(f"Failed to log fold metrics to wandb: {e}")
             
             # Save per-fold metrics to disk
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
@@ -508,6 +564,23 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
 
             log.info(f"Trial {trial.number}, Fold {fold+1}/{n_splits}: metrics: f1_weighted={f1_weighted:.4f}, acc={acc:.4f}")
             
+            # Log fold metrics to trial-level wandb run
+            if trial_wandb_run:
+                try:
+                    wandb.log({
+                        f'fold_{fold+1}/accuracy': acc,
+                        f'fold_{fold+1}/f1_weighted': f1_weighted,
+                        f'fold_{fold+1}/f1_macro': float(f1_macro),
+                        f'fold_{fold+1}/precision_weighted': float(prec_weighted),
+                        f'fold_{fold+1}/precision_macro': float(prec_macro),
+                        f'fold_{fold+1}/recall_weighted': float(rec_weighted),
+                        f'fold_{fold+1}/recall_macro': float(rec_macro),
+                        f'fold_{fold+1}/specificity_macro': spec_macro,
+                        f'fold_{fold+1}/specificity_weighted': spec_weighted,
+                    })
+                except Exception as e:
+                    log.warning(f"Failed to log fold metrics to wandb: {e}")
+            
             fold_dir = os.path.join(TUNING_RESULTS_DIR, f"trial_{trial.number}")
             os.makedirs(fold_dir, exist_ok=True)
             with open(os.path.join(fold_dir, f"fold_{fold+1}_metrics.json"), 'w') as fh:
@@ -524,6 +597,24 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     # optionally attach aggregate metrics to trial
     trial.set_user_attr('mean_f1_weighted', mean_f1)
     trial.set_user_attr('std_f1_weighted', std_f1)
+
+    # Log aggregate trial metrics to wandb
+    if trial_wandb_run:
+        try:
+            wandb.log({
+                'mean_f1_weighted': mean_f1,
+                'std_f1_weighted': std_f1,
+            })
+            log.info(f"Logged aggregate metrics to W&B for trial {trial.number}")
+        except Exception as e:
+            log.warning(f"Failed to log aggregate metrics to wandb: {e}")
+        
+        # Finish the trial-level wandb run
+        try:
+            wandb.finish()
+            log.info(f"Finished trial-level W&B run for trial {trial.number}")
+        except Exception as e:
+            log.warning(f"Failed to finish trial-level wandb run: {e}")
 
     log.info(f"--- Trial {trial.number} Finished: mean_f1_weighted = {mean_f1:.4f} ± {std_f1:.4f} ---")
     return mean_f1
@@ -669,6 +760,54 @@ def main():
         
         best_params = study.best_params.copy()
         best_params['steps'] = args.steps
+        
+        # Log study-level summary to wandb
+        if args.use_wandb:
+            try:
+                # Create a summary run for the entire study
+                summary_run_name = f"study_summary_{args.datatype}_app{args.approach}_{args.qml_model}"
+                study_run = wandb.init(
+                    project=args.wandb_project,
+                    name=summary_run_name,
+                    config={
+                        'study_name': study_name,
+                        'datatype': args.datatype,
+                        'approach': args.approach,
+                        'qml_model': args.qml_model,
+                        'dim_reducer': args.dim_reducer if args.approach == 1 else None,
+                        'total_trials': len(study.trials),
+                        'n_classes': n_classes,
+                        'best_params': best_params,
+                    },
+                    reinit=True,
+                    group=f"study_{args.datatype}_app{args.approach}_{args.qml_model}"
+                )
+                
+                # Log best metrics
+                wandb.log({
+                    'best_mean_f1_weighted': study.best_value,
+                    'best_n_qubits': best_params.get('n_qubits'),
+                    'best_n_layers': best_params.get('n_layers'),
+                    'best_scaler': best_params.get('scaler', 'N/A'),
+                    'total_trials': len(study.trials),
+                })
+                
+                # Log all trial results for comparison
+                for trial in study.trials:
+                    if trial.state == optuna.trial.TrialState.COMPLETE:
+                        trial_summary = {
+                            f'all_trials/trial_{trial.number}_mean_f1': trial.value,
+                            f'all_trials/trial_{trial.number}_n_qubits': trial.params.get('n_qubits'),
+                            f'all_trials/trial_{trial.number}_n_layers': trial.params.get('n_layers'),
+                        }
+                        if 'scaler' in trial.params:
+                            trial_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params['scaler']
+                        wandb.log(trial_summary)
+                
+                log.info(f"Logged study summary to W&B: {summary_run_name}")
+                wandb.finish()
+            except Exception as e:
+                log.warning(f"Failed to log study summary to wandb: {e}")
         
         os.makedirs(TUNING_RESULTS_DIR, exist_ok=True)
         params_file = os.path.join(TUNING_RESULTS_DIR, f'best_params_{study_name}.json')
