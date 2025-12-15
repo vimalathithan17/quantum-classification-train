@@ -81,7 +81,7 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 100 steps by default)
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (default is 100 training steps)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
@@ -94,7 +94,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trial
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
-- The number of training steps for tuning is fixed at 100 by default (can be changed with `--steps`).
+- The number of training steps for tuning defaults to 100 (can be changed with `--steps`).
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -417,7 +417,7 @@ Environment variables relevant to CLI behavior
 # Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges (uses default steps of 100)
+# Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6
 
 # Tune with Weights & Biases logging and custom study name
@@ -435,7 +435,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_t
 | `--indicator_file` | str | Yes | - | - | Parquet file with indicator features and true `class` column. |
 | `--mode` | str | No | `train` | `train`, `tune` | Operation mode. |
 | `--n_trials` | int | No | `50` | - | Number of Optuna trials for tuning. |
-| `--override_steps` | int | No | `None` | - | Override the number of training steps from the tuned parameters. |
+| `--override_steps` | int | No | `None` | - | Override the number of training steps (overrides tuned parameters and defaults). |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 | `--skip_cross_validation` | flag | No | `False` | - | Skip cross-validation during tuning (use simple train/val split). |
 | `--max_training_time` | float | No | `None` | - | Maximum training time in hours (overrides fixed steps). |
