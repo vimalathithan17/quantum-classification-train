@@ -2,6 +2,23 @@
 
 This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
 
+## 🔄 Key Feature: 2-Step Preprocessing Funnel
+
+The pipeline uses a **2-step funnel** to prepare high-dimensional multi-omics data for quantum circuits:
+
+**Approach 1 (DRE): Imputation → Dimensionality Reduction**
+1. **Step 1**: Imputation - Fill missing values using SimpleImputer (median strategy)
+2. **Step 2**: Dimensionality Reduction - Reduce to n_qubits dimensions using PCA or UMAP
+
+**Approach 2 (CFE): Imputation → Feature Selection**
+1. **Step 1**: Implicit Imputation - Preserve NaNs for native handling by selector
+2. **Step 2**: Feature Selection - Select top-k features using:
+   - **LightGBM** (default): Fast, handles missing values natively
+   - **XGBoost** (alternative): More robust, handles missing values natively
+   - **Hybrid**: Combine both methods (union, intersection, or ensemble)
+
+Both approaches integrate seamlessly with quantum circuits for classification.
+
 ---
 
 ## Directory layout (recommended)
@@ -78,25 +95,46 @@ Output: `master_label_encoder/label_encoder.joblib`
 
 Use `tune_models.py` to tune base learners. Repeat per data type / approach / qml_model / dim reducer as needed.
 
+**The 2-Step Funnel in Tuning:**
+- **Approach 1**: Tunes imputation → dimensionality reduction pipeline
+- **Approach 2**: Tunes feature selection method (LightGBM by default)
+
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (default is 100 training steps)
+# Tune Approach 1 (2-step: impute → PCA reduction) for CNV (50 trials)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
-# Tune Approach 2 (reuploading) for Prot (30 trials)
+# Tune Approach 1 with UMAP instead of PCA (2-step: impute → UMAP reduction)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer umap --n_trials 50 --verbose
+
+# Tune Approach 2 (2-step: preserve NaNs → LightGBM selection) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
 
 # Tune with Weights & Biases logging enabled
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_project
 ```
 
+**Understanding the 2-Step Funnel:**
+
+**Approach 1 (DRE):**
+- Step 1: `MaskedTransformer(SimpleImputer(strategy='median'))` - imputes missing values
+- Step 2: `MaskedTransformer(PCA(n_components=n_qubits))` - reduces to n_qubits dimensions
+- Alternative Step 2: `MaskedTransformer(UMAP(n_components=n_qubits))` - non-linear reduction
+
+**Approach 2 (CFE):**
+- Step 1: Raw data with NaNs preserved for selector
+- Step 2: `LGBMClassifier` feature importance → selects top n_qubits features
+- Alternative Step 2: `XGBClassifier` feature importance (requires code modification)
+- Hybrid Step 2: Combine LightGBM + XGBoost selections
+
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
-- The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
+- Both approaches use a 2-step funnel: imputation/preservation → reduction/selection
 - The number of training steps for tuning defaults to 100 (can be changed with `--steps`).
+- Optimizes weighted F1 score (handles class imbalance better than accuracy)
 
-Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
+Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters including the 2-step funnel configuration.
 
 Quick inspection: there is a small helper script included to view saved parameter files:
 
@@ -119,21 +157,41 @@ print(params)
 
 ### 3) Train base learners (final training using tuned params)
 
-Run the appropriate script for each approach variant. The training scripts read tuned parameters from the `tuning_results` folder and will save out-of-fold (OOF) and test predictions plus models into their respective output directories.
+Run the appropriate script for each approach variant. The training scripts read tuned parameters from the `tuning_results` folder and apply the **2-step preprocessing funnel** before training QML models.
+
+**The 2-Step Funnel in Training:**
+
+**Approach 1 (DRE):** Imputation → Dimensionality Reduction
+```bash
+# Uses: MaskedTransformer(SimpleImputer) → MaskedTransformer(PCA/UMAP)
+python dre_standard.py --verbose --override_steps 100
+
+# Data reuploading variant (same 2-step funnel)
+python dre_relupload.py
+```
+
+**Approach 2 (CFE):** Preservation → Feature Selection
+```bash
+# Uses: Raw data with NaNs → LightGBM importance-based selection
+python cfe_standard.py --verbose
+
+# Data reuploading variant (same 2-step funnel)
+python cfe_relupload.py --override_steps 100
+```
 
 Examples (the repository contains multiple `approach` scripts; run the ones you need):
 
 ```bash
-# Approach 1 - Dimensionality Reduction Encoding (standard) with verbose logging and override steps
+# Approach 1: 2-step funnel (impute → reduce) with standard QML
 python dre_standard.py --verbose --override_steps 100
 
-# Approach 1 - Dimensionality Reduction Encoding (data reuploading)
+# Approach 1: 2-step funnel (impute → reduce) with data reuploading QML
 python dre_relupload.py
 
-# Approach 2 - Conditional Feature Encoding (standard) with verbose logging
+# Approach 2: 2-step funnel (preserve NaNs → select features) with standard QML
 python cfe_standard.py --verbose
 
-# Approach 2 - Conditional Feature Encoding (data reuploading) with override steps
+# Approach 2: 2-step funnel (preserve NaNs → select features) with data reuploading QML
 python cfe_relupload.py --override_steps 100
 
 You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:

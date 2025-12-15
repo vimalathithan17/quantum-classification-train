@@ -45,14 +45,25 @@ Input: Multi-Omics Data (6 modalities)
 
 ↓ [Independent preprocessing per modality]
 
-STAGE 1: Feature Engineering
-─────────────────────────────
-Two Approaches:
-• Approach 1 (DRE): Dimensionality Reduction Encoding
-  └→ PCA/UMAP → Reduce to n_qubits dimensions
+STAGE 1: 2-Step Preprocessing Funnel
+─────────────────────────────────────
+Two Approaches with 2-Step Funnel:
+
+• Approach 1 (DRE): Imputation → Dimensionality Reduction
+  Step 1: Imputation (MaskedTransformer + SimpleImputer)
+  Step 2: Dimensionality Reduction (PCA or UMAP)
+  └→ Reduce to n_qubits dimensions
+
+• Approach 2 (CFE): Imputation → Feature Selection  
+  Step 1: Implicit Imputation (preserve NaNs for selector)
+  Step 2: Feature Selection (LightGBM, XGBoost, or Hybrid)
+  └→ Select top-k important features
   
-• Approach 2 (CFE): Conditional Feature Encoding  
-  └→ LightGBM selection → Top-k important features
+Feature Selection Options:
+  - LightGBM (default): Fast, handles missing natively
+  - XGBoost (alternative): Robust, handles missing natively
+  - Hybrid Union: Combine features from both selectors
+  - Hybrid Ensemble: Train separate models and average predictions
 
 ↓ [Reduced feature vectors]
 
@@ -92,29 +103,56 @@ python create_master_label_encoder.py
 
 #### Step 2: Hyperparameter Tuning
 ```bash
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50
+# Approach 1: Tune with dimensionality reduction (PCA or UMAP)
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50
+
+# Approach 2: Tune with feature selection (LightGBM default)
+python tune_models.py --datatype CNV --approach 2 --qml_model standard --n_trials 50
 ```
 - Uses Optuna Bayesian optimization
 - Tests combinations of:
   - Number of qubits (n_qbits)
   - Number of quantum layers (n_layers)  
-  - Classical preprocessing (scaler, dimensionality reducer)
+  - Classical preprocessing:
+    - **Approach 1**: Scaler type + dimensionality reducer (PCA/UMAP)
+    - **Approach 2**: Feature selector (LightGBM default, XGBoost optional)
 - 3-fold stratified cross-validation per trial
 - Optimizes weighted F1 score (handles class imbalance)
 - Output: `tuning_results/best_params_..._CNV_...json`
 
+**2-Step Funnel in Tuning:**
+- **Approach 1**: Imputation → Dimensionality Reduction
+  - Step 1: MaskedTransformer(SimpleImputer) fills missing values
+  - Step 2: PCA or UMAP reduces to n_qubits dimensions
+- **Approach 2**: Imputation → Feature Selection
+  - Step 1: Preserve NaNs for native handling by selector
+  - Step 2: LightGBM/XGBoost selects top-k features by importance
+
 #### Step 3: Train Base Learners
 ```bash
-# Approach 1 - Dimensionality Reduction Encoding
+# Approach 1 - Dimensionality Reduction Encoding (2-step: impute → reduce)
 python dre_standard.py --verbose
 
-# Approach 2 - Conditional Feature Encoding  
+# Approach 2 - Conditional Feature Encoding (2-step: preserve NaNs → select features)
 python cfe_standard.py --verbose
 ```
 
+**The 2-Step Preprocessing Funnel:**
+
 For each modality:
 1. Load tuned hyperparameters
-2. Apply dimensionality reduction (DRE) or feature selection (CFE)
+2. **Apply 2-step funnel:**
+   - **Approach 1 (DRE)**:
+     - Step 1: Imputation using MaskedTransformer + SimpleImputer (median)
+     - Step 2: Dimensionality reduction using PCA or UMAP to n_qubits dimensions
+   - **Approach 2 (CFE)**:
+     - Step 1: Preserve NaNs in data (no explicit imputation)
+     - Step 2: Feature selection using LightGBM importance (handles NaNs natively)
+       - LightGBM fits on raw data with NaNs
+       - Computes feature importances
+       - Selects top n_qubits features
+       - Alternative: Can use XGBoost or hybrid method
+3. Train quantum circuit on preprocessed features
 3. Train quantum circuit
 4. Generate OOF predictions via 3-fold CV (for meta-learner training)
 5. Train final model on full training set
