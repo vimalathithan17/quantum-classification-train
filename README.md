@@ -421,7 +421,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_red
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6
 
 # Tune with Weights & Biases logging and custom study name
-python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_qml_project --study_name custom_cnn_study
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_qml_project --study_name custom_cnv_study
 
 # Resume existing study to reach 100 total trials
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_trials 100
