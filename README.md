@@ -81,17 +81,20 @@ Use `tune_models.py` to tune base learners. Repeat per data type / approach / qm
 Examples:
 
 ```bash
-# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 75 steps)
+# Tune Approach 1 (standard) for CNV with PCA (50 trials) with verbose logging (tuning uses a fixed 100 steps by default)
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials)
 python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30
+
+# Tune with Weights & Biases logging enabled
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_project
 ```
 
 Notes:
 - The script reads data from `SOURCE_DIR` and runs an Optuna study with `--n_trials` trials.
 - The script no longer supports a `--search_method` / grid enqueue mode; it runs randomized trials by default.
-- The number of training steps for tuning is fixed at 75.
+- The number of training steps for tuning is fixed at 100 by default (can be changed with `--steps`).
 
 Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters.
 
@@ -189,13 +192,13 @@ Tune (optional):
 
 ```bash
 # Tune the meta-learner hyperparameters with verbose logging
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --tune --verbose
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --verbose
 ```
 
-Train final meta-learner (uses `meta_learner_best_params.json` by default or writes `meta_learner_best_params.json` during tuning):
+Train final meta-learner (uses best parameters from tuning stored in the output directory):
 
 ```bash
-python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --encoder_dir master_label_encoder --params_file meta_learner_best_params.json --verbose
+python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --verbose
 ```
 
 Outputs:
@@ -279,13 +282,19 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--scalers` (str, default `smr`): String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
-	- `--n_trials` (int, default 30): Number of Optuna trials to run.
+	- `--n_trials` (int, default 9): Number of NEW Optuna trials to run (if study exists, these are added to existing trials).
+	- `--total_trials` (int, optional): Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total.
+	- `--study_name` (str, optional): Override the auto-generated study name.
 	- `--min_qbits` (int, optional): Minimum number of qubits for tuning. Defaults to `n_classes`.
 	- `--max_qbits` (int, default 12): Maximum number of qubits for tuning.
 	- `--min_layers` (int, default 2): Minimum number of layers for tuning.
 	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
-	- `--steps` (int, default 75): Number of training steps for tuning.
+	- `--steps` (int, default 100): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
+	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--use_wandb` (flag): Enable Weights & Biases logging during tuning.
+	- `--wandb_project` (str, optional): W&B project name.
+	- `--wandb_run_name` (str, optional): W&B run name (auto-generated if not provided).
 	- Behavior: Loads data from `os.path.join(SOURCE_DIR, f'data_{datatype}_.parquet')`, runs an Optuna study using `--n_trials`, and writes best param JSON files to `TUNING_RESULTS_DIR`.
 	- Note: For Approach 2 (Conditional Feature Encoding) feature selection is performed using a LightGBM classifier to compute feature importances; the top-k important features (k = number of qubits) are selected per fold and for the final model. `SelectKBest` is no longer used for Approach 2.
 
@@ -298,6 +307,17 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--n_layers` (int, optional): Override number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
+	- `--skip_tuning` (flag): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--skip_cross_validation` (flag): Skip cross-validation and only train final model on full training set.
+	- `--cv_only` (flag): Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training).
+	- `--max_training_time` (float, optional): Maximum training time in hours (overrides fixed steps). Example: `--max_training_time 11`.
+	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
+	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
+	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--use_wandb` (flag): Enable Weights & Biases logging.
+	- `--wandb_project` (str, optional): W&B project name.
+	- `--wandb_run_name` (str, optional): W&B run name.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -315,6 +335,17 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--n_layers` (int, optional): Override the number of ansatz layers for the QML model.
 	- `--steps` (int, optional): Override the number of training steps used for QML training.
 	- `--scaler` (str, optional): Override scaler with shorthand: `s` (Standard), `m` (MinMax), `r` (Robust) or full name.
+	- `--skip_tuning` (flag): Skip loading tuned parameters and use command-line arguments or defaults instead.
+	- `--skip_cross_validation` (flag): Skip cross-validation and only train final model on full training set.
+	- `--cv_only` (flag): Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training).
+	- `--max_training_time` (float, optional): Maximum training time in hours (overrides fixed steps). Example: `--max_training_time 11`.
+	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
+	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
+	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--use_wandb` (flag): Enable Weights & Biases logging.
+	- `--wandb_project` (str, optional): W&B project name.
+	- `--wandb_run_name` (str, optional): W&B run name.
 	- Behavior: Each script iterates over `DATA_TYPES_TO_TRAIN` and for each data type will:
 		- Look for tuned params in `TUNING_RESULTS_DIR`.
 		- Load `data_{datatype}_.parquet` from `SOURCE_DIR`.
@@ -328,8 +359,23 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--indicator_file` (str, required): Path to a parquet file containing indicator features and the true `class` column for combining with meta-features.
 	- `--mode` (str, default `train`): Operation mode, `train` or `tune`.
 	- `--n_trials` (int, default 50): Number of Optuna trials for tuning.
-    - `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
+	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
+	- `--skip_cross_validation` (flag): Skip cross-validation during tuning (use simple train/val split).
+	- `--max_training_time` (float, optional): Maximum training time in hours (overrides fixed steps). Example: `--max_training_time 11`.
+	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
+	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
+	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--use_wandb` (flag): Enable Weights & Biases logging.
+	- `--wandb_project` (str, optional): W&B project name.
+	- `--wandb_run_name` (str, optional): W&B run name.
+	- `--meta_model_type` (str, optional): Force meta-learner model type for final training (choices: `gated_standard`, `gated_reuploading`). Overrides tuned value.
+	- `--meta_n_layers` (int, optional): Force number of layers for meta-learner during final training (overrides tuned value).
+	- `--meta_n_qubits` (int, optional): Force number of qubits to use for the meta-learner (defaults to n_meta_features).
+	- `--minlayers` (int, default 3): Minimum number of layers to consider during tuning.
+	- `--maxlayers` (int, default 6): Maximum number of layers to consider during tuning.
+	- `--learning_rate` (float, default 0.5): Fixed learning rate to use for both tuning and final training. If passed on the CLI it will override tuned params for final training.
 
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
@@ -350,13 +396,20 @@ Environment variables relevant to CLI behavior
 | `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
 | `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
-| `--n_trials` | int | No | `9` | - | Number of Optuna trials. |
+| `--n_trials` | int | No | `9` | - | Number of NEW Optuna trials to run. |
+| `--total_trials` | int | No | `None` | - | Target TOTAL number of trials (computes remaining if study exists). |
+| `--study_name` | str | No | `None` | - | Override the auto-generated study name. |
 | `--min_qbits` | int | No | `None` | - | Minimum number of qubits for tuning. Defaults to `n_classes`. |
 | `--max_qbits` | int | No | `12` | - | Maximum number of qubits for tuning. |
 | `--min_layers` | int | No | `2` | - | Minimum number of layers for tuning. |
 | `--max_layers` | int | No | `5` | - | Maximum number of layers for tuning. |
-| `--steps` | int | No | `75` | - | Number of training steps for tuning. |
+| `--steps` | int | No | `100` | - | Number of training steps for tuning. |
+| `--scalers` | str | No | `smr` | - | String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
+| `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging during tuning. |
+| `--wandb_project` | str | No | `None` | - | W&B project name. |
+| `--wandb_run_name` | str | No | `None` | - | W&B run name (auto-generated if not provided). |
 
 ### Example commands for `tune_models.py`
 
@@ -365,7 +418,13 @@ Environment variables relevant to CLI behavior
 python tune_models.py --datatype CNV --approach 1 --qml_model standard --dim_reducer pca --n_trials 50 --verbose
 
 # Tune Approach 2 (reuploading) for Prot (30 trials) with custom qubit and layer ranges
-python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6 --steps 75
+python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_trials 30 --min_qbits 8 --max_qbits 16 --min_layers 4 --max_layers 6
+
+# Tune with Weights & Biases logging and custom study name
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --n_trials 50 --use_wandb --wandb_project my_qml_project --study_name custom_cnn_study
+
+# Resume existing study to reach 100 total trials
+python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_trials 100
 ```
 
 ### Command-line arguments for `metalearner.py`
@@ -373,26 +432,54 @@ python tune_models.py --datatype Prot --approach 2 --qml_model reuploading --n_t
 | Argument | Type | Required | Default | Choices | Description |
 |---|---|---|---|---|---|
 | `--preds_dir` | str | Yes | - | - | One or more directories with `train_oof_preds_*` and `test_preds_*` files. |
-| `--indicator_file` | str | No | `indicator_features.parquet` | - | Parquet file with indicator features and true `class` column. |
-| `--encoder_dir` | str | No | `master_label_encoder` | - | Directory with `label_encoder.joblib`. |
-| `--tune` | flag | No | `False` | - | Run hyperparameter tuning (Optuna) for the meta-learner. |
-| `--params_file` | str | No | `meta_learner_best_params.json` | - | JSON file to read/write best hyperparameters. |
+| `--indicator_file` | str | Yes | - | - | Parquet file with indicator features and true `class` column. |
 | `--mode` | str | No | `train` | `train`, `tune` | Operation mode. |
 | `--n_trials` | int | No | `50` | - | Number of Optuna trials for tuning. |
-| `--min_steps` | int | No | `50` | - | Minimum training steps for tuning. |
-| `--max_steps` | int | No | `150` | - | Maximum training steps for tuning. |
+| `--override_steps` | int | No | `None` | - | Override the number of training steps from the tuned parameters. |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
+| `--skip_cross_validation` | flag | No | `False` | - | Skip cross-validation during tuning (use simple train/val split). |
+| `--max_training_time` | float | No | `None` | - | Maximum training time in hours (overrides fixed steps). |
+| `--checkpoint_frequency` | int | No | `50` | - | Save checkpoint every N steps. |
+| `--keep_last_n` | int | No | `3` | - | Keep last N checkpoints. |
+| `--checkpoint_fallback_dir` | str | No | `None` | - | Fallback directory for checkpoints if primary is read-only. |
+| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
+| `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging. |
+| `--wandb_project` | str | No | `None` | - | W&B project name. |
+| `--wandb_run_name` | str | No | `None` | - | W&B run name. |
+| `--meta_model_type` | str | No | `None` | `gated_standard`, `gated_reuploading` | Force meta-learner model type (overrides tuned value). |
+| `--meta_n_layers` | int | No | `None` | - | Force number of layers for meta-learner (overrides tuned value). |
+| `--meta_n_qubits` | int | No | `None` | - | Force number of qubits for meta-learner (defaults to n_meta_features). |
+| `--minlayers` | int | No | `3` | - | Minimum number of layers to consider during tuning. |
+| `--maxlayers` | int | No | `6` | - | Maximum number of layers to consider during tuning. |
+| `--learning_rate` | float | No | `0.5` | - | Fixed learning rate (overrides tuned params for final training if passed on CLI). |
 
 ### Example commands for `metalearner.py`
 
 ```bash
-# Tune the meta-learner with 100 trials and verbose logging, tuning steps between 100 and 200
+# Tune the meta-learner with 100 trials and verbose logging
 python metalearner.py \
     --preds_dir final_ensemble_predictions \
     --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode tune \
     --n_trials 100 \
-    --min_steps 100 \
-    --max_steps 200 \
+    --minlayers 4 \
+    --maxlayers 8 \
+    --verbose
+
+# Train final meta-learner with W&B logging
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --verbose \
+    --use_wandb \
+    --wandb_project meta_learner_training
+
+# Train with time-based stopping instead of fixed steps
+python metalearner.py \
+    --preds_dir final_ensemble_predictions \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --max_training_time 2.5 \
     --verbose
 ```
