@@ -5,6 +5,58 @@ Implements self-supervised pretraining using contrastive learning:
 - Encoder networks with projection heads
 - NT-Xent (Normalized Temperature-scaled Cross Entropy) loss
 - Intra-modal and cross-modal contrastive learning
+
+Key Concepts:
+-------------
+Input Dimension (input_dim):
+    - Variable per modality (e.g., GeneExp: 5000, Prot: 200, miRNA: 800)
+    - Can be ANY value (< 256, = 256, or > 256)
+    - Each modality can have a different input dimension
+    
+Embedding Dimension (embed_dim):
+    - Default: 256
+    - Configurable: can be 64, 128, 256, 384, 512, etc.
+    - All modalities share the SAME embedding dimension
+    - This is the main representation dimension
+    - Kept after pretraining for downstream tasks
+    
+Projection Dimension (projection_dim):
+    - Default: 128
+    - Used only during contrastive pretraining
+    - Typically smaller than embed_dim
+    - Discarded after pretraining
+
+Architecture Flow:
+-----------------
+Input (variable dim) → Encoder → Embedding (embed_dim) → Projection Head → Projection (projection_dim)
+                                      ↓                                              ↓
+                                  Keep this                                   Use for loss,
+                                  for downstream                               then discard
+
+Example:
+--------
+>>> modality_dims = {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+>>> encoder = ContrastiveMultiOmicsEncoder(
+...     modality_dims=modality_dims,
+...     embed_dim=256,        # All modalities → 256-dim
+...     projection_dim=128    # For contrastive loss
+... )
+>>> # GeneExp: (batch, 5000) → (batch, 256) → (batch, 128)
+>>> # Prot:    (batch, 200)  → (batch, 256) → (batch, 128)
+>>> # miRNA:   (batch, 800)  → (batch, 256) → (batch, 128)
+
+Why These Defaults?
+------------------
+embed_dim=256:
+    - Balance between expressiveness and efficiency
+    - Common in deep learning (BERT: 768, ResNet: 512, SimCLR: 128-2048)
+    - Works well on consumer GPUs
+    - Empirically validated for multi-omics data
+    
+projection_dim=128:
+    - Typical to use smaller dimension for contrastive loss
+    - Reduces computational cost
+    - Forces more compact representations
 """
 
 import torch
@@ -17,7 +69,39 @@ class ModalityEncoder(nn.Module):
     """
     Deep neural encoder for a single modality.
     
-    Converts raw features into a common embedding space.
+    Converts raw features from variable input dimensions into a common 
+    embedding space with fixed dimension.
+    
+    Architecture:
+        Input (input_dim) → Linear(hidden_dim=512) → BatchNorm → ReLU → Dropout
+                          → Linear(hidden_dim//2=256) → BatchNorm → ReLU → Dropout
+                          → Linear(embed_dim) → BatchNorm
+        Output (embed_dim)
+    
+    Key Properties:
+        - Input dimension (input_dim): Can be ANY value
+          Examples: 50, 200, 1000, 5000, 10000, etc.
+        
+        - Output dimension (embed_dim): Configurable, typically 256
+          Common values: 64, 128, 256, 384, 512
+        
+        - The encoder can EXPAND small inputs or COMPRESS large inputs:
+          * Small input (100 features) → 512 → 256 → 256-dim output (expansion)
+          * Large input (5000 features) → 512 → 256 → 256-dim output (compression)
+    
+    Example Usage:
+        >>> # Small input dimension
+        >>> encoder_prot = ModalityEncoder(input_dim=200, embed_dim=256)
+        >>> x_prot = torch.randn(32, 200)  # 32 samples, 200 features
+        >>> embedding = encoder_prot(x_prot)  # Output: (32, 256)
+        
+        >>> # Large input dimension  
+        >>> encoder_gene = ModalityEncoder(input_dim=5000, embed_dim=256)
+        >>> x_gene = torch.randn(32, 5000)  # 32 samples, 5000 features
+        >>> embedding = encoder_gene(x_gene)  # Output: (32, 256)
+        
+        >>> # Both produce same embedding dimension!
+        >>> assert embedding_prot.shape == embedding_gene.shape == (32, 256)
     """
     
     def __init__(self, input_dim: int, embed_dim: int = 256, hidden_dim: int = 512, dropout: float = 0.2):
@@ -25,10 +109,24 @@ class ModalityEncoder(nn.Module):
         Initialize modality encoder.
         
         Args:
-            input_dim: Number of input features
-            embed_dim: Dimension of output embeddings
-            hidden_dim: Dimension of hidden layers
-            dropout: Dropout probability
+            input_dim: Number of input features (can be any value)
+                      - For GeneExp: typically 500-20000
+                      - For miRNA: typically 200-1000
+                      - For Prot: typically 100-500
+                      - Can be less than, equal to, or greater than embed_dim
+                      
+            embed_dim: Dimension of output embeddings (default: 256)
+                      - All modalities should use the same embed_dim
+                      - Common values: 64, 128, 256, 384, 512
+                      - Trade-off: larger = more expressive but slower
+                      
+            hidden_dim: Dimension of hidden layers (default: 512)
+                       - Intermediate representation size
+                       - Typically larger than both input_dim and embed_dim
+                       
+            dropout: Dropout probability (default: 0.2)
+                    - Regularization to prevent overfitting
+                    - Range: 0.0 to 0.5, typically 0.1-0.3
         """
         super().__init__()
         
@@ -104,6 +202,46 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
     
     Contains separate encoders and projection heads for each modality.
     Can be used for both intra-modal and cross-modal contrastive learning.
+    
+    Key Architecture Points:
+        1. Each modality gets its own encoder
+        2. All encoders map to the SAME embedding dimension
+        3. Each encoder has its own projection head for contrastive loss
+        4. Projection heads are discarded after pretraining
+    
+    Dimension Flow:
+        Raw Data → Encoder → Embedding → Projection Head → Projection → Loss
+        
+        GeneExp (5000) → (256) → (128) ┐
+        miRNA   (800)  → (256) → (128) ├→ Contrastive Loss
+        Prot    (200)  → (256) → (128) ┘
+        
+    After Pretraining:
+        GeneExp (5000) → (256) → [Use for downstream tasks]
+        miRNA   (800)  → (256) → [Use for downstream tasks]
+        Prot    (200)  → (256) → [Use for downstream tasks]
+        
+    Example:
+        >>> # Define modalities with different input dimensions
+        >>> modality_dims = {
+        ...     'GeneExp': 5000,  # 5000 gene expression features
+        ...     'miRNA': 800,     # 800 miRNA features
+        ...     'Prot': 200,      # 200 protein features
+        ...     'CNV': 1500       # 1500 CNV features
+        ... }
+        >>> 
+        >>> # Create encoder with shared embedding dimension
+        >>> encoder = ContrastiveMultiOmicsEncoder(
+        ...     modality_dims=modality_dims,
+        ...     embed_dim=256,      # All modalities → 256-dim
+        ...     projection_dim=128  # For contrastive loss
+        ... )
+        >>> 
+        >>> # Process each modality
+        >>> x_gene = torch.randn(32, 5000)
+        >>> embedding, projection = encoder(x_gene, 'GeneExp')
+        >>> # embedding: (32, 256) - keep for downstream
+        >>> # projection: (32, 128) - use for contrastive loss
     """
     
     def __init__(
@@ -119,10 +257,34 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         
         Args:
             modality_dims: Dictionary mapping modality names to input dimensions
-            embed_dim: Dimension of embeddings
-            projection_dim: Dimension of projections for contrastive loss
-            hidden_dim: Dimension of hidden layers in encoders
-            dropout: Dropout probability
+                          Example: {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+                          - Keys: modality names (strings)
+                          - Values: input feature dimensions (integers, any size)
+                          - Each modality can have a different input dimension
+                          
+            embed_dim: Dimension of embeddings (default: 256)
+                      - All modalities will be mapped to this dimension
+                      - This is the SHARED embedding space
+                      - Common values: 64, 128, 256, 384, 512
+                      - Kept after pretraining for downstream tasks
+                      - Important: All modalities must use the same embed_dim
+                        for cross-modal contrastive learning to work
+                      
+            projection_dim: Dimension of projections for contrastive loss (default: 128)
+                           - Typically smaller than embed_dim
+                           - Only used during pretraining
+                           - Discarded after pretraining
+                           - Common values: 64, 128, 256
+                           
+            hidden_dim: Dimension of hidden layers in encoders (default: 512)
+                       - Intermediate representation size
+                       - Typically larger than embed_dim
+                       - All modality encoders use the same hidden_dim
+                       
+            dropout: Dropout probability (default: 0.2)
+                    - Applied in encoder networks
+                    - Regularization to prevent overfitting
+                    - Range: 0.0 to 0.5
         """
         super().__init__()
         

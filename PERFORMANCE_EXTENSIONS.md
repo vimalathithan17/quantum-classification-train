@@ -403,18 +403,46 @@ Final Classifier
 ```python
 class ContrastiveMultiOmicsEncoder(nn.Module):
     """
-    Contrastive learning for multi-omics data
+    Contrastive learning for multi-omics data.
+    
+    Maps each modality from its original high-dimensional space to a shared
+    embedding space for cross-modal learning.
+    
+    Architecture:
+        Input (variable dim per modality) → Encoder → Embedding (embed_dim) → Projection (projection_dim)
+        
+    Example:
+        modality_dims = {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+        encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256, projection_dim=128)
+        
+        # GeneExp: (batch, 5000) → (batch, 256) → (batch, 128)
+        # Prot:    (batch, 200)  → (batch, 256) → (batch, 128)
+        # miRNA:   (batch, 800)  → (batch, 256) → (batch, 128)
     """
     def __init__(self, modality_dims, embed_dim=256, projection_dim=128):
+        """
+        Args:
+            modality_dims: Dict mapping modality name to input dimension
+                          e.g., {'GeneExp': 5000, 'Prot': 200}
+            embed_dim: Output embedding dimension (default: 256)
+                      - Can be any value (64, 128, 256, 512, etc.)
+                      - All modalities share this dimension
+                      - Must be divisible by num_heads if using with Transformer
+            projection_dim: Dimension for contrastive loss projection (default: 128)
+                           - Typically smaller than embed_dim
+                           - Only used during pretraining, discarded after
+        """
         super().__init__()
         
         # Encoder for each modality
+        # Each maps from modality-specific input_dim to shared embed_dim
         self.encoders = nn.ModuleDict({
             modality: self._build_encoder(input_dim, embed_dim)
             for modality, input_dim in modality_dims.items()
         })
         
         # Projection heads for contrastive loss (removed after pretraining)
+        # Maps from embed_dim to lower projection_dim for contrastive loss
         self.projection_heads = nn.ModuleDict({
             modality: nn.Sequential(
                 nn.Linear(embed_dim, embed_dim),
@@ -425,28 +453,60 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         })
     
     def _build_encoder(self, input_dim, output_dim):
+        """
+        Build a deep encoder network.
+        
+        Architecture:
+            Input (input_dim) → Linear(512) → BatchNorm → ReLU → Dropout
+                              → Linear(256) → BatchNorm → ReLU → Dropout  
+                              → Linear(output_dim) → BatchNorm
+        
+        Args:
+            input_dim: Number of input features (can be any value: 50, 200, 5000, etc.)
+            output_dim: Number of output features (typically embed_dim, e.g., 256)
+            
+        Returns:
+            nn.Sequential encoder that maps (batch, input_dim) → (batch, output_dim)
+        """
         return nn.Sequential(
-            nn.Linear(input_dim, 512),
+            nn.Linear(input_dim, 512),       # Expand or compress to hidden size
             nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(512, 256),
+            nn.Linear(512, 256),             # Intermediate representation
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(256, output_dim)
+            nn.Dropout(0.2),
+            nn.Linear(256, output_dim),      # Project to final embedding dimension
+            nn.BatchNorm1d(output_dim)
         )
     
     def forward(self, x, modality_name, return_projection=True):
-        # Encode
+        """
+        Forward pass through encoder and optional projection.
+        
+        Args:
+            x: Input tensor (batch, modality_input_dim)
+            modality_name: Name of the modality (e.g., 'GeneExp')
+            return_projection: If True, also return projection for contrastive loss
+            
+        Returns:
+            If return_projection=True: (embedding, projection)
+                embedding: (batch, embed_dim) - use for downstream tasks
+                projection: (batch, projection_dim) - use for contrastive loss
+            If return_projection=False: (embedding, None)
+                embedding: (batch, embed_dim) - use for downstream tasks
+        """
+        # Encode: (batch, input_dim) → (batch, embed_dim)
         embedding = self.encoders[modality_name](x)
         
         if return_projection:
-            # For contrastive training
+            # Project for contrastive training: (batch, embed_dim) → (batch, projection_dim)
             projection = self.projection_heads[modality_name](embedding)
             return embedding, projection
         else:
-            # For downstream task
-            return embedding
+            # For downstream task (no projection needed)
+            return embedding, None
 ```
 
 #### Contrastive Loss Function
@@ -1378,6 +1438,184 @@ transformers>=4.30.0  # For reference/components
 2. **Publication Preparation**: Document results for research paper
 3. **Production Deployment**: Package final model for clinical use
 4. **Knowledge Transfer**: Document learnings, train team on new architecture
+
+---
+
+## Frequently Asked Questions (FAQ)
+
+### Q1: In the contrastive pretrained encoder, you mention a 256-dim output. What is the input dimension?
+
+**Answer**: The input dimension is **modality-specific** and depends on the number of features in each data type:
+
+- **Gene Expression (GeneExp)**: Typically 500-20,000+ features depending on preprocessing
+- **miRNA**: Usually 200-1,000 features
+- **Methylation (Meth)**: Can be 1,000-27,000+ CpG sites
+- **Copy Number Variation (CNV)**: Often 100-1,000 genomic regions
+- **Protein (Prot)**: Typically 100-500 proteins measured
+- **Mutation (Mut)**: Usually 50-500 mutation features
+
+**Example**: If GeneExp has 5,000 features after preprocessing, the encoder architecture is:
+```
+Input: (batch_size, 5000) → Linear(5000, 512) → BatchNorm → ReLU → Dropout
+                          → Linear(512, 256) → BatchNorm → ReLU → Dropout
+                          → Linear(256, 256) → BatchNorm
+Output: (batch_size, 256)
+```
+
+### Q2: Can the input dimension be less than or greater than 256?
+
+**Answer**: **Yes, absolutely!** The input dimension is completely independent of the output embedding dimension:
+
+- **Input < 256**: Perfectly fine. For example, if Protein data has only 100 features, the encoder expands it to 256-dim:
+  ```
+  Input(100) → Hidden(512) → Hidden(256) → Output(256)
+  ```
+  
+- **Input > 256**: Also fine. For example, if GeneExp has 10,000 features, the encoder compresses it to 256-dim:
+  ```
+  Input(10000) → Hidden(512) → Hidden(256) → Output(256)
+  ```
+
+**Key Point**: The encoder is a deep neural network that can map **any input dimension** to **any output dimension**. It learns this transformation during training.
+
+### Q3: Can we change the output dimension (embed_dim)?
+
+**Answer**: **Yes!** The output dimension (embed_dim) is fully configurable:
+
+```bash
+# Default 256-dim embeddings
+python examples/pretrain_contrastive.py --embed_dim 256
+
+# Smaller 128-dim embeddings (faster, less memory)
+python examples/pretrain_contrastive.py --embed_dim 128
+
+# Larger 512-dim embeddings (more expressive, slower)
+python examples/pretrain_contrastive.py --embed_dim 512
+```
+
+**Trade-offs**:
+- **Smaller (64-128)**: Faster training, less memory, may lose information
+- **Medium (256-384)**: Good balance (recommended for most cases)
+- **Larger (512-1024)**: More expressive, slower, risk of overfitting
+
+**Constraints**: When using with transformer fusion, `embed_dim` must be divisible by `num_heads`:
+```python
+embed_dim = 256, num_heads = 8  ✓ (256 / 8 = 32)
+embed_dim = 250, num_heads = 8  ✗ (250 / 8 = 31.25)
+```
+
+### Q4: Why is the default output dimension 256?
+
+**Answer**: The choice of **256 dimensions** is based on several factors:
+
+1. **Industry Standard**: 256-512 is common in deep learning for representation learning
+   - BERT (language): 768 dimensions
+   - ResNet (images): 512 dimensions  
+   - SimCLR (contrastive): 128-2048 dimensions
+   - Multi-omics research: typically 128-512 dimensions
+
+2. **Information Capacity**: 256 dimensions can encode rich patterns from multi-omics data
+   - Much larger than the number of cancer types (typically 10-33 classes)
+   - Can capture complex biological relationships
+   - Not so large that it causes overfitting
+
+3. **Computational Efficiency**: 
+   - Transformer attention scales as O(n² × d) where d is embedding dimension
+   - 256 is large enough for expressiveness but small enough for efficient computation
+   - Works well on consumer GPUs (4-8GB VRAM)
+
+4. **Empirical Performance**: Validated in research papers on multi-omics:
+   - Ma et al. (2018) used 256-dim for cancer subtyping
+   - Zhang et al. (2020) used 128-512-dim for multi-omics integration
+   - Our preliminary tests showed 256 performs well
+
+5. **Flexibility**: Easy to adjust up or down based on:
+   - Data complexity (more modalities → larger embeddings)
+   - Computational resources (limited GPU → smaller embeddings)
+   - Downstream task requirements
+
+**Bottom Line**: 256 is a reasonable default, but you should experiment with different values (128, 256, 384, 512) to find what works best for your specific data and task.
+
+### Q5: How do different modalities with different input dimensions work together?
+
+**Answer**: Each modality has its **own encoder** that maps from its specific input dimension to the **shared embedding dimension**:
+
+```python
+# Setup
+modality_dims = {
+    'GeneExp': 5000,   # Input: 5000 features
+    'miRNA': 800,      # Input: 800 features  
+    'Prot': 200,       # Input: 200 features
+    'CNV': 1500        # Input: 1500 features
+}
+
+# Create model with shared embed_dim=256
+model = ContrastiveMultiOmicsEncoder(
+    modality_dims=modality_dims,
+    embed_dim=256  # All outputs are 256-dim
+)
+
+# Each modality encoder:
+# GeneExp: (batch, 5000) → (batch, 256)
+# miRNA:   (batch, 800)  → (batch, 256)
+# Prot:    (batch, 200)  → (batch, 256)
+# CNV:     (batch, 1500) → (batch, 256)
+```
+
+**Key Benefits**:
+1. **Common Space**: All modalities are projected to the same 256-dim space
+2. **Cross-Modal Comparison**: Can compute similarity between different modalities
+3. **Flexible Architecture**: Can add/remove modalities without changing other encoders
+4. **Missing Modality Handling**: Each modality is independent, so missing data is easy to handle
+
+### Q6: What happens after we get the 256-dim embeddings?
+
+**Answer**: The 256-dim embeddings are used as **features for downstream tasks**:
+
+**During Pretraining** (Contrastive Learning):
+```
+Raw Data (variable dims) → Encoder → Embedding (256-dim) → Projection Head (128-dim)
+                                                              ↓
+                                                      Contrastive Loss
+```
+
+**After Pretraining** (Usage):
+```
+# Option A: Feature extraction for quantum classifiers
+Raw Data → Pretrained Encoder → 256-dim features → Quantum Classifier → Predictions
+
+# Option B: Transformer fusion
+Raw Data → Pretrained Encoders → [256-dim × 6 modalities] → Transformer → Predictions
+
+# Option C: Traditional ML
+Raw Data → Pretrained Encoders → 256-dim features → Random Forest/SVM → Predictions
+```
+
+The pretrained encoders become **feature extractors** that convert raw, high-dimensional modality data into compact, meaningful 256-dim representations that are easier to work with.
+
+### Q7: Can I use different embed_dim for different modalities?
+
+**Answer**: **Technically yes, but not recommended** for contrastive learning:
+
+**Not Recommended** (breaks cross-modal contrastive learning):
+```python
+encoders = {
+    'GeneExp': Encoder(5000, embed_dim=256),
+    'Prot': Encoder(200, embed_dim=128)  # Different dimension
+}
+# Can't compute cross-modal similarity between 256-dim and 128-dim embeddings!
+```
+
+**Recommended** (use same embed_dim for all modalities):
+```python
+encoders = {
+    'GeneExp': Encoder(5000, embed_dim=256),
+    'Prot': Encoder(200, embed_dim=256)  # Same dimension
+}
+# Can compute cross-modal contrastive loss ✓
+```
+
+**Why**: Contrastive learning requires computing similarity between modalities in the same embedding space. Different dimensions would prevent this.
 
 ---
 
