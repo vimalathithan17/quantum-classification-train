@@ -798,8 +798,8 @@ def main():
                 # Log best metrics
                 wandb.log({
                     'best_mean_f1_weighted': study.best_value,
-                    'best_n_qubits': best_params.get('n_qubits'),
-                    'best_n_layers': best_params.get('n_layers'),
+                    'best_n_qubits': best_params.get('n_qubits', 0),
+                    'best_n_layers': best_params.get('n_layers', 0),
                     'best_scaler': best_params.get('scaler', 'N/A'),
                     'total_trials': len(study.trials),
                 })
@@ -811,7 +811,7 @@ def main():
                         all_trials_summary[f'all_trials/trial_{trial.number}_mean_f1'] = trial.value
                         all_trials_summary[f'all_trials/trial_{trial.number}_n_qubits'] = trial.params.get('n_qubits', 0)
                         all_trials_summary[f'all_trials/trial_{trial.number}_n_layers'] = trial.params.get('n_layers', 0)
-                        # Note: scaler is a string, so we keep 'N/A' as default for this parameter
+                        # Scaler is approach-specific: present for approach 1, absent for approach 2
                         all_trials_summary[f'all_trials/trial_{trial.number}_scaler'] = trial.params.get('scaler', 'N/A')
                 
                 if all_trials_summary:
