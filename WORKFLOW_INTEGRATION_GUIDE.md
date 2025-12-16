@@ -215,26 +215,35 @@ The performance extensions introduce two state-of-the-art classical deep learnin
 
 **Core Innovation:** Modalities can "attend to" and "learn from" each other, discovering cross-modal interactions.
 
+**Key Architectural Detail:**
+- **Input Dimension**: Variable per modality (GeneExp: 5000, miRNA: 800, Prot: 200, etc.)
+- **Embedding Dimension**: Configurable, default 256-dim (must be divisible by num_heads)
+- **Common Embedding Space**: All modalities projected to same dimension for cross-attention
+
 ```
 TRANSFORMER FUSION ARCHITECTURE
 ════════════════════════════════
 
-Multi-Omics Data (6 modalities)
+Multi-Omics Data (6 modalities with different input dimensions)
+Each modality starts with its own feature dimension
 ↓
 Modality-Specific Encoders
-├── GeneExp → Deep Network → Embedding (256-dim)
-├── miRNA → Deep Network → Embedding (256-dim)  
-├── Meth → Deep Network → Embedding (256-dim)
-├── CNV → Deep Network → Embedding (256-dim)
-├── Prot → Deep Network → Embedding (256-dim)
-└── Mut → Deep Network → Embedding (256-dim)
+Each encoder maps from modality-specific input to shared embedding space:
+├── GeneExp Encoder: (batch, 5000) → Deep Network → (batch, 256)
+├── miRNA Encoder:   (batch, 800)  → Deep Network → (batch, 256)  
+├── Meth Encoder:    (batch, 3000) → Deep Network → (batch, 256)
+├── CNV Encoder:     (batch, 1500) → Deep Network → (batch, 256)
+├── Prot Encoder:    (batch, 200)  → Deep Network → (batch, 256)
+└── Mut Encoder:     (batch, 500)  → Deep Network → (batch, 256)
+
+Why 256-dim? Balance between expressiveness and efficiency (configurable)
 
 ↓ [Add modality position embeddings]
 
-Multimodal Transformer  
-├── Multi-Head Self-Attention (8 heads)
+Multimodal Transformer (operates in 256-dim space)
+├── Multi-Head Self-Attention (8 heads × 32-dim each = 256-dim)
 │   └→ Each modality attends to all others
-├── Feed-Forward Networks
+├── Feed-Forward Networks (256 → 1024 → 256)
 └── Layer Normalization
 ↓ (Repeat for num_layers: typically 4)
 
@@ -245,9 +254,23 @@ Classification Head
 ```
 
 **Missing Modality Handling:**
-- Learnable "missing tokens" for absent modalities
+- Learnable "missing tokens" (256-dim parameters) for absent modalities
 - Attention masking prevents attending to missing modalities  
 - Model learns what each modality typically contributes
+
+**Configurable Parameters:**
+```bash
+# Default configuration
+python examples/train_transformer_fusion.py \
+    --embed_dim 256 \
+    --num_heads 8 \
+    --num_layers 4
+
+# Constraint: embed_dim must be divisible by num_heads
+# ✓ 256/8 = 32-dim per attention head
+# ✓ 384/8 = 48-dim per attention head  
+# ✗ 250/8 = 31.25 (not allowed)
+```
 
 **When It Helps:**
 - Cross-modal patterns important (e.g., mutation + expression)
@@ -261,6 +284,11 @@ Classification Head
 
 **Core Innovation:** Learn from unlimited unlabeled data first, fine-tune with limited labeled data.
 
+**Key Architectural Detail:**
+- **Input Dimension**: Variable per modality (e.g., GeneExp: 5000 features, Prot: 200 features)
+- **Output Embedding**: Configurable, default 256-dim (can be 128, 256, 384, 512, etc.)
+- **Projection for Loss**: 128-dim (only used during pretraining, discarded after)
+
 ```
 CONTRASTIVE PRETRAINING WORKFLOW
 ═════════════════════════════════
@@ -269,17 +297,39 @@ STAGE 1: Self-Supervised Pretraining (no labels!)
 ──────────────────────────────────────────────────
 
 Unlabeled Multi-Omics Data (all available data)
+Each modality has different input dimensions:
+├── GeneExp: (samples, 5000 features)
+├── miRNA:   (samples, 800 features)
+├── Meth:    (samples, 3000 features)
+├── CNV:     (samples, 1500 features)
+├── Prot:    (samples, 200 features)
+└── Mut:     (samples, 500 features)
+
 ↓
 Data Augmentation (create two views)
 ├── View 1: Original + Dropout + Noise
 └── View 2: Original + Different Dropout + Noise  
 
 ↓
-Encoder Networks (one per modality)
+Modality-Specific Encoder Networks
+Each encoder maps from its input dimension to shared embedding space:
+├── GeneExp Encoder: (batch, 5000) → (batch, 256)
+├── miRNA Encoder:   (batch, 800)  → (batch, 256)  
+├── Meth Encoder:    (batch, 3000) → (batch, 256)
+├── CNV Encoder:     (batch, 1500) → (batch, 256)
+├── Prot Encoder:    (batch, 200)  → (batch, 256)
+└── Mut Encoder:     (batch, 500)  → (batch, 256)
+
 ↓  
-Embeddings (256-dim)
+Shared Embeddings (256-dim by default, configurable)
+Why 256? Balance between expressiveness and efficiency
+Can be changed via --embed_dim parameter (128, 256, 512, etc.)
+
 ↓
-Projection Heads (128-dim)
+Projection Heads (128-dim, for contrastive loss only)
+Maps (batch, 256) → (batch, 128) for loss computation
+Discarded after pretraining
+
 ↓
 Contrastive Loss (NT-Xent)
 ├── Pull together: Same sample's views
@@ -288,6 +338,7 @@ Contrastive Loss (NT-Xent)
 ↓ [Optimization learns meaningful representations]
 
 Pretrained Encoders (saved)
+Each encoder: (modality_input_dim) → (256-dim)
 
 STAGE 2: Supervised Fine-Tuning  
 ────────────────────────────────
@@ -307,6 +358,24 @@ Final Classifier
 - Gaussian Noise: Add scaled noise  
 - Random Masking: BERT-style feature masking
 - Mixup: Sample interpolation
+
+**Configurable Parameters:**
+```bash
+# Default configuration (recommended starting point)
+python examples/pretrain_contrastive.py \
+    --embed_dim 256 \
+    --projection_dim 128
+
+# Smaller model (faster, less memory)
+python examples/pretrain_contrastive.py \
+    --embed_dim 128 \
+    --projection_dim 64
+
+# Larger model (more expressive, needs more data)
+python examples/pretrain_contrastive.py \
+    --embed_dim 512 \
+    --projection_dim 256
+```
 
 **When It Helps:**
 - Limited labeled data (< 1000 samples)

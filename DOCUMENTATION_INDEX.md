@@ -84,8 +84,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [WORKFLOW_INTEGRATION_GUIDE.md](WORKF
 - **Which approach for my case?** → WORKFLOW_INTEGRATION_GUIDE.md (Summary > Decision Tree)
 - **Expected accuracy improvement?** → +5-20%, see WORKFLOW_INTEGRATION_GUIDE.md Part 6
 - **Training time?** → 12 hours to 4 days, see WORKFLOW_INTEGRATION_GUIDE.md Part 7
+- **What are input/output dimensions for contrastive encoder?** → PERFORMANCE_EXTENSIONS.md FAQ & examples/README.md FAQ
+- **Can input dimension be different from 256?** → YES! See PERFORMANCE_EXTENSIONS.md FAQ Q1-Q2
+- **Why is embed_dim 256 by default?** → See PERFORMANCE_EXTENSIONS.md FAQ Q4 & examples/README.md
+- **How to change embed_dim?** → See PERFORMANCE_EXTENSIONS.md FAQ Q3 & examples/README.md FAQ
 
 ---
 
 **Last Updated:** December 15, 2024
-**Key Updates:** Added 2-step funnel documentation, feature selection options (LightGBM/XGBoost/Hybrid), detailed integration examples
+**Key Updates:** 
+- Added comprehensive FAQ sections for embedding dimensions (input vs output, why 256, configurability)
+- Enhanced documentation for contrastive encoder architecture
+- Clarified dimension flow in both contrastive pretraining and transformer fusion
+- Added 2-step funnel documentation, feature selection options (LightGBM/XGBoost/Hybrid), detailed integration examples
