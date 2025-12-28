@@ -22,8 +22,25 @@ def load_and_print(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Inspect best_params JSON files')
-    parser.add_argument('paths', nargs='+', help='JSON file(s) or directory(ies) to inspect')
+    parser = argparse.ArgumentParser(
+        description='Inspect and display best hyperparameters from Optuna tuning results',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  # Inspect single file
+  python inspect_params.py tuning_results/best_params_multiclass_qml_tuning_CNV_app1_pca_standard.json
+  
+  # Inspect all files in directory
+  python inspect_params.py tuning_results/
+  
+  # Inspect multiple files/directories
+  python inspect_params.py tuning_results/ model1.json model2.json
+  
+Description:
+  Pretty-prints best hyperparameters from tune_models.py output.
+  Searches for best_params_*.json files when given a directory.
+        """)
+    parser.add_argument('paths', nargs='+', metavar='PATH',
+                       help='JSON file(s) or directory(ies) containing best_params_*.json files')
     args = parser.parse_args()
 
     files = []

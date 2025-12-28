@@ -71,25 +71,66 @@ except FileNotFoundError:
     exit()
 
 # --- Argument Parser ---
-parser = argparse.ArgumentParser(description="Train CFE Standard models.")
-parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
-parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
-parser.add_argument('--n_qbits', type=int, default=None, help="Override number of qubits to use for training/pipeline.")
-parser.add_argument('--n_layers', type=int, default=None, help="Override number of layers for QML ansatz.")
-parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
-parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
-parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
-parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
-parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation and only train final model on full training set.")
-parser.add_argument('--cv_only', action='store_true', help="Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training).")
-parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
-parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
-parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
-parser.add_argument('--checkpoint_fallback_dir', type=str, default=None, help="Fallback directory for checkpoints if primary is read-only")
-parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
-parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
-parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
-parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
+parser = argparse.ArgumentParser(
+    description="Train Approach 2 (CFE) base learners with Standard QML circuits",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""Examples:
+  # Train all modalities with tuned parameters
+  python cfe_standard.py
+  
+  # Train specific modalities
+  python cfe_standard.py --datatypes Meth SNV
+  
+  # Skip tuning, use custom parameters
+  python cfe_standard.py --skip_tuning --n_qbits 10 --n_layers 4
+    """)
+
+data_args = parser.add_argument_group('data selection')
+data_args.add_argument('--datatypes', nargs='+', type=str, default=None,
+                      help='Modalities to train (default: all)')
+
+model_args = parser.add_argument_group('model parameters (override tuned values)')
+model_args.add_argument('--n_qbits', type=int, default=None,
+                       help='Number of qubits (default: from tuning)')
+model_args.add_argument('--n_layers', type=int, default=None,
+                       help='Circuit layers (default: from tuning or 3)')
+model_args.add_argument('--steps', type=int, default=None,
+                       help='Training steps (default: from tuning or 100)')
+model_args.add_argument('--scaler', type=str, default=None,
+                       help="Scaler: 's'=Standard, 'm'=MinMax, 'r'=Robust")
+model_args.add_argument('--skip_tuning', action='store_true',
+                       help='Use CLI args instead of tuned parameters')
+
+mode_args = parser.add_argument_group('training mode (mutually exclusive)')
+mode_args.add_argument('--skip_cross_validation', action='store_true',
+                      help='Train only final model (no CV)')
+mode_args.add_argument('--cv_only', action='store_true',
+                      help='Generate OOF predictions only')
+
+train_args = parser.add_argument_group('training configuration')
+train_args.add_argument('--max_training_time', type=float, default=None,
+                       help='Max training hours (overrides --steps)')
+train_args.add_argument('--validation_frequency', type=int, default=10,
+                       help='Validation frequency (default: 10 steps)')
+
+checkpoint_args = parser.add_argument_group('checkpointing')
+checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
+                            help='Checkpoint frequency (default: 50 steps)')
+checkpoint_args.add_argument('--keep_last_n', type=int, default=3,
+                            help='Checkpoints to keep (default: 3)')
+checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
+                            help='Alternative checkpoint directory')
+
+log_args = parser.add_argument_group('logging')
+log_args.add_argument('--verbose', action='store_true',
+                     help='Detailed training logs')
+log_args.add_argument('--use_wandb', action='store_true',
+                     help='Enable W&B tracking')
+log_args.add_argument('--wandb_project', type=str, default=None,
+                     help='W&B project')
+log_args.add_argument('--wandb_run_name', type=str, default=None,
+                     help='W&B run name')
+
 args = parser.parse_args()
 
 # Validate mutually exclusive arguments
@@ -126,19 +167,17 @@ for data_type in data_types:
     # --- Set parameters from CLI arguments or use defaults ---
     if args.steps is not None:
         config['steps'] = args.steps
+        log.info(f"Using steps from CLI: {args.steps}")
     elif 'steps' not in config:
         config['steps'] = 100  # default
         log.info(f"Using default steps: {config['steps']}")
     
-    if args.override_steps:
-        config['steps'] = args.override_steps
-        log.info(f"Overriding steps with: {args.override_steps}")
-    
     if args.n_qbits is not None:
         config['n_qubits'] = args.n_qbits
     elif 'n_qubits' not in config:
-        config['n_qubits'] = 10  # default for CFE approaches
-        log.info(f"Using default n_qubits: {config['n_qubits']}")
+        # Unify default with number of classes for consistency
+        config['n_qubits'] = n_classes
+        log.info(f"Using default n_qubits (equal to n_classes): {config['n_qubits']}")
     
     if args.n_layers is not None:
         config['n_layers'] = args.n_layers
@@ -149,8 +188,11 @@ for data_type in data_types:
     if args.scaler is not None:
         config['scaler'] = args.scaler
     elif 'scaler' not in config:
-        config['scaler'] = 'MinMax'  # default
+        config['scaler'] = 'MinMax'  # default (ignored for conditional models)
         log.info(f"Using default scaler: {config['scaler']}")
+    # Warn: scaler is ignored for conditional models (Approach 2)
+    if config.get('scaler') is not None:
+        log.warning("Scaler parameter is ignored for conditional models in CFE. Missingness mask provides signal; no scaling is applied.")
     
     log.info(f"Final parameters - n_qubits: {config['n_qubits']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
 
@@ -214,6 +256,11 @@ for data_type in data_types:
             X_train_filled = X_train_fold_selected.fillna(0.0).values
             is_missing_val = X_val_fold_selected.isnull().astype(int).values
             X_val_filled = X_val_fold_selected.fillna(0.0).values
+            # Shape assertions to ensure tuple inputs are aligned
+            if X_train_filled.shape != is_missing_train.shape:
+                raise ValueError(f"Train arrays shape mismatch for {data_type}: filled={X_train_filled.shape}, mask={is_missing_train.shape}")
+            if X_val_filled.shape != is_missing_val.shape:
+                raise ValueError(f"Val arrays shape mismatch for {data_type}: filled={X_val_filled.shape}, mask={is_missing_val.shape}")
             # No scaling applied for conditional models; use filled arrays directly.
             X_train_scaled = X_train_filled
             X_val_scaled = X_val_filled
@@ -231,7 +278,7 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_fold{fold_idx}'
+                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_fold{fold+1}'
             )
             model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
             val_preds = model.predict_proba((X_val_scaled, is_missing_val))
@@ -272,6 +319,8 @@ for data_type in data_types:
     X_train_filled = X_train_selected.fillna(0.0).values
     # No final scaler for conditional models (they learn from missingness).
     final_scaler = None
+    if config.get('scaler') is not None:
+        log.warning("Scaler parameter present but will be ignored for final conditional model training.")
     X_train_scaled = X_train_filled
     
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
@@ -286,7 +335,7 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_fold{fold_idx}'
+                wandb_run_name=args.wandb_run_name or f'cfe_standard_{data_type}_final'
             )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
@@ -298,6 +347,9 @@ for data_type in data_types:
     log.info("  - Generating predictions on the hold-out test set...")
     X_test_selected = X_test[final_selected_cols]
     is_missing_test = X_test_selected.isnull().astype(int).values
+    X_test_filled = X_test_selected.fillna(0.0).values
+    if X_test_filled.shape != is_missing_test.shape:
+        raise ValueError(f"Test arrays shape mismatch for {data_type}: filled={X_test_filled.shape}, mask={is_missing_test.shape}")
     X_test_filled = X_test_selected.fillna(0.0).values
     # No scaler to apply; use filled arrays directly.
     X_test_scaled = X_test_filled

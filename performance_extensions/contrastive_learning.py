@@ -65,6 +65,16 @@ import torch.nn.functional as F
 from typing import Dict, Optional, Tuple
 
 
+__all__ = [
+    'ModalityEncoder',
+    'ProjectionHead',
+    'ContrastiveMultiOmicsEncoder',
+    'nt_xent_loss',
+    'cross_modal_contrastive_loss',
+    'ContrastiveLearningLoss'
+]
+
+
 class ModalityEncoder(nn.Module):
     """
     Deep neural encoder for a single modality.

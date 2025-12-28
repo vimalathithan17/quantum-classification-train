@@ -1,27 +1,13 @@
-# Comprehensive Workflow and Integration Guide
+# ⚠️ DEPRECATED - This file has been consolidated
 
-## Table of Contents
-- [Overview](#overview)
-- [Part 1: Existing QML Workflow](#part-1-existing-qml-workflow)
-- [Part 2: Performance Extensions](#part-2-performance-extensions)
-- [Part 3: Standalone vs Integrated Usage](#part-3-standalone-vs-integrated-usage)
-- [Part 4: Integration Strategies](#part-4-integration-strategies)
-- [Part 5: Implementation Details](#part-5-implementation-details)
-- [Part 6: Metrics and Evaluation](#part-6-metrics-and-evaluation)
-- [Part 7: Complete Usage Examples](#part-7-complete-usage-examples)
+**This document has been merged into [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) and [ARCHITECTURE.md](ARCHITECTURE.md).**
 
----
+Please use the new consolidated documentation:
+- **[INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)** - Integration patterns, troubleshooting
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical workflow details
+- **[README.md](README.md)** - Main entry point
 
-## Overview
-
-This guide provides a comprehensive explanation of how the existing QML workflow works compared to the performance extensions, how they can work standalone or be integrated together, and complete implementation and metrics details.
-
-**Key Questions Answered:**
-1. How does the existing QML workflow work?
-2. How do the performance extensions work?
-3. Are the extensions standalone or do they require QML?
-4. How can you integrate each option together and with QML?
-5. What are the implementation details and metrics used?
+**This file can be safely deleted.**
 
 ---
 

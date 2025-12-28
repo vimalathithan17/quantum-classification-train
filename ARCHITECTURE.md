@@ -1,6 +1,8 @@
 # Project Architecture: A Deep Dive
 
-This document provides a detailed breakdown of the architectural decisions, quantum models, and classical machine learning strategies used in this project.
+Technical breakdown of architectural decisions, quantum models, and ML strategies.
+
+> **See also:** [README.md](README.md) for setup, [DATA_PROCESSING.md](DATA_PROCESSING.md) for data pipeline, [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) for extensions.
 
 ## Table of Contents
 - [End-to-End Pipeline Workflow](#-end-to-end-pipeline-workflow)
@@ -16,6 +18,14 @@ This document provides a detailed breakdown of the architectural decisions, quan
 ## 📜 End-to-End Pipeline Workflow
 
 The project is structured as a multi-stage pipeline. Each script performs a distinct role, creating artifacts that are used by subsequent stages.
+
+### Data Pipeline Summary
+
+Upstream preprocessing is handled by two notebooks (see [DATA_PROCESSING.md](DATA_PROCESSING.md)):
+- `data-process.ipynb`: 10 stages → `final_filtered_datasets/`
+- `feature-extraction-xgb.ipynb`: MI → XGBoost → `final_processed_datasets_xgb_balanced/`
+
+Code default: `final_processed_datasets/` (set `SOURCE_DIR=final_processed_datasets_xgb_balanced` for XGBoost-selected features)
 
 **Stage 1: Global Setup (`create_master_label_encoder.py`)**
 - **Purpose:** To ensure consistent class labels across the entire project.
@@ -64,6 +74,8 @@ The project is structured as a multi-stage pipeline. Each script performs a dist
 ### The 2-Step Funnel: Imputation and Feature Selection
 
 Both approaches use a **2-step preprocessing funnel** to prepare data for quantum circuits:
+
+Note: This funnel applies to **model-level (training-time)** preprocessing. If you ran the data preprocessing notebooks, set `SOURCE_DIR=final_processed_datasets_xgb_balanced` to use the MI→XGBoost-selected features; see [DATA_PROCESSING.md](DATA_PROCESSING.md).
 
 #### **Approach 1 (DRE): Imputation → Dimensionality Reduction**
 ```

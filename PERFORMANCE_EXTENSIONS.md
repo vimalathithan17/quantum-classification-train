@@ -1,5 +1,11 @@
 # Performance Extensions for Quantum Multimodal Classification
 
+> **💡 Looking for practical integration guidance?** See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) for:
+> - Step-by-step integration with QML pipeline
+> - Handling class imbalance and small datasets
+> - Decision tree for choosing approaches
+> - Complete working examples with code
+
 ## Table of Contents
 - [Executive Summary](#executive-summary)
 - [Current Project Overview](#current-project-overview)
@@ -32,6 +38,18 @@ These approaches can be implemented individually or combined for maximum perform
 
 Our current quantum classification pipeline processes multi-omics cancer data to predict tumor types. The system handles multiple data modalities (gene expression, miRNA, methylation, copy number variation, protein, mutation) with potentially missing modality data for some patients.
 
+### Data Sources & Indicators
+
+See [DATA_PROCESSING.md](DATA_PROCESSING.md) for complete pipeline details.
+
+- Code default: `final_processed_datasets/` (set `SOURCE_DIR=final_processed_datasets_xgb_balanced` for XGBoost-selected features)
+- Each modality file `data_{type}_.parquet` contains `case_id`, `class`, and feature columns
+- Missing modality indicators live in `indicator_features.parquet` with columns `is_missing_{type}_`
+- These indicators should be used for:
+    - Conditional Feature Encoding (CFE) in QML pipelines
+    - Attention masking in Transformer Fusion
+    - Sample filtering strategies in contrastive learning
+
 ### Current Architecture
 
 ```
@@ -39,7 +57,7 @@ Raw Multimodal Data
     ↓
 [Modality-Specific Processing]
     ↓ (for each modality independently)
-Feature Selection/Dimensionality Reduction
+Feature Selection (Mutual Information → XGBoost)
     ↓
 Quantum Classifiers (Base Learners)
     ↓

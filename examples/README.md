@@ -1,15 +1,36 @@
 # Performance Extensions Examples
 
-This directory contains example scripts demonstrating the performance enhancement strategies described in `PERFORMANCE_EXTENSIONS.md`.
+This directory contains example scripts demonstrating the performance enhancement strategies described in [PERFORMANCE_EXTENSIONS.md](../PERFORMANCE_EXTENSIONS.md).
+
+> **📚 Complete Integration Guide:** See [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) for:
+> - When to use each approach (decision tree based on dataset size)
+> - Handling class imbalance and small datasets
+> - Step-by-step integration with QML pipeline
+> - Complete workflows with expected results
+> - Troubleshooting common issues
 
 ## Overview
 
 The performance extensions implement two complementary approaches to improve quantum multimodal cancer classification:
 
 1. **Option 2: Self-Supervised Contrastive Pretraining** (`pretrain_contrastive.py`)
+   - **Best for:** 100-500 samples, class imbalance, unlabeled data available
+   - **Benefit:** Learn from unlimited unlabeled data, helps minority classes
+   
 2. **Option 1: Multimodal Transformer Fusion** (`train_transformer_fusion.py`)
+   - **Best for:** 500+ samples, missing modalities common (>20%)
+   - **Benefit:** Cross-modal attention, native missing modality handling
 
-These can be used independently or combined for maximum performance improvement.
+These can be used independently, with QML, or combined for maximum performance improvement.
+
+## Quick Decision Guide
+
+| Your Situation | Recommended Approach | See Section |
+|----------------|---------------------|-------------|
+| < 100 samples | QML Only (no extensions) | [Main README](../README.md) |
+| 100-500 samples, imbalanced | Contrastive → QML | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
+| 500+ samples, missing modalities | Transformer Fusion | Examples below |
+| 1000+ samples, GPU available | Full Hybrid (Contrastive → Transformer → QML) | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
 
 ### Understanding Embedding Dimensions
 

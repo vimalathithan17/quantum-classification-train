@@ -15,8 +15,17 @@ from typing import Dict, Optional, Tuple, List
 from pathlib import Path
 import json
 
-from .contrastive_learning import ContrastiveMultiOmicsEncoder, ContrastiveLearningLoss
+from .contrastive_learning import ContrastiveMultiOmicsEncoder, ContrastiveLearningLoss, ModalityEncoder
 from .augmentations import get_augmentation_pipeline
+
+
+__all__ = [
+    'MultiOmicsDataset',
+    'pretrain_contrastive',
+    'finetune_supervised',
+    'save_pretrained_encoders',
+    'load_pretrained_encoders'
+]
 
 
 class MultiOmicsDataset(Dataset):
@@ -374,33 +383,67 @@ def load_pretrained_encoders(
         
     Returns:
         Tuple of (encoders, metadata)
+        
+    Raises:
+        FileNotFoundError: If required files don't exist
+        ValueError: If metadata is malformed
     """
     load_dir = Path(load_dir)
     
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load metadata
+    # Load and validate metadata
     metadata_path = load_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+    
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
     
-    # Reconstruct encoders
-    from .contrastive_learning import ModalityEncoder
+    # Validate metadata structure
+    required_keys = {'modality_names', 'modality_dims', 'embed_dim'}
+    missing_keys = required_keys - set(metadata.keys())
+    if missing_keys:
+        raise ValueError(f"Metadata missing required keys: {missing_keys}")
     
+    if not isinstance(metadata['modality_dims'], dict):
+        raise ValueError(f"modality_dims must be dict, got {type(metadata['modality_dims'])}")
+    
+    if not isinstance(metadata['embed_dim'], int):
+        raise ValueError(f"embed_dim must be int, got {type(metadata['embed_dim'])}")
+    
+    # Reconstruct encoders with type checking
     encoders = nn.ModuleDict()
     for modality in metadata['modality_names']:
         encoder_path = load_dir / f"encoder_{modality}.pt"
         
-        # Create encoder
+        if not encoder_path.exists():
+            raise FileNotFoundError(f"Encoder file not found for modality '{modality}': {encoder_path}")
+        
+        # Create encoder with validated dimensions
+        if modality not in metadata['modality_dims']:
+            raise ValueError(f"Modality '{modality}' not in modality_dims metadata")
+        
         input_dim = metadata['modality_dims'][modality]
         embed_dim = metadata['embed_dim']
+        
+        if not isinstance(input_dim, int) or input_dim <= 0:
+            raise ValueError(f"Invalid input_dim for {modality}: {input_dim}")
+        if not isinstance(embed_dim, int) or embed_dim <= 0:
+            raise ValueError(f"Invalid embed_dim: {embed_dim}")
+        
         encoder = ModalityEncoder(input_dim, embed_dim)
         
         # Load weights
-        encoder.load_state_dict(torch.load(encoder_path, map_location=device))
+        try:
+            state_dict = torch.load(encoder_path, map_location=device)
+            encoder.load_state_dict(state_dict)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load encoder weights for {modality}: {e}")
+        
         encoders[modality] = encoder
     
-    print(f"Loaded pretrained encoders from {load_dir}")
+    print(f"Loaded {len(encoders)} pretrained encoders from {load_dir}")
     
     return encoders, metadata

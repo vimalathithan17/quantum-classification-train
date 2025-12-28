@@ -376,13 +376,13 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     if args.approach == 1:
         steps_list = []
         # Common steps for Approach 1
-        steps_list.append(('imputer', MaskedTransformer(SimpleImputer(strategy='median'))))
-        steps_list.append(('scaler', scaler))
+        steps_list.append(('imputer', MaskedTransformer(SimpleImputer(strategy='median'), fallback='raise')))
+        steps_list.append(('scaler', MaskedTransformer(scaler, fallback='raise')))
 
         if args.dim_reducer == 'pca':
-            steps_list.append(('dim_reducer', MaskedTransformer(PCA(n_components=n_qubits))))
+            steps_list.append(('dim_reducer', MaskedTransformer(PCA(n_components=n_qubits), fallback='raise')))
         else:
-            steps_list.append(('dim_reducer', MaskedTransformer(UMAP(n_components=n_qubits, random_state=RANDOM_STATE))))
+            steps_list.append(('dim_reducer', MaskedTransformer(UMAP(n_components=n_qubits, random_state=RANDOM_STATE), fallback='raise')))
 
         # Generate wandb run name for Approach 1 (DRE) per user's requested pattern
         # Desired format: tune_DRE_<datatype>_<qml_model>_q{qbits}_l{layers}_{scaler}
@@ -632,25 +632,71 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     return mean_f1
 
 def main():
-    parser = argparse.ArgumentParser(description="Universal QML tuning framework for multiclass problems.")
-    parser.add_argument('--datatype', type=str, required=True, help="Data type (e.g., CNV, Meth)")
-    parser.add_argument('--approach', type=int, required=True, choices=[1, 2], help="1: Classical+QML, 2: Conditional QML")
-    parser.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'], help="For Approach 1: PCA or UMAP")
-    parser.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'], help="QML circuit type")
-    parser.add_argument('--n_trials', type=int, default=9, help="Number of NEW Optuna trials to run (if study exists, these are added to existing trials)")
-    parser.add_argument('--total_trials', type=int, default=None, help="Target TOTAL number of trials. If study exists, computes remaining trials needed to reach this total.")
-    parser.add_argument('--study_name', type=str, default=None, help="Override the auto-generated study name")
-    parser.add_argument('--min_qbits', type=int, default=None, help="Minimum number of qubits for tuning.")
-    parser.add_argument('--max_qbits', type=int, default=12, help="Maximum number of qubits for tuning.")
-    parser.add_argument('--min_layers', type=int, default=2, help="Minimum number of layers for tuning.")
-    parser.add_argument('--max_layers', type=int, default=5, help="Maximum number of layers for tuning.")
-    parser.add_argument('--steps', type=int, default=100, help="Number of training steps for tuning.")
-    parser.add_argument('--scalers', type=str, default='smr', help="String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.")
-    parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
-    parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
-    parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging during tuning")
-    parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
-    parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name (optional, auto-generated if not provided)")
+    parser = argparse.ArgumentParser(
+        description="Hyperparameter tuning for QML models using Optuna",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  # Tune Approach 1 (DRE) with standard QML
+  python tune_models.py --datatype GeneExp --approach 1 --qml_model standard --n_trials 50
+  
+  # Tune Approach 2 (CFE) with data-reuploading
+  python tune_models.py --datatype CNV --approach 2 --qml_model reuploading --n_trials 100
+  
+  # Continue existing study with custom name
+  python tune_models.py --datatype Meth --approach 1 --study_name my_study --n_trials 20
+        """)
+    
+    # Required arguments
+    required = parser.add_argument_group('required arguments')
+    required.add_argument('--datatype', type=str, required=True,
+                         help='Data modality to tune (e.g., GeneExp, CNV, Meth, miRNA, Prot, Mut)')
+    required.add_argument('--approach', type=int, required=True, choices=[1, 2],
+                         help='Preprocessing approach: 1=DRE (Dimensionality Reduction), 2=CFE (Feature Selection)')
+    
+    # Model configuration
+    model_args = parser.add_argument_group('model configuration')
+    model_args.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'],
+                           help='QML circuit type (default: standard)')
+    model_args.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'],
+                           help='Dimensionality reducer for Approach 1 (default: pca)')
+    
+    # Tuning configuration
+    tuning_args = parser.add_argument_group('tuning parameters')
+    tuning_args.add_argument('--n_trials', type=int, default=9,
+                            help='Number of new Optuna trials to run (default: 9)')
+    tuning_args.add_argument('--total_trials', type=int, default=None,
+                            help='Target total trials for existing study (computes remaining needed)')
+    tuning_args.add_argument('--study_name', type=str, default=None,
+                            help='Custom study name (auto-generated if not provided)')
+    tuning_args.add_argument('--steps', type=int, default=100,
+                            help='Training steps per trial (default: 100)')
+    
+    # Search space configuration
+    search_args = parser.add_argument_group('hyperparameter search space')
+    search_args.add_argument('--min_qbits', type=int, default=None,
+                            help='Minimum qubits to search (default: num_classes)')
+    search_args.add_argument('--max_qbits', type=int, default=12,
+                            help='Maximum qubits to search (default: 12)')
+    search_args.add_argument('--min_layers', type=int, default=2,
+                            help='Minimum circuit layers (default: 2)')
+    search_args.add_argument('--max_layers', type=int, default=5,
+                            help='Maximum circuit layers (default: 5)')
+    search_args.add_argument('--scalers', type=str, default='smr',
+                            help='Scalers to try: s=Standard, m=MinMax, r=Robust (default: smr)')
+    
+    # Logging and monitoring
+    log_args = parser.add_argument_group('logging and monitoring')
+    log_args.add_argument('--verbose', action='store_true',
+                         help='Enable detailed training logs')
+    log_args.add_argument('--validation_frequency', type=int, default=10,
+                         help='Validation metric frequency in steps (default: 10)')
+    log_args.add_argument('--use_wandb', action='store_true',
+                         help='Enable Weights & Biases experiment tracking')
+    log_args.add_argument('--wandb_project', type=str, default=None,
+                         help='W&B project name')
+    log_args.add_argument('--wandb_run_name', type=str, default=None,
+                         help='W&B run name (auto-generated if omitted)')
+    
     args = parser.parse_args()
     
     # Setup interruption handlers
@@ -713,7 +759,8 @@ def main():
         study_name=study_name,
         storage=storage,
         load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE)
+        sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE),
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=1)
     )
     
     # Add fixed 'steps' to the study's user attributes

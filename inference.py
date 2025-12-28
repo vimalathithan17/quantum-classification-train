@@ -6,6 +6,7 @@ import joblib
 import json
 import numpy as np
 import argparse
+import os
 
 # Import the centralized logger
 from logging_utils import log
@@ -54,7 +55,12 @@ def make_single_prediction(model_dir, new_patient_data_dir):
         # --- Check for missing data first ---
         if patient_df is None:
             is_missing_flags[f'is_missing_{data_type}'] = 1
-            neutral_proba = np.full((1, n_classes), 1 / n_classes)
+            # Strategy: zeros by default for gated/meta models; override via env
+            strategy = os.environ.get('INFERENCE_NEUTRAL_PROBAS', 'zeros').strip().lower()
+            if strategy == 'uniform':
+                neutral_proba = np.full((1, n_classes), 1 / n_classes)
+            else:
+                neutral_proba = np.zeros((1, n_classes))
             pred_df = pd.DataFrame(neutral_proba, columns=[f"pred_{data_type}_{cls}" for cls in le.classes_])
         else:
             is_missing_flags[f'is_missing_{data_type}'] = 0
@@ -120,13 +126,11 @@ def make_single_prediction(model_dir, new_patient_data_dir):
     # --- Make the Final Prediction ---
     log.info("--- Making final prediction with meta-learner... ---")
     # Ensure columns are in the exact order the meta-learner was trained on
-    try:
-        meta_features_df = meta_features_df[meta_columns_order]
-    except KeyError as e:
-        log.critical(f"A required column is missing for the meta-learner. Details: {e}")
-        log.critical(f"Required columns: {meta_columns_order}")
-        log.critical(f"Available columns: {meta_features_df.columns.tolist()}")
-        return None
+    # Reindex to required columns; fill missing features with 0.0 to avoid failure
+    missing_cols = [c for c in meta_columns_order if c not in meta_features_df.columns]
+    if missing_cols:
+        log.warning(f"Meta features missing expected columns; filling with zeros: {missing_cols}")
+    meta_features_df = meta_features_df.reindex(columns=meta_columns_order, fill_value=0.0)
     
     final_prediction_encoded = meta_learner.predict(meta_features_df.values)
     final_prediction_label = le.inverse_transform(final_prediction_encoded)
@@ -134,9 +138,32 @@ def make_single_prediction(model_dir, new_patient_data_dir):
     return final_prediction_label[0]
 
 def main():
-    parser = argparse.ArgumentParser(description="Run inference on a new patient's data.")
-    parser.add_argument('--model_dir', type=str, required=True, help="Directory containing all trained models and components.")
-    parser.add_argument('--patient_data_dir', type=str, required=True, help="Directory containing the new patient's parquet files.")
+    parser = argparse.ArgumentParser(
+        description="Run inference on a new patient's multimodal data using trained QML ensemble",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Example:
+  python inference.py --model_dir trained_models/ --patient_data_dir patient_001/
+  
+Description:
+  Loads trained QML base learners and meta-learner to predict patient class.
+  Expects model_dir to contain:
+    - Base learner models (*.pkl)
+    - Meta-learner (metalearner.pkl)
+    - Label encoder (master_label_encoder.pkl)
+  
+  Expects patient_data_dir to contain parquet files for all modalities:
+    - CNV_app1_pca.parquet, CNV_app2_pca.parquet
+    - clinical.parquet
+    - transcriptomics_pca.parquet
+        """)
+    
+    # Required arguments
+    required_args = parser.add_argument_group('required arguments')
+    required_args.add_argument('--model_dir', type=str, required=True,
+                              help='Directory with trained models and label encoder')
+    required_args.add_argument('--patient_data_dir', type=str, required=True,
+                              help="Directory with patient's multimodal parquet files")
+    
     args = parser.parse_args()
 
     log.info(f"Starting inference for patient data in '{args.patient_data_dir}' using models from '{args.model_dir}'.")

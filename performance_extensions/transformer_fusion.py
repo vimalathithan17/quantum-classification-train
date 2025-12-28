@@ -11,6 +11,13 @@ import torch.nn.functional as F
 from typing import List, Optional, Tuple
 
 
+__all__ = [
+    'MultimodalTransformer',
+    'ModalityFeatureEncoder',
+    'MultimodalFusionClassifier'
+]
+
+
 class MultimodalTransformer(nn.Module):
     """
     Transformer-based fusion for multimodal data.
@@ -106,15 +113,46 @@ class MultimodalTransformer(nn.Module):
         Args:
             modality_features: List of (batch, embed_dim) tensors, one per modality
             modality_masks: (batch, num_modalities) binary mask (True = missing)
+                           dtype must be torch.bool
             return_attention: Whether to return attention weights
             
         Returns:
             Tuple of (logits, attention_weights)
             - logits: (batch, num_classes)
             - attention_weights: Optional tensor of attention weights
+            
+        Raises:
+            ValueError: If shapes are inconsistent or invalid
         """
+        # Validate inputs
+        if not modality_features or len(modality_features) == 0:
+            raise ValueError("modality_features cannot be empty")
+        
         batch_size = modality_features[0].shape[0]
+        if batch_size == 0:
+            raise ValueError("Batch size cannot be 0")
+        
+        # Verify all features have same batch size and embed_dim
+        for i, feat in enumerate(modality_features):
+            if len(feat.shape) != 2:
+                raise ValueError(f"Feature {i} has invalid shape {feat.shape}, expected (batch, embed_dim)")
+            if feat.shape[0] != batch_size:
+                raise ValueError(f"Feature {i} batch size {feat.shape[0]} != {batch_size}")
+            if feat.shape[1] != self.embed_dim:
+                raise ValueError(f"Feature {i} embed_dim {feat.shape[1]} != {self.embed_dim}")
+        
         num_modalities = len(modality_features)
+        
+        # Validate masks if provided
+        if modality_masks is not None:
+            if modality_masks.dtype != torch.bool:
+                modality_masks = modality_masks.to(torch.bool)
+            if len(modality_masks.shape) != 2:
+                raise ValueError(f"modality_masks has invalid shape {modality_masks.shape}, expected (batch, num_modalities)")
+            if modality_masks.shape[0] != batch_size:
+                raise ValueError(f"modality_masks batch size {modality_masks.shape[0]} != {batch_size}")
+            if modality_masks.shape[1] != num_modalities:
+                raise ValueError(f"modality_masks modality count {modality_masks.shape[1]} != {num_modalities}")
         
         # Stack modalities: (batch, num_modalities, embed_dim)
         modality_sequence = torch.stack(modality_features, dim=1)
@@ -208,12 +246,22 @@ class ModalityFeatureEncoder(nn.Module):
             
         Returns:
             Embeddings of shape (batch, embed_dim)
+            
+        Raises:
+            ValueError: If input shape is invalid
         """
         if is_missing or x is None:
             # Return learnable missing token
             batch_size = 1 if x is None else x.shape[0]
+            if batch_size == 0:
+                raise ValueError("Batch size cannot be 0")
             return self.missing_token.expand(batch_size, -1)
         else:
+            # Validate input shape
+            if len(x.shape) != 2:
+                raise ValueError(f"Expected 2D tensor (batch, features), got shape {x.shape}")
+            if x.shape[1] != self.input_dim:
+                raise ValueError(f"Expected {self.input_dim} features, got {x.shape[1]}")
             # Encode features
             return self.encoder(x)
 
@@ -298,10 +346,30 @@ class MultimodalFusionClassifier(nn.Module):
             
         Returns:
             Tuple of (logits, attention_weights)
+            
+        Raises:
+            ValueError: If input shapes are invalid or no modalities present
         """
         batch_size = None
         encoded_features = []
         missing_mask = []
+        
+        # Infer batch size from available data
+        for modality in self.modality_names:
+            if modality in modality_data and modality_data[modality] is not None:
+                data = modality_data[modality]
+                if not isinstance(data, torch.Tensor):
+                    raise ValueError(f"modality_data[{modality}] must be torch.Tensor, got {type(data)}")
+                if len(data.shape) != 2:
+                    raise ValueError(f"modality_data[{modality}] must be 2D, got shape {data.shape}")
+                batch_size = data.shape[0]
+                break
+        
+        if batch_size is None:
+            raise ValueError("At least one modality data must be provided")
+        
+        if batch_size == 0:
+            raise ValueError("Batch size cannot be 0")
         
         # Encode each modality
         for modality in self.modality_names:
@@ -314,12 +382,6 @@ class MultimodalFusionClassifier(nn.Module):
             
             if is_missing:
                 # Use missing token
-                if batch_size is None:
-                    # Need to infer batch size from other modalities
-                    batch_size = 1
-                
-                # Check if encoder supports is_missing parameter (ModalityFeatureEncoder)
-                # or is from contrastive learning (ModalityEncoder)
                 encoder = self.encoders[modality]
                 if isinstance(encoder, ModalityFeatureEncoder):
                     encoded = encoder(None, is_missing=True)
@@ -336,8 +398,8 @@ class MultimodalFusionClassifier(nn.Module):
             else:
                 # Encode features
                 data = modality_data[modality]
-                if batch_size is None:
-                    batch_size = data.shape[0]
+                if data.shape[0] != batch_size:
+                    raise ValueError(f"Inconsistent batch size for {modality}: {data.shape[0]} != {batch_size}")
                 
                 # Check encoder type and call appropriately
                 encoder = self.encoders[modality]
@@ -347,6 +409,10 @@ class MultimodalFusionClassifier(nn.Module):
                     # Standard encoder (e.g., from contrastive learning)
                     encoded = encoder(data)
                 missing_mask.append(False)
+            
+            # Verify encoded output shape
+            if encoded.shape != (batch_size, self.embed_dim):
+                raise ValueError(f"Encoded {modality} shape {encoded.shape} != expected ({batch_size}, {self.embed_dim})")
             
             encoded_features.append(encoded)
         

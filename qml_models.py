@@ -24,6 +24,19 @@ from utils.metrics_utils import (
     compute_metrics, save_metrics_to_csv, plot_training_curves
 )
 
+# Global random state for internal splits
+RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+# Explicit exports to stabilize external imports
+__all__ = [
+    'MulticlassQuantumClassifierDR',
+    'MulticlassQuantumClassifierDataReuploadingDR',
+    'GatedMulticlassQuantumClassifierDR',
+    'GatedMulticlassQuantumClassifierDataReuploadingDR',
+    'ConditionalMulticlassQuantumClassifierFS',
+    'ConditionalMulticlassQuantumClassifierDataReuploadingFS',
+]
+
 
 # Small activation helpers at module level (picklable)
 def relu(x):
@@ -216,8 +229,8 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         try:
             self._qcircuit = self._get_circuit()
         except Exception:
-            # If device or pennylane isn't available during unpickle, set to None
-            self._qcircuit = None
+            # If device or pennylane isn't available during unpickle, raise loudly
+            raise RuntimeError(f"Failed to rebuild QNode for {self.__class__.__name__}. Ensure PennyLane device is available during unpickle.")
         # Recreate activation callable from readout_activation
         try:
             if getattr(self, 'readout_activation', 'tanh') == 'tanh':
@@ -330,7 +343,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train, X_val, y_train, y_val = train_test_split(
-                X, y, test_size=self.validation_frac, stratify=y, random_state=42
+                X, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train, X_val, y_train, y_val = X, None, y, None
@@ -383,6 +396,12 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
                     checkpoint = load_checkpoint(checkpoint_path)
+                    # Validate checkpoint compatibility
+                    meta = checkpoint.get('meta', {})
+                    if 'n_layers' in meta and meta['n_layers'] != self.n_layers:
+                        raise ValueError(f"Checkpoint n_layers ({meta['n_layers']}) != model n_layers ({self.n_layers})")
+                    if 'hidden_size' in meta and meta['hidden_size'] != self.hidden_size:
+                        raise ValueError(f"Checkpoint hidden_size ({meta['hidden_size']}) != model hidden_size ({self.hidden_size})")
                     self.weights = checkpoint['weights_quantum']
                     
                     # Load classical weights if available
@@ -747,7 +766,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 self.dev = qml.device('default.qubit', wires=self.n_qubits)
                 self._qcircuit = self._get_circuit()
         except Exception:
-            self._qcircuit = None
+            raise RuntimeError(f"Failed to rebuild QNode for {self.__class__.__name__}. Ensure PennyLane device is available during unpickle.")
         try:
             if getattr(self, 'readout_activation', 'tanh') == 'tanh':
                 self._activation_fn = np.tanh
@@ -871,7 +890,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train_base, X_val_base, mask_train, mask_val, y_train, y_val = train_test_split(
-                base_preds, mask, y, test_size=self.validation_frac, stratify=y, random_state=42
+                base_preds, mask, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train_base, mask_train, y_train = base_preds, mask, y
@@ -925,6 +944,12 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
                     checkpoint = load_checkpoint(checkpoint_path)
+                    # Validate checkpoint compatibility
+                    meta = checkpoint.get('meta', {})
+                    if 'n_layers' in meta and meta['n_layers'] != self.n_layers:
+                        raise ValueError(f"Checkpoint n_layers ({meta['n_layers']}) != model n_layers ({self.n_layers})")
+                    if 'hidden_size' in meta and meta['hidden_size'] != self.hidden_size:
+                        raise ValueError(f"Checkpoint hidden_size ({meta['hidden_size']}) != model hidden_size ({self.hidden_size})")
                     self.weights = checkpoint['weights_quantum']
                     if 'weights_classical' in checkpoint:
                         self.W1 = checkpoint['weights_classical']['W1']
@@ -1246,7 +1271,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
                 self.dev = qml.device('default.qubit', wires=self.n_qubits)
                 self._qcircuit = self._get_circuit()
         except Exception:
-            self._qcircuit = None
+            raise RuntimeError(f"Failed to rebuild QNode for {self.__class__.__name__}. Ensure PennyLane device is available during unpickle.")
         try:
             if getattr(self, 'readout_activation', 'tanh') == 'tanh':
                 self._activation_fn = np.tanh
@@ -1360,7 +1385,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train_base, X_val_base, mask_train, mask_val, y_train, y_val = train_test_split(
-                base_preds, mask, y, test_size=self.validation_frac, stratify=y, random_state=42
+                base_preds, mask, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train_base, mask_train, y_train = base_preds, mask, y
@@ -1414,6 +1439,12 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
             if checkpoint_path and os.path.exists(checkpoint_path):
                 try:
                     checkpoint = load_checkpoint(checkpoint_path)
+                    # Validate checkpoint compatibility
+                    meta = checkpoint.get('meta', {})
+                    if 'n_layers' in meta and meta['n_layers'] != self.n_layers:
+                        raise ValueError(f"Checkpoint n_layers ({meta['n_layers']}) != model n_layers ({self.n_layers})")
+                    if 'hidden_size' in meta and meta['hidden_size'] != self.hidden_size:
+                        raise ValueError(f"Checkpoint hidden_size ({meta['hidden_size']}) != model hidden_size ({self.hidden_size})")
                     self.weights = checkpoint['weights_quantum']
                     if 'weights_classical' in checkpoint:
                         self.W1 = checkpoint['weights_classical']['W1']
@@ -1873,7 +1904,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train, X_val, y_train, y_val = train_test_split(
-                X, y, test_size=self.validation_frac, stratify=y, random_state=42
+                X, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train, X_val, y_train, y_val = X, None, y, None

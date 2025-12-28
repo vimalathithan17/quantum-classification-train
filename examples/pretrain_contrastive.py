@@ -71,73 +71,56 @@ def load_multiomics_data(data_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Self-supervised contrastive pretraining for multi-omics data"
-    )
-    parser.add_argument(
-        '--data_dir',
-        type=str,
-        default='final_processed_datasets',
-        help='Directory containing parquet data files'
-    )
-    parser.add_argument(
-        '--output_dir',
-        type=str,
-        default='pretrained_models/contrastive',
-        help='Directory to save pretrained encoders'
-    )
-    parser.add_argument(
-        '--embed_dim',
-        type=int,
-        default=256,
-        help='Embedding dimension'
-    )
-    parser.add_argument(
-        '--projection_dim',
-        type=int,
-        default=128,
-        help='Projection dimension for contrastive loss'
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=32,
-        help='Batch size for training'
-    )
-    parser.add_argument(
-        '--num_epochs',
-        type=int,
-        default=100,
-        help='Number of pretraining epochs'
-    )
-    parser.add_argument(
-        '--lr',
-        type=float,
-        default=1e-3,
-        help='Learning rate'
-    )
-    parser.add_argument(
-        '--temperature',
-        type=float,
-        default=0.5,
-        help='Temperature for NT-Xent loss'
-    )
-    parser.add_argument(
-        '--use_cross_modal',
-        action='store_true',
-        help='Use cross-modal contrastive loss'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to use for training'
-    )
-    parser.add_argument(
-        '--checkpoint_interval',
-        type=int,
-        default=10,
-        help='Save checkpoint every N epochs'
-    )
+        description="Self-supervised contrastive pretraining for multi-omics data",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  # Basic pretraining with defaults
+  python pretrain_contrastive.py --data_dir final_processed_datasets
+  
+  # With cross-modal contrastive learning
+  python pretrain_contrastive.py --data_dir data --use_cross_modal --temperature 0.07
+  
+  # Large batch training on GPU
+  python pretrain_contrastive.py --batch_size 128 --num_epochs 200 --device cuda
+        """)
+    
+    # Data configuration
+    data_args = parser.add_argument_group('data configuration')
+    data_args.add_argument('--data_dir', type=str, default='final_processed_datasets',
+                          help='Directory with parquet data files (default: final_processed_datasets)')
+    data_args.add_argument('--output_dir', type=str, default='pretrained_models/contrastive',
+                          help='Output directory for pretrained encoders (default: pretrained_models/contrastive)')
+    
+    # Model architecture
+    model_args = parser.add_argument_group('model architecture')
+    model_args.add_argument('--embed_dim', type=int, default=256,
+                           help='Embedding dimension for all modalities (default: 256)')
+    model_args.add_argument('--projection_dim', type=int, default=128,
+                           help='Projection head dimension for contrastive loss (default: 128)')
+    
+    # Training configuration
+    train_args = parser.add_argument_group('training configuration')
+    train_args.add_argument('--batch_size', type=int, default=32,
+                           help='Training batch size (default: 32, use 64-128 for GPU)')
+    train_args.add_argument('--num_epochs', type=int, default=100,
+                           help='Number of pretraining epochs (default: 100)')
+    train_args.add_argument('--lr', type=float, default=1e-3,
+                           help='Learning rate (default: 0.001)')
+    
+    # Contrastive learning
+    contrast_args = parser.add_argument_group('contrastive learning')
+    contrast_args.add_argument('--temperature', type=float, default=0.5,
+                              help='Temperature for NT-Xent loss (lower=harder negatives, default: 0.5)')
+    contrast_args.add_argument('--use_cross_modal', action='store_true',
+                              help='Enable cross-modal contrastive loss (learns relationships between modalities)')
+    
+    # System configuration
+    system_args = parser.add_argument_group('system configuration')
+    system_args.add_argument('--device', type=str, 
+                            default='cuda' if torch.cuda.is_available() else 'cpu',
+                            help='Device: cuda or cpu (default: cuda if available)')
+    system_args.add_argument('--checkpoint_interval', type=int, default=10,
+                            help='Save checkpoint every N epochs (default: 10)')
     
     args = parser.parse_args()
     

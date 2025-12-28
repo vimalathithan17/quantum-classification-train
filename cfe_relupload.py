@@ -71,25 +71,63 @@ except FileNotFoundError:
     exit()
 
 # --- Argument Parser ---
-parser = argparse.ArgumentParser(description="Train CFE Data Re-uploading models.")
-parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
-parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
-parser.add_argument('--n_qbits', type=int, default=None, help="Override number of qubits to use for training/pipeline.")
-parser.add_argument('--n_layers', type=int, default=None, help="Override number of layers for QML ansatz.")
-parser.add_argument('--steps', type=int, default=None, help="Override the number of training steps for QML models.")
-parser.add_argument('--scaler', type=str, default=None, help="Override scaler choice: 's' (Standard), 'm' (MinMax), 'r' (Robust) or full name.")
-parser.add_argument('--datatypes', nargs='+', type=str, default=None, help="Optional list of data types to train (overrides DATA_TYPES_TO_TRAIN). Example: --datatypes CNV Prot")
-parser.add_argument('--skip_tuning', action='store_true', help="Skip loading tuned parameters and use command-line arguments or defaults instead.")
-parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation and only train final model on full training set.")
-parser.add_argument('--cv_only', action='store_true', help="Perform only cross-validation to generate OOF predictions and skip final training (useful for meta-learner training).")
-parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
-parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
-parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
-parser.add_argument('--checkpoint_fallback_dir', type=str, default=None, help="Fallback directory for checkpoints if primary is read-only")
-parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
-parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
-parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
-parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
+parser = argparse.ArgumentParser(
+    description="Train Approach 2 (CFE) base learners with Data-Reuploading QML circuits",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""Examples:
+  # Train all modalities
+  python cfe_relupload.py
+  
+  # Train specific modalities with custom params
+  python cfe_relupload.py --datatypes Prot SNV --steps 200
+    """)
+
+data_args = parser.add_argument_group('data selection')
+data_args.add_argument('--datatypes', nargs='+', type=str, default=None,
+                      help='Modalities to train (default: all)')
+
+model_args = parser.add_argument_group('model parameters (override tuned values)')
+model_args.add_argument('--n_qbits', type=int, default=None,
+                       help='Number of qubits (default: from tuning or 10)')
+model_args.add_argument('--n_layers', type=int, default=None,
+                       help='Circuit layers (default: from tuning or 3)')
+model_args.add_argument('--steps', type=int, default=None,
+                       help='Training steps (default: from tuning or 100)')
+model_args.add_argument('--scaler', type=str, default=None,
+                       help="Scaler: 's'=Standard, 'm'=MinMax, 'r'=Robust")
+model_args.add_argument('--skip_tuning', action='store_true',
+                       help='Use CLI args instead of tuned parameters')
+
+mode_args = parser.add_argument_group('training mode (mutually exclusive)')
+mode_args.add_argument('--skip_cross_validation', action='store_true',
+                      help='Train only final model (no CV)')
+mode_args.add_argument('--cv_only', action='store_true',
+                      help='Generate OOF predictions only')
+
+train_args = parser.add_argument_group('training configuration')
+train_args.add_argument('--max_training_time', type=float, default=None,
+                       help='Max training hours (overrides --steps)')
+train_args.add_argument('--validation_frequency', type=int, default=10,
+                       help='Validation frequency (default: 10 steps)')
+
+checkpoint_args = parser.add_argument_group('checkpointing')
+checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
+                            help='Checkpoint frequency (default: 50 steps)')
+checkpoint_args.add_argument('--keep_last_n', type=int, default=3,
+                            help='Checkpoints to keep (default: 3)')
+checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
+                            help='Alternative checkpoint directory')
+
+log_args = parser.add_argument_group('logging')
+log_args.add_argument('--verbose', action='store_true',
+                     help='Detailed training logs')
+log_args.add_argument('--use_wandb', action='store_true',
+                     help='Enable W&B tracking')
+log_args.add_argument('--wandb_project', type=str, default=None,
+                     help='W&B project')
+log_args.add_argument('--wandb_run_name', type=str, default=None,
+                     help='W&B run name')
+
 args = parser.parse_args()
 
 # Validate mutually exclusive arguments
@@ -126,13 +164,10 @@ for data_type in data_types:
     # --- Set parameters from CLI arguments or use defaults ---
     if args.steps is not None:
         config['steps'] = args.steps
+        log.info(f"Using steps from CLI: {args.steps}")
     elif 'steps' not in config:
         config['steps'] = 100  # default
         log.info(f"Using default steps: {config['steps']}")
-    
-    if args.override_steps:
-        config['steps'] = args.override_steps
-        log.info(f"Overriding steps with: {args.override_steps}")
     
     if args.n_qbits is not None:
         config['n_qubits'] = args.n_qbits

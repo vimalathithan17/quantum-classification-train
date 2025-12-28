@@ -172,79 +172,58 @@ def create_dataloader(data, labels, batch_size, shuffle=True):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Multimodal transformer fusion training"
-    )
-    parser.add_argument(
-        '--data_dir',
-        type=str,
-        default='final_processed_datasets',
-        help='Directory containing parquet data files'
-    )
-    parser.add_argument(
-        '--output_dir',
-        type=str,
-        default='transformer_models',
-        help='Directory to save trained model'
-    )
-    parser.add_argument(
-        '--pretrained_encoders_dir',
-        type=str,
-        default=None,
-        help='Directory containing pretrained encoders (optional)'
-    )
-    parser.add_argument(
-        '--embed_dim',
-        type=int,
-        default=256,
-        help='Embedding dimension'
-    )
-    parser.add_argument(
-        '--num_heads',
-        type=int,
-        default=8,
-        help='Number of attention heads'
-    )
-    parser.add_argument(
-        '--num_layers',
-        type=int,
-        default=4,
-        help='Number of transformer layers'
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=32,
-        help='Batch size'
-    )
-    parser.add_argument(
-        '--num_epochs',
-        type=int,
-        default=50,
-        help='Number of epochs'
-    )
-    parser.add_argument(
-        '--lr',
-        type=float,
-        default=1e-3,
-        help='Learning rate'
-    )
-    parser.add_argument(
-        '--freeze_encoders',
-        action='store_true',
-        help='Freeze pretrained encoders (linear probing)'
-    )
-    parser.add_argument(
-        '--test_size',
-        type=float,
-        default=0.2,
-        help='Test set size (fraction)'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to use'
-    )
+        description="Train multimodal transformer fusion model with cross-modal attention",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  # Train from scratch
+  python train_transformer_fusion.py --data_dir data --num_epochs 50
+  
+  # With pretrained encoders (fine-tuning)
+  python train_transformer_fusion.py --pretrained_encoders_dir pretrained/encoders --num_epochs 30
+  
+  # With frozen pretrained encoders (linear probing)
+  python train_transformer_fusion.py --pretrained_encoders_dir pretrained/encoders --freeze_encoders
+  
+  # Large model configuration
+  python train_transformer_fusion.py --embed_dim 512 --num_heads 16 --num_layers 8
+        """)
+    
+    # Data configuration
+    data_args = parser.add_argument_group('data configuration')
+    data_args.add_argument('--data_dir', type=str, default='final_processed_datasets',
+                          help='Directory with parquet files (default: final_processed_datasets)')
+    data_args.add_argument('--output_dir', type=str, default='transformer_models',
+                          help='Output directory for trained model (default: transformer_models)')
+    data_args.add_argument('--test_size', type=float, default=0.2,
+                          help='Test set fraction (default: 0.2)')
+    
+    # Model architecture
+    model_args = parser.add_argument_group('model architecture')
+    model_args.add_argument('--embed_dim', type=int, default=256,
+                           help='Embedding dimension, must be divisible by num_heads (default: 256)')
+    model_args.add_argument('--num_heads', type=int, default=8,
+                           help='Number of attention heads (default: 8)')
+    model_args.add_argument('--num_layers', type=int, default=4,
+                           help='Number of transformer layers (default: 4)')
+    model_args.add_argument('--pretrained_encoders_dir', type=str, default=None,
+                           help='Directory with pretrained encoders (optional, for transfer learning)')
+    model_args.add_argument('--freeze_encoders', action='store_true',
+                           help='Freeze pretrained encoders (linear probing instead of fine-tuning)')
+    
+    # Training configuration
+    train_args = parser.add_argument_group('training configuration')
+    train_args.add_argument('--batch_size', type=int, default=32,
+                           help='Training batch size (default: 32)')
+    train_args.add_argument('--num_epochs', type=int, default=50,
+                           help='Number of training epochs (default: 50)')
+    train_args.add_argument('--lr', type=float, default=1e-3,
+                           help='Learning rate (default: 0.001)')
+    
+    # System configuration
+    system_args = parser.add_argument_group('system configuration')
+    system_args.add_argument('--device', type=str,
+                            default='cuda' if torch.cuda.is_available() else 'cpu',
+                            help='Device: cuda or cpu (default: cuda if available)')
     
     args = parser.parse_args()
     

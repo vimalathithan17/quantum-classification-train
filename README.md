@@ -1,8 +1,33 @@
 # Quantum Transfer Learning Ensemble for Multiclass Cancer Classification
 
-This repository implements a stacked ensemble that uses Quantum Machine Learning (QML) classifiers as base learners and a QML meta-learner to combine their predictions for multiclass cancer classification from multi-omics data.
+A stacked ensemble using Quantum Machine Learning (QML) classifiers for multiclass cancer classification from multi-omics data.
+
+## 📚 Documentation
+
+| Document | Purpose |
+|----------|---------|
+| **[README.md](README.md)** | This file: QML pipeline setup and commands |
+| **[DOCS_GUIDE.md](DOCS_GUIDE.md)** | Navigation guide with decision trees |
+| **[INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)** | Extensions integration, class imbalance, troubleshooting |
+| **[DATA_PROCESSING.md](DATA_PROCESSING.md)** | Data pipeline: notebooks, outputs, formats |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Quantum circuits and design decisions |
+| **[PERFORMANCE_EXTENSIONS.md](PERFORMANCE_EXTENSIONS.md)** | Transformer fusion and contrastive learning |
+| **[examples/README.md](examples/README.md)** | Running example scripts |
+
+### Quick Decision Guide
+
+| Dataset Size | Recommendation | Guide |
+|--------------|----------------|-------|
+| < 100 samples | QML Only | This README |
+| 100-500 samples | Contrastive + QML | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
+| 500+ samples | Transformer Fusion | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
+| 1000+ samples | Full Hybrid Pipeline | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
+
+---
 
 ## 🔄 Key Feature: 2-Step Preprocessing Funnel
+
+Training-time preprocessing for quantum circuits. If using the data notebooks, set `SOURCE_DIR=final_processed_datasets_xgb_balanced`. See [DATA_PROCESSING.md](DATA_PROCESSING.md).
 
 The pipeline uses a **2-step funnel** to prepare high-dimensional multi-omics data for quantum circuits:
 
@@ -164,7 +189,7 @@ Run the appropriate script for each approach variant. The training scripts read 
 **Approach 1 (DRE):** Imputation → Dimensionality Reduction
 ```bash
 # Uses: MaskedTransformer(SimpleImputer) → MaskedTransformer(PCA/UMAP)
-python dre_standard.py --verbose --override_steps 100
+python dre_standard.py --verbose --steps 100
 
 # Data reuploading variant (same 2-step funnel)
 python dre_relupload.py
@@ -176,14 +201,14 @@ python dre_relupload.py
 python cfe_standard.py --verbose
 
 # Data reuploading variant (same 2-step funnel)
-python cfe_relupload.py --override_steps 100
+python cfe_relupload.py --steps 100
 ```
 
 Examples (the repository contains multiple `approach` scripts; run the ones you need):
 
 ```bash
 # Approach 1: 2-step funnel (impute → reduce) with standard QML
-python dre_standard.py --verbose --override_steps 100
+python dre_standard.py --verbose --steps 100
 
 # Approach 1: 2-step funnel (impute → reduce) with data reuploading QML
 python dre_relupload.py
@@ -192,7 +217,7 @@ python dre_relupload.py
 python cfe_standard.py --verbose
 
 # Approach 2: 2-step funnel (preserve NaNs → select features) with data reuploading QML
-python cfe_relupload.py --override_steps 100
+python cfe_relupload.py --steps 100
 
 You can override tuned parameters directly from the command line when running the training scripts. Supported overrides are:
 
@@ -569,7 +594,6 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 
 3) `dre_standard.py` and `dre_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
 	- `--datatypes` (str..., optional): Space-separated list of datatypes to train (overrides default `DATA_TYPES_TO_TRAIN`). Example: `--datatypes CNV Prot`.
 	- `--n_layers` (int, optional): Override number of ansatz layers for the QML model.
@@ -597,7 +621,6 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 
 4) `cfe_standard.py` and `cfe_relupload.py`
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--n_qbits` (int, optional): Override number of qubits (or selected features) used by the model/pipeline.
 	- `--datatypes` (str..., optional): Space-separated list of datatypes to train (overrides default `DATA_TYPES_TO_TRAIN`). Example: `--datatypes CNV Prot`.
 	- `--n_layers` (int, optional): Override the number of ansatz layers for the QML model.
@@ -627,7 +650,6 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--indicator_file` (str, required): Path to a parquet file containing indicator features and the true `class` column for combining with meta-features.
 	- `--mode` (str, default `train`): Operation mode, `train` or `tune`.
 	- `--n_trials` (int, default 50): Number of Optuna trials for tuning.
-	- `--override_steps` (int, optional): Override the number of training steps from the tuned parameters.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
 	- `--skip_cross_validation` (flag): Skip cross-validation during tuning (use simple train/val split).
 	- `--max_training_time` (float, optional): Maximum training time in hours (overrides fixed steps). Example: `--max_training_time 11`.
@@ -703,7 +725,6 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_t
 | `--indicator_file` | str | Yes | - | - | Parquet file with indicator features and true `class` column. |
 | `--mode` | str | No | `train` | `train`, `tune` | Operation mode. |
 | `--n_trials` | int | No | `50` | - | Number of Optuna trials for tuning. |
-| `--override_steps` | int | No | `None` | - | Override the number of training steps (overrides tuned parameters and defaults). |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
 | `--skip_cross_validation` | flag | No | `False` | - | Skip cross-validation during tuning (use simple train/val split). |
 | `--max_training_time` | float | No | `None` | - | Maximum training time in hours (overrides fixed steps). |

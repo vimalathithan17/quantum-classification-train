@@ -13,6 +13,17 @@ import numpy as np
 from typing import Callable, List, Optional
 
 
+__all__ = [
+    'feature_dropout',
+    'add_gaussian_noise',
+    'random_feature_masking',
+    'mixup_augmentation',
+    'OmicsAugmentation',
+    'get_augmentation_pipeline',
+    'MODALITY_AUGMENTATION_CONFIGS'
+]
+
+
 def feature_dropout(x: torch.Tensor, dropout_rate: float = 0.2) -> torch.Tensor:
     """
     Randomly zero out features.

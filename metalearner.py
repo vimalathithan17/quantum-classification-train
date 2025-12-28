@@ -182,9 +182,8 @@ def assemble_meta_data(preds_dirs, indicator_file):
     labels = pd.Series(le.transform(labels_categorical), index=labels_categorical.index)
     indicators = indicators.drop(columns=['class'])
     # The indicator file encodes missingness: 1 == data missing for that base learner.
-    # Convert these missingness indicators into inclusion masks where
-    # mask == 1 means the base-learner output is present and should be used.
-    # This makes downstream code (which multiplies base_preds * mask) straightforward.
+    # Convert to inclusion masks (1 == present) so downstream gated QML meta-learners
+    # can multiply base predictions by this mask, avoiding direct indicator encoding.
     try:
         # Fill NaNs conservatively as "not missing" (0) before inversion
         indicators = indicators.fillna(0)
@@ -371,8 +370,13 @@ def assemble_meta_data(preds_dirs, indicator_file):
     if not X_meta_test_preds.empty:
         X_meta_test_preds.index.name = 'case_id'
 
+    original_train_count = len(X_meta_train_preds) if not X_meta_train_preds.empty else 0
+    original_test_count = len(X_meta_test_preds) if not X_meta_test_preds.empty else 0
     X_meta_train = X_meta_train_preds.join(indicators, how='inner') if not X_meta_train_preds.empty else pd.DataFrame()
     X_meta_test = X_meta_test_preds.join(indicators, how='inner') if not X_meta_test_preds.empty else pd.DataFrame()
+    if original_train_count > 0 and len(X_meta_train) < int(0.9 * original_train_count):
+        pct = (len(X_meta_train) / original_train_count) * 100.0
+        log.warning(f"Meta-join alignment reduced training samples significantly: {len(X_meta_train)}/{original_train_count} ({pct:.1f}%). Check case_id consistency across files.")
 
     # Drop any rows with missing values after the join (conservative)
     if not X_meta_train.empty:
@@ -686,35 +690,88 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     return float(f1_weighted)  # Optimize for weighted F1 instead of accuracy
 
 def main():
-    parser = argparse.ArgumentParser(description="Train or tune the QML meta-learner.")
-    parser.add_argument('--preds_dir', nargs='+', required=True, help="One or more directories with base learner predictions.")
-    parser.add_argument('--indicator_file', type=str, required=True, help="Path to the parquet file with indicator features and labels.")
-    parser.add_argument('--mode', type=str, default='train', choices=['train', 'tune'], help="Operation mode: 'train' a final model or 'tune' hyperparameters.")
-    parser.add_argument('--n_trials', type=int, default=50, help="Number of Optuna trials for tuning.")
-    parser.add_argument('--override_steps', type=int, default=None, help="Override the number of training steps from the tuned parameters.")
-    parser.add_argument('--verbose', action='store_true', help="Enable verbose logging for QML model training steps.")
-    parser.add_argument('--skip_cross_validation', action='store_true', help="Skip cross-validation during tuning (use simple train/val split).")
-    parser.add_argument('--max_training_time', type=float, default=None, help="Maximum training time in hours (overrides fixed steps). Example: --max_training_time 11")
-    parser.add_argument('--checkpoint_frequency', type=int, default=50, help="Save checkpoint every N steps (default: 50)")
-    parser.add_argument('--keep_last_n', type=int, default=3, help="Keep last N checkpoints (default: 3)")
-    parser.add_argument('--checkpoint_fallback_dir', type=str, default=None, help="Fallback directory for checkpoints if primary is read-only")
-    parser.add_argument('--validation_frequency', type=int, default=10, help="Compute validation metrics every N steps (default: 10)")
-    parser.add_argument('--use_wandb', action='store_true', help="Enable Weights & Biases logging")
-    parser.add_argument('--wandb_project', type=str, default=None, help="W&B project name")
-    parser.add_argument('--wandb_run_name', type=str, default=None, help="W&B run name")
-    # New CLI args for meta-learner training/tuning
-    parser.add_argument('--meta_model_type', type=str, choices=['gated_standard', 'gated_reuploading'], default=None,
-                        help="Force meta-learner model type for final training (overrides tuned value). Only gated variants are supported.")
-    parser.add_argument('--meta_n_layers', type=int, default=None,
-                        help="Force number of layers for meta-learner during final training (overrides tuned value).")
-    parser.add_argument('--meta_n_qubits', type=int, default=None,
-                        help="Force number of qubits to use for the meta-learner (defaults to n_meta_features).")
-    parser.add_argument('--minlayers', type=int, default=3,
-                        help="Minimum number of layers to consider during tuning (default: 3).")
-    parser.add_argument('--maxlayers', type=int, default=6,
-                        help="Maximum number of layers to consider during tuning (default: 6).")
-    parser.add_argument('--learning_rate', type=float, default=0.5,
-                        help="Fixed learning rate to use for both tuning and final training (default: 0.5). If passed on the CLI it will override tuned params for final training.")
+    parser = argparse.ArgumentParser(
+        description="Train or tune the QML meta-learner for ensemble stacking",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  # Tune hyperparameters
+  python metalearner.py --mode tune --preds_dir base_learner_outputs_app1_standard \
+      --indicator_file final_processed_datasets/indicators.parquet --n_trials 50
+  
+  # Train final model with tuned parameters
+  python metalearner.py --mode train --preds_dir base_learner_outputs_app1_standard \
+      --indicator_file final_processed_datasets/indicators.parquet
+  
+  # Train with multiple prediction directories
+  python metalearner.py --mode train \
+      --preds_dir dir1 dir2 dir3 \
+      --indicator_file indicators.parquet
+        """)
+    
+    # Required arguments
+    required = parser.add_argument_group('required arguments')
+    required.add_argument('--preds_dir', nargs='+', required=True,
+                         help='Directories with base learner predictions (can specify multiple)')
+    required.add_argument('--indicator_file', type=str, required=True,
+                         help='Parquet file with indicator features and labels')
+    
+    # Operation mode
+    mode_args = parser.add_argument_group('operation mode')
+    mode_args.add_argument('--mode', type=str, default='train', choices=['train', 'tune'],
+                          help='Mode: train final model or tune hyperparameters (default: train)')
+    mode_args.add_argument('--n_trials', type=int, default=50,
+                          help='Number of Optuna trials for tuning (default: 50)')
+    mode_args.add_argument('--skip_cross_validation', action='store_true',
+                          help='Use train/val split instead of CV during tuning')
+    
+    # Model configuration (override tuned values for training)
+    model_args = parser.add_argument_group('model parameters (override tuned values in train mode)')
+    model_args.add_argument('--meta_model_type', type=str, 
+                           choices=['gated_standard', 'gated_reuploading'], default=None,
+                           help='Force meta-learner type (only gated variants supported)')
+    model_args.add_argument('--meta_n_qubits', type=int, default=None,
+                           help='Force number of qubits (default: num_meta_features)')
+    model_args.add_argument('--meta_n_layers', type=int, default=None,
+                           help='Force number of circuit layers')
+    model_args.add_argument('--learning_rate', type=float, default=0.5,
+                           help='Learning rate for training (default: 0.5)')
+    model_args.add_argument('--steps', type=int, default=None,
+                           help='Training steps (overrides tuned value)')
+    
+    # Tuning configuration
+    tuning_args = parser.add_argument_group('tuning parameters')
+    tuning_args.add_argument('--minlayers', type=int, default=3,
+                            help='Min layers for tuning search space (default: 3)')
+    tuning_args.add_argument('--maxlayers', type=int, default=6,
+                            help='Max layers for tuning search space (default: 6)')
+    
+    # Training configuration
+    train_args = parser.add_argument_group('training configuration')
+    train_args.add_argument('--max_training_time', type=float, default=None,
+                           help='Max training hours (overrides --steps)')
+    train_args.add_argument('--validation_frequency', type=int, default=10,
+                           help='Validation frequency in steps (default: 10)')
+    
+    # Checkpointing
+    checkpoint_args = parser.add_argument_group('checkpointing')
+    checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
+                                help='Checkpoint frequency in steps (default: 50)')
+    checkpoint_args.add_argument('--keep_last_n', type=int, default=3,
+                                help='Checkpoints to keep (default: 3)')
+    checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
+                                help='Alternative checkpoint directory')
+    
+    # Logging
+    log_args = parser.add_argument_group('logging')
+    log_args.add_argument('--verbose', action='store_true',
+                         help='Enable detailed training logs')
+    log_args.add_argument('--use_wandb', action='store_true',
+                         help='Enable W&B experiment tracking')
+    log_args.add_argument('--wandb_project', type=str, default=None,
+                         help='W&B project name')
+    log_args.add_argument('--wandb_run_name', type=str, default=None,
+                         help='W&B run name')
+    
     args = parser.parse_args()
 
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols = assemble_meta_data(args.preds_dir, args.indicator_file)
@@ -789,9 +846,9 @@ def main():
             params = {'qml_model': 'reuploading', 'n_layers': 3, 'learning_rate': 0.5, 'steps': 100}
 
         # Override steps if provided via command line
-        if args.override_steps:
-            params['steps'] = args.override_steps
-            log.info(f"Overriding training steps with: {args.override_steps}")
+        if args.steps:
+            params['steps'] = args.steps
+            log.info(f"Using training steps from CLI: {args.steps}")
     # Do NOT scale meta-features: base-learner outputs are probabilities in [0,1]
 
         # Allow CLI overrides for final training params
