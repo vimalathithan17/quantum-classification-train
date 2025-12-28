@@ -1310,7 +1310,7 @@ python metalearner.py \
 python create_master_label_encoder.py
 
 # 2. Tune for all modalities with LightGBM (default)
-for dtype in CNV Prot Meth GeneExp miRNA Mut; do
+for dtype in CNV Prot Meth GeneExp miRNA SNV; do
     python tune_models.py \
         --datatype $dtype \
         --approach 2 \
@@ -1351,7 +1351,7 @@ cp meta_learner_columns.json final_model_deployment/
 cp master_label_encoder/label_encoder.joblib final_model_deployment/
 
 # Copy base learner artifacts
-for dtype in CNV Prot Meth GeneExp miRNA Mut; do
+for dtype in CNV Prot Meth GeneExp miRNA SNV; do
     cp base_learner_outputs_app2_standard/*_${dtype}.joblib final_model_deployment/
 done
 
