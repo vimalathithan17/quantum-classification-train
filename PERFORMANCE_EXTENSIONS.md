@@ -348,7 +348,7 @@ for batch in dataloader:
     modality_data_list = []  # Will hold encoded features for each modality
     modality_masks = []
     
-    for modality_name in ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']:
+    for modality_name in ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']:
         if modality_name in batch and batch[modality_name] is not None:
             # Encode the modality
             encoded = encoders[modality_name](batch[modality_name])
@@ -430,10 +430,10 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         Input (variable dim per modality) → Encoder → Embedding (embed_dim) → Projection (projection_dim)
         
     Example:
-        modality_dims = {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+        modality_dims = {'GeneExpr': 5000, 'Prot': 200, 'miRNA': 800}
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256, projection_dim=128)
         
-        # GeneExp: (batch, 5000) → (batch, 256) → (batch, 128)
+        # GeneExpr: (batch, 5000) → (batch, 256) → (batch, 128)
         # Prot:    (batch, 200)  → (batch, 256) → (batch, 128)
         # miRNA:   (batch, 800)  → (batch, 256) → (batch, 128)
     """
@@ -441,7 +441,7 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         """
         Args:
             modality_dims: Dict mapping modality name to input dimension
-                          e.g., {'GeneExp': 5000, 'Prot': 200}
+                          e.g., {'GeneExpr': 5000, 'Prot': 200}
             embed_dim: Output embedding dimension (default: 256)
                       - Can be any value (64, 128, 256, 512, etc.)
                       - All modalities share this dimension
@@ -505,7 +505,7 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         
         Args:
             x: Input tensor (batch, modality_input_dim)
-            modality_name: Name of the modality (e.g., 'GeneExp')
+            modality_name: Name of the modality (e.g., 'GeneExpr')
             return_projection: If True, also return projection for contrastive loss
             
         Returns:
@@ -608,7 +608,7 @@ def mixup_augmentation(x1, x2, alpha=0.2):
 **5. Modality-Specific Augmentations**
 ```python
 augmentation_config = {
-    'GeneExp': [feature_dropout, add_noise],  # Gene expression tolerates noise
+    'GeneExpr': [feature_dropout, add_noise],  # Gene expression tolerates noise
     'Meth': [feature_dropout],  # Methylation is more discrete
     'CNV': [feature_dropout],  # Copy number should preserve structure
     'Prot': [feature_dropout, add_noise],
@@ -664,7 +664,7 @@ def total_contrastive_loss(batch):
     loss = 0
     
     # Intra-modal: each modality with its own augmentations
-    for modality in ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot']:
+    for modality in ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot']:
         if batch[modality] is not None:
             aug1, aug2 = augment(batch[modality], modality)
             _, proj1 = encoder(aug1, modality)
@@ -672,13 +672,13 @@ def total_contrastive_loss(batch):
             loss += nt_xent_loss(proj1, proj2)
     
     # Cross-modal: different modalities from same patient
-    if batch['GeneExp'] is not None and batch['Prot'] is not None:
-        emb_gene, proj_gene = encoder(batch['GeneExp'], 'GeneExp')
+    if batch['GeneExpr'] is not None and batch['Prot'] is not None:
+        emb_gene, proj_gene = encoder(batch['GeneExpr'], 'GeneExpr')
         emb_prot, proj_prot = encoder(batch['Prot'], 'Prot')
         loss += cross_modal_contrastive_loss(proj_gene, proj_prot)
     
     # Can add more cross-modal pairs based on biological relevance
-    # e.g., Methylation <-> GeneExp (methylation regulates expression)
+    # e.g., Methylation <-> GeneExpr (methylation regulates expression)
     
     return loss
 ```
@@ -1465,14 +1465,14 @@ transformers>=4.30.0  # For reference/components
 
 **Answer**: The input dimension is **modality-specific** and depends on the number of features in each data type:
 
-- **Gene Expression (GeneExp)**: Typically 500-20,000+ features depending on preprocessing
+- **Gene Expression (GeneExpr)**: Typically 500-20,000+ features depending on preprocessing
 - **miRNA**: Usually 200-1,000 features
 - **Methylation (Meth)**: Can be 1,000-27,000+ CpG sites
 - **Copy Number Variation (CNV)**: Often 100-1,000 genomic regions
 - **Protein (Prot)**: Typically 100-500 proteins measured
 - **Mutation (SNV)**: Usually 50-500 mutation features
 
-**Example**: If GeneExp has 5,000 features after preprocessing, the encoder architecture is:
+**Example**: If GeneExpr has 5,000 features after preprocessing, the encoder architecture is:
 ```
 Input: (batch_size, 5000) → Linear(5000, 512) → BatchNorm → ReLU → Dropout
                           → Linear(512, 256) → BatchNorm → ReLU → Dropout
@@ -1489,7 +1489,7 @@ Output: (batch_size, 256)
   Input(100) → Hidden(512) → Hidden(256) → Output(256)
   ```
   
-- **Input > 256**: Also fine. For example, if GeneExp has 10,000 features, the encoder compresses it to 256-dim:
+- **Input > 256**: Also fine. For example, if GeneExpr has 10,000 features, the encoder compresses it to 256-dim:
   ```
   Input(10000) → Hidden(512) → Hidden(256) → Output(256)
   ```
@@ -1561,7 +1561,7 @@ embed_dim = 250, num_heads = 8  ✗ (250 / 8 = 31.25)
 ```python
 # Setup
 modality_dims = {
-    'GeneExp': 5000,   # Input: 5000 features
+    'GeneExpr': 5000,   # Input: 5000 features
     'miRNA': 800,      # Input: 800 features  
     'Prot': 200,       # Input: 200 features
     'CNV': 1500        # Input: 1500 features
@@ -1574,7 +1574,7 @@ model = ContrastiveMultiOmicsEncoder(
 )
 
 # Each modality encoder:
-# GeneExp: (batch, 5000) → (batch, 256)
+# GeneExpr: (batch, 5000) → (batch, 256)
 # miRNA:   (batch, 800)  → (batch, 256)
 # Prot:    (batch, 200)  → (batch, 256)
 # CNV:     (batch, 1500) → (batch, 256)
@@ -1618,7 +1618,7 @@ The pretrained encoders become **feature extractors** that convert raw, high-dim
 **Not Recommended** (breaks cross-modal contrastive learning):
 ```python
 encoders = {
-    'GeneExp': Encoder(5000, embed_dim=256),
+    'GeneExpr': Encoder(5000, embed_dim=256),
     'Prot': Encoder(200, embed_dim=128)  # Different dimension
 }
 # Can't compute cross-modal similarity between 256-dim and 128-dim embeddings!
@@ -1627,7 +1627,7 @@ encoders = {
 **Recommended** (use same embed_dim for all modalities):
 ```python
 encoders = {
-    'GeneExp': Encoder(5000, embed_dim=256),
+    'GeneExpr': Encoder(5000, embed_dim=256),
     'Prot': Encoder(200, embed_dim=256)  # Same dimension
 }
 # Can compute cross-modal contrastive loss ✓

@@ -89,6 +89,13 @@ data_args = parser.add_argument_group('data selection')
 data_args.add_argument('--datatypes', nargs='+', type=str, default=None,
                       help='Modalities to train (default: all)')
 
+# Pretrained features (for integration with performance extensions)
+feature_args = parser.add_argument_group('pretrained features')
+feature_args.add_argument('--use_pretrained_features', action='store_true',
+                         help='Use pretrained embeddings instead of LightGBM feature selection')
+feature_args.add_argument('--pretrained_features_dir', type=str, default=None,
+                         help='Directory containing pretrained feature .npy files')
+
 model_args = parser.add_argument_group('model parameters (override tuned values)')
 model_args.add_argument('--n_qbits', type=int, default=None,
                        help='Number of qubits (default: from tuning)')
@@ -211,6 +218,29 @@ for data_type in data_types:
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
     # Convert y back to pandas Series for easier indexing with iloc
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
+
+    # --- Check for pretrained features ---
+    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
+    
+    if use_pretrained:
+        pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
+        if os.path.exists(pretrained_file):
+            log.info(f"  - Loading pretrained features from {pretrained_file}")
+            embeddings = np.load(pretrained_file)
+            labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
+            if os.path.exists(labels_file):
+                all_indices = np.arange(len(embeddings))
+                train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
+                X_train = pd.DataFrame(embeddings[train_idx], index=X_train.index)
+                X_test = pd.DataFrame(embeddings[test_idx], index=X_test.index)
+                log.info(f"  - Pretrained features loaded: train={X_train.shape}, test={X_test.shape}")
+                log.info("  - Note: LightGBM feature selection will be skipped, using PCA instead")
+            else:
+                log.warning(f"  - labels.npy not found, falling back to standard pipeline")
+                use_pretrained = False
+        else:
+            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
+            use_pretrained = False
 
     # --- Generate Out-of-Fold Predictions Correctly ---
     if not args.skip_cross_validation:

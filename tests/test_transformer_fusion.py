@@ -158,7 +158,7 @@ class TestMultimodalFusionClassifier:
     
     def test_classifier_initialization(self):
         """Test classifier initializes correctly."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80, 'Meth': 120}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80, 'Meth': 120}
         
         classifier = MultimodalFusionClassifier(
             modality_dims=modality_dims,
@@ -174,7 +174,7 @@ class TestMultimodalFusionClassifier:
     
     def test_forward_all_modalities_present(self):
         """Test forward pass with all modalities present."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         
         classifier = MultimodalFusionClassifier(
             modality_dims=modality_dims,
@@ -185,7 +185,7 @@ class TestMultimodalFusionClassifier:
         )
         
         modality_data = {
-            'GeneExp': torch.randn(8, 100),
+            'GeneExpr': torch.randn(8, 100),
             'Prot': torch.randn(8, 80)
         }
         
@@ -196,7 +196,7 @@ class TestMultimodalFusionClassifier:
     
     def test_forward_with_missing_modality(self):
         """Test forward pass with one modality missing."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80, 'Meth': 120}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80, 'Meth': 120}
         
         classifier = MultimodalFusionClassifier(
             modality_dims=modality_dims,
@@ -206,9 +206,9 @@ class TestMultimodalFusionClassifier:
             num_classes=5
         )
         
-        # Only provide GeneExp and Prot, Meth is missing
+        # Only provide GeneExpr and Prot, Meth is missing
         modality_data = {
-            'GeneExp': torch.randn(8, 100),
+            'GeneExpr': torch.randn(8, 100),
             'Prot': torch.randn(8, 80)
         }
         
@@ -219,7 +219,7 @@ class TestMultimodalFusionClassifier:
     
     def test_forward_with_none_modality(self):
         """Test forward pass with None for missing modality."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         
         classifier = MultimodalFusionClassifier(
             modality_dims=modality_dims,
@@ -230,7 +230,7 @@ class TestMultimodalFusionClassifier:
         )
         
         modality_data = {
-            'GeneExp': torch.randn(8, 100),
+            'GeneExpr': torch.randn(8, 100),
             'Prot': None  # Explicitly missing
         }
         
@@ -241,7 +241,7 @@ class TestMultimodalFusionClassifier:
     
     def test_forward_with_missing_mask(self):
         """Test forward pass with explicit missing mask."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         
         classifier = MultimodalFusionClassifier(
             modality_dims=modality_dims,
@@ -252,12 +252,12 @@ class TestMultimodalFusionClassifier:
         )
         
         modality_data = {
-            'GeneExp': torch.randn(8, 100),
+            'GeneExpr': torch.randn(8, 100),
             'Prot': torch.randn(8, 80)
         }
         
         modality_missing = {
-            'GeneExp': False,
+            'GeneExpr': False,
             'Prot': True  # Mark Prot as missing
         }
         
@@ -271,11 +271,11 @@ class TestMultimodalFusionClassifier:
         from performance_extensions.contrastive_learning import ModalityEncoder
         import torch.nn as nn
         
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         
         # Create pretrained encoders
         pretrained_encoders = nn.ModuleDict({
-            'GeneExp': ModalityEncoder(100, 256),
+            'GeneExpr': ModalityEncoder(100, 256),
             'Prot': ModalityEncoder(80, 256)
         })
         
@@ -289,12 +289,12 @@ class TestMultimodalFusionClassifier:
         )
         
         # Verify it uses the pretrained encoders
-        assert classifier.encoders['GeneExp'] is pretrained_encoders['GeneExp']
+        assert classifier.encoders['GeneExpr'] is pretrained_encoders['GeneExpr']
         assert classifier.encoders['Prot'] is pretrained_encoders['Prot']
         
         # Test forward pass
         modality_data = {
-            'GeneExp': torch.randn(8, 100),
+            'GeneExpr': torch.randn(8, 100),
             'Prot': torch.randn(8, 80)
         }
         

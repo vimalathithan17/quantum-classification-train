@@ -124,7 +124,7 @@ class OmicsAugmentation:
         Initialize augmentation pipeline for a specific modality.
         
         Args:
-            modality_name: Name of the modality (e.g., 'GeneExp', 'Prot')
+            modality_name: Name of the modality (e.g., 'GeneExpr', 'Prot')
             dropout_rate: Feature dropout probability
             noise_level: Gaussian noise level
             mask_prob: Feature masking probability
@@ -179,7 +179,7 @@ class OmicsAugmentation:
 
 # Modality-specific augmentation configurations
 MODALITY_AUGMENTATION_CONFIGS = {
-    'GeneExp': {
+    'GeneExpr': {
         'use_dropout': True,
         'use_noise': True,
         'use_masking': False,
@@ -214,7 +214,7 @@ MODALITY_AUGMENTATION_CONFIGS = {
         'dropout_rate': 0.2,
         'noise_level': 0.1
     },
-    'Mut': {
+    'SNV': {
         'use_dropout': True,
         'use_noise': False,
         'use_masking': False,

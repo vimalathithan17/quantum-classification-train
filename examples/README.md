@@ -30,14 +30,14 @@ These can be used independently, with QML, or combined for maximum performance i
 | < 100 samples | QML Only (no extensions) | [Main README](../README.md) |
 | 100-500 samples, imbalanced | Contrastive → QML | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
 | 500+ samples, missing modalities | Transformer Fusion | Examples below |
-| 1000+ samples, GPU available | Full Hybrid (Contrastive → Transformer → QML) | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
+| 1000+ samples, GPU available | Full Hybrid (Contrastive → QML + Transformer → Meta-QML) | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
 
 ### Understanding Embedding Dimensions
 
 **Key Concept**: The encoders transform variable-dimensional input data into fixed-dimensional embeddings.
 
 **Input Dimensions** (modality-specific, examples):
-- Gene Expression (GeneExp): 500-20,000 features
+- Gene Expression (GeneExpr): 500-20,000 features
 - miRNA: 200-1,000 features
 - Methylation (Meth): 1,000-27,000 features
 - Copy Number Variation (CNV): 100-1,000 features
@@ -52,8 +52,8 @@ These can be used independently, with QML, or combined for maximum performance i
 
 **Example**:
 ```python
-# If GeneExp has 5000 features and Prot has 200 features:
-GeneExp: (batch, 5000) → Encoder → (batch, 256)
+# If GeneExpr has 5000 features and Prot has 200 features:
+GeneExpr: (batch, 5000) → Encoder → (batch, 256)
 Prot:    (batch, 200)  → Encoder → (batch, 256)
 
 # Both end up in the same 256-dimensional embedding space
@@ -138,9 +138,69 @@ python examples/train_transformer_fusion.py \
 
 ## Complete Workflow
 
+### 3. Extract Pretrained Features
+
+Extract embeddings from pretrained encoders for use in QML pipeline:
+
+```bash
+# Extract embeddings for QML input
+python examples/extract_pretrained_features.py \
+    --encoder_dir pretrained_models/contrastive/encoders \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_features
+
+# On GPU with larger batch
+python examples/extract_pretrained_features.py \
+    --encoder_dir pretrained_models/contrastive/encoders \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_features \
+    --batch_size 512 \
+    --device cuda
+```
+
+**Output:**
+- `pretrained_features/{modality}_embeddings.npy` - Embeddings per modality
+- `pretrained_features/labels.npy` - Class labels
+- `pretrained_features/extraction_metadata.json` - Configuration
+
+### 4. Extract Transformer Features
+
+Extract transformer predictions/features for QML meta-learner:
+
+```bash
+# Extract in CSV format for direct use with metalearner.py
+python examples/extract_transformer_features.py \
+    --model_dir transformer_models \
+    --data_dir final_processed_datasets \
+    --output_dir transformer_predictions \
+    --output_format csv
+
+# Extract all feature types in both formats
+python examples/extract_transformer_features.py \
+    --model_dir transformer_models \
+    --data_dir final_processed_datasets \
+    --output_dir transformer_predictions \
+    --extract_type all \
+    --output_format both
+```
+
+**Output (CSV format - metalearner compatible):**
+- `transformer_predictions/train_oof_preds_Transformer.csv` - Training predictions
+- `transformer_predictions/test_preds_Transformer.csv` - Test predictions
+
+**Output (NPY format - for other uses):**
+- `transformer_predictions/transformer_probabilities.npy` - Class probabilities
+- `transformer_predictions/transformer_predictions.npy` - Class predictions
+- `transformer_predictions/labels.npy` - Ground truth labels
+- `transformer_predictions/extraction_metadata.json` - Configuration
+
+---
+
+## Complete Workflows
+
 ### Combined Approach (Best Performance)
 
-Combining both approaches typically yields the best results:
+Combining QML base learners AND transformer fusion yields the best results:
 
 ```bash
 # Step 1: Pretrain encoders with contrastive learning
@@ -151,15 +211,44 @@ python examples/pretrain_contrastive.py \
     --use_cross_modal \
     --batch_size 64
 
-# Step 2: Fine-tune with transformer fusion
+# Step 2a: Extract pretrained features for QML base learners
+python examples/extract_pretrained_features.py \
+    --encoder_dir pretrained_models/contrastive/encoders \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_features
+
+# Step 2b: Train QML base learners on each modality
+for modality in GeneExpr miRNA Meth CNV Prot SNV; do
+    python dre_standard.py \
+        --data_dir final_processed_datasets \
+        --use_pretrained_features \
+        --pretrained_features_dir pretrained_features \
+        --output_dir base_learner_outputs \
+        --modalities $modality
+done
+
+# Step 3: Train transformer fusion with pretrained encoders
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
-    --output_dir final_models/combined \
+    --output_dir transformer_models \
     --pretrained_encoders_dir pretrained_models/contrastive/encoders \
     --num_epochs 50 \
     --num_layers 4 \
     --num_heads 8 \
     --lr 1e-4
+
+# Step 4: Extract transformer predictions
+python examples/extract_transformer_features.py \
+    --model_dir transformer_models \
+    --data_dir final_processed_datasets \
+    --output_dir transformer_predictions \
+    --output_format csv
+
+# Step 5: Train QML meta-learner on BOTH QML base learners and transformer
+python metalearner.py \
+    --preds_dir base_learner_outputs transformer_predictions \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 ## Command-Line Arguments
@@ -196,6 +285,28 @@ python examples/train_transformer_fusion.py \
 | `--test_size` | `0.2` | Test set size (fraction) |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
 
+### extract_pretrained_features.py
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--encoder_dir` | *required* | Directory containing pretrained encoders |
+| `--data_dir` | *required* | Directory with parquet data files |
+| `--output_dir` | *required* | Output directory for extracted features |
+| `--batch_size` | `256` | Batch size for encoding |
+| `--device` | `auto` | Device (`auto`, `cpu`, `cuda`) |
+
+### extract_transformer_features.py
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model_dir` | *required* | Directory containing trained transformer model |
+| `--data_dir` | *required* | Directory with parquet data files |
+| `--output_dir` | *required* | Output directory for extracted features |
+| `--extract_type` | `both` | Feature type (`logits`, `probabilities`, `embeddings`, `both`, `all`) |
+| `--output_format` | `both` | Output format: `npy`, `csv` (metalearner compatible), or `both` |
+| `--batch_size` | `64` | Batch size for inference |
+| `--device` | `auto` | Device (`auto`, `cpu`, `cuda`) |
+
 ## Expected Performance Improvements
 
 Based on similar multimodal medical AI research:
@@ -221,7 +332,7 @@ Based on similar multimodal medical AI research:
 ### Input Format
 
 The scripts expect parquet files in the data directory with the following naming convention:
-- `data_GeneExp_.parquet` - Gene expression data
+- `data_GeneExpr_.parquet` - Gene expression data
 - `data_miRNA_.parquet` - miRNA data
 - `data_Meth_.parquet` - Methylation data
 - `data_CNV_.parquet` - Copy number variation data
@@ -304,7 +415,7 @@ Ensure your data directory contains the required parquet files with correct nami
 ### Q: What input dimensions does the contrastive encoder accept?
 
 **A:** The encoder accepts **any input dimension** for each modality. Each modality can have a different number of features:
-- GeneExp might have 5,000 features
+- GeneExpr might have 5,000 features
 - Protein might have only 200 features
 - Methylation might have 10,000 features
 
@@ -411,12 +522,12 @@ Input → Encoder → Embedding (256-dim) → [Use for classification]
 **Why?** Contrastive learning requires computing similarity between modalities in a shared space:
 ```python
 # All modalities to same dimension - can compare ✓
-GeneExp: (batch, 5000) → (batch, 256)
+GeneExpr: (batch, 5000) → (batch, 256)
 Prot:    (batch, 200)  → (batch, 256)
 # Can compute cross-modal similarity
 
 # Different dimensions - can't compare ✗
-GeneExp: (batch, 5000) → (batch, 256)
+GeneExpr: (batch, 5000) → (batch, 256)
 Prot:    (batch, 200)  → (batch, 128)
 # Can't compute cross-modal similarity between 256 and 128
 ```

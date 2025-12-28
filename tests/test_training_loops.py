@@ -36,7 +36,7 @@ def test_contrastive_pretraining_execution():
         # Setup
         device = torch.device('cpu')
         modality_dims = {
-            'GeneExp': 100,
+            'GeneExpr': 100,
             'Prot': 50,
             'miRNA': 30
         }
@@ -131,7 +131,7 @@ def test_supervised_finetuning_compatibility():
         import torch.nn as nn
         
         # Setup
-        modality_dims = {'GeneExp': 100, 'Prot': 50}
+        modality_dims = {'GeneExpr': 100, 'Prot': 50}
         embed_dim = 64
         num_classes = 3
         
@@ -196,7 +196,7 @@ def test_transformer_fusion_training():
         
         # Setup
         modality_dims = {
-            'GeneExp': 100,
+            'GeneExpr': 100,
             'Prot': 50,
             'miRNA': 30
         }
@@ -277,7 +277,7 @@ def test_encoder_checkpoint_persistence():
         try:
             # Create and train encoder briefly
             modality_dims = {
-                'GeneExp': 50,
+                'GeneExpr': 50,
                 'Prot': 25,
                 'miRNA': 15
             }
@@ -349,7 +349,7 @@ def test_transformer_checkpoint():
         try:
             # Create model
             modality_dims = {
-                'GeneExp': 50,
+                'GeneExpr': 50,
                 'Prot': 25
             }
             

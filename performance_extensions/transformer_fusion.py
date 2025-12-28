@@ -432,3 +432,86 @@ class MultimodalFusionClassifier(nn.Module):
         )
         
         return logits, attention_weights
+    
+    def get_embeddings(
+        self,
+        modality_data: dict,
+        modality_missing: Optional[dict] = None
+    ) -> torch.Tensor:
+        """
+        Extract embeddings from the penultimate layer (before classification).
+        
+        Useful for using transformer features as input to QML meta-learner.
+        
+        Args:
+            modality_data: Dict mapping modality names to (batch, features) tensors
+            modality_missing: Optional dict indicating missing modalities
+            
+        Returns:
+            embeddings: (batch, num_modalities * embed_dim) tensor of fused embeddings
+        """
+        batch_size = None
+        encoded_features = []
+        missing_mask = []
+        
+        # Infer batch size from available data
+        for modality in self.modality_names:
+            if modality in modality_data and modality_data[modality] is not None:
+                data = modality_data[modality]
+                batch_size = data.shape[0]
+                break
+        
+        if batch_size is None:
+            raise ValueError("At least one modality data must be provided")
+        
+        # Encode each modality
+        for modality in self.modality_names:
+            is_missing = (
+                modality not in modality_data or
+                modality_data[modality] is None or
+                (modality_missing is not None and modality_missing.get(modality, False))
+            )
+            
+            if is_missing:
+                encoder = self.encoders[modality]
+                if isinstance(encoder, ModalityFeatureEncoder):
+                    encoded = encoder(None, is_missing=True)
+                else:
+                    encoded = torch.zeros(batch_size, self.embed_dim, device=next(encoder.parameters()).device)
+                
+                if encoded.shape[0] == 1 and batch_size > 1:
+                    encoded = encoded.expand(batch_size, -1)
+                missing_mask.append(True)
+            else:
+                data = modality_data[modality]
+                encoder = self.encoders[modality]
+                if isinstance(encoder, ModalityFeatureEncoder):
+                    encoded = encoder(data, is_missing=False)
+                else:
+                    encoded = encoder(data)
+                missing_mask.append(False)
+            
+            encoded_features.append(encoded)
+        
+        # Stack features and apply transformer (get pre-classifier output)
+        missing_mask_tensor = torch.tensor(
+            missing_mask,
+            dtype=torch.bool,
+            device=encoded_features[0].device
+        ).unsqueeze(0).expand(batch_size, -1)
+        
+        # Stack to (batch, num_modalities, embed_dim)
+        x = torch.stack(encoded_features, dim=1)
+        
+        # Add modality embeddings
+        modality_ids = torch.arange(len(encoded_features), device=x.device)
+        modality_emb = self.transformer_fusion.modality_embeddings(modality_ids)
+        x = x + modality_emb.unsqueeze(0)
+        
+        # Apply transformer encoder
+        x = self.transformer_fusion.transformer(x, src_key_padding_mask=missing_mask_tensor)
+        
+        # Flatten to (batch, num_modalities * embed_dim)
+        embeddings = x.view(batch_size, -1)
+        
+        return embeddings

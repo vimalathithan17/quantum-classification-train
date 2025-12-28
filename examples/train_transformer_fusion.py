@@ -14,6 +14,7 @@ Usage:
 
 import os
 import argparse
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -45,7 +46,7 @@ def load_multiomics_data(data_dir, modalities=None):
     data_dir = Path(data_dir)
     
     if modalities is None:
-        modalities = ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'Mut']
+        modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
     
     data = {}
     modality_dims = {}
@@ -353,13 +354,22 @@ def main():
             output_dir = Path(args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            torch.save({
+            # Save model state dict
+            torch.save(model.state_dict(), output_dir / 'best_model.pt')
+            
+            # Save config.json separately for extract_transformer_features.py
+            config = {
+                'modality_dims': modality_dims,
+                'embed_dim': args.embed_dim,
+                'num_heads': args.num_heads,
+                'num_layers': args.num_layers,
+                'num_classes': num_classes,
+                'dropout': 0.1,
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_acc': val_acc,
-                'config': vars(args)
-            }, output_dir / 'best_model.pt')
+                'val_acc': float(val_acc)
+            }
+            with open(output_dir / 'config.json', 'w') as f:
+                json.dump(config, f, indent=2)
     
     # Final evaluation
     print("\n" + "="*80)
@@ -374,7 +384,6 @@ def main():
     print(classification_report(val_labels, val_preds))
     
     # Save training history
-    import json
     output_dir = Path(args.output_dir)
     history_path = output_dir / "training_history.json"
     with open(history_path, 'w') as f:

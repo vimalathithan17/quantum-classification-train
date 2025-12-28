@@ -28,7 +28,7 @@ def test_qml_pipeline_data_preparation():
         # Create mock multi-omics data
         n_samples = 50
         modality_dims = {
-            'GeneExp': 100,
+            'GeneExpr': 100,
             'Prot': 50,
             'miRNA': 30,
             'CNV': 40,
@@ -71,7 +71,7 @@ def test_qml_pipeline_partial_integration():
         
         # Prepare minimal data
         n_samples = 40
-        modality_dims = {'GeneExp': 50, 'Prot': 25, 'miRNA': 15}
+        modality_dims = {'GeneExpr': 50, 'Prot': 25, 'miRNA': 15}
         
         modality_data = {}
         for modality, dim in modality_dims.items():
@@ -107,7 +107,7 @@ def test_qml_pipeline_partial_integration():
             X_test_data[modality] = X_test
         
         # Verify data integrity
-        assert len(X_train_data['GeneExp']) + len(X_test_data['GeneExp']) == n_samples
+        assert len(X_train_data['GeneExpr']) + len(X_test_data['GeneExpr']) == n_samples
         assert all(len(X_train_data[m]) > 0 for m in modality_dims.keys())
         assert all(len(X_test_data[m]) > 0 for m in modality_dims.keys())
         
@@ -254,18 +254,18 @@ def test_inference_workflow():
             'n_classes': n_classes,
             'n_layers': 2,
             'approach': 1,
-            'modalities': ['GeneExp', 'Prot']
+            'modalities': ['GeneExpr', 'Prot']
         }
         
         # Create mock base learner predictions
         new_sample_data = {
-            'GeneExp': np.random.randn(5, 50).astype(np.float32),
+            'GeneExpr': np.random.randn(5, 50).astype(np.float32),
             'Prot': np.random.randn(5, 25).astype(np.float32)
         }
         
         # Simulate preprocessing
         scaler = StandardScaler()
-        gene_scaled = scaler.fit_transform(new_sample_data['GeneExp'])
+        gene_scaled = scaler.fit_transform(new_sample_data['GeneExpr'])
         prot_scaled = scaler.fit_transform(new_sample_data['Prot'])
         
         # Verify preprocessing output

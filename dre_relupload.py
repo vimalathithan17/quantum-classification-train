@@ -87,7 +87,14 @@ parser = argparse.ArgumentParser(
 
 data_args = parser.add_argument_group('data selection')
 data_args.add_argument('--datatypes', nargs='+', type=str, default=None,
-                      help='Modalities to train (default: all). Example: --datatypes GeneExp CNV')
+                      help='Modalities to train (default: all). Example: --datatypes GeneExpr CNV')
+
+# Pretrained features (for integration with performance extensions)
+feature_args = parser.add_argument_group('pretrained features')
+feature_args.add_argument('--use_pretrained_features', action='store_true',
+                         help='Use pretrained embeddings instead of PCA/UMAP preprocessing')
+feature_args.add_argument('--pretrained_features_dir', type=str, default=None,
+                         help='Directory containing pretrained feature .npy files (e.g., GeneExpr_embeddings.npy)')
 
 model_args = parser.add_argument_group('model parameters (override tuned values)')
 model_args.add_argument('--n_qbits', type=int, default=None,
@@ -208,35 +215,89 @@ for data_type in data_types:
     
     # Deterministic train/test split using the shared RANDOM_STATE
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
-    scaler = MaskedTransformer(get_scaler(config.get('scaler', 'MinMax')))
+    scaler_obj = get_scaler(config.get('scaler', 'MinMax'))
+
+    # --- Check for pretrained features ---
+    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
+    X_train_pretrained = None
+    X_test_pretrained = None
+    
+    if use_pretrained:
+        pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
+        if os.path.exists(pretrained_file):
+            log.info(f"  - Loading pretrained features from {pretrained_file}")
+            embeddings = np.load(pretrained_file)
+            labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
+            if os.path.exists(labels_file):
+                all_indices = np.arange(len(embeddings))
+                train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
+                X_train_pretrained = embeddings[train_idx]
+                X_test_pretrained = embeddings[test_idx]
+                log.info(f"  - Pretrained features loaded: train={X_train_pretrained.shape}, test={X_test_pretrained.shape}")
+            else:
+                log.warning(f"  - labels.npy not found, falling back to standard pipeline")
+                use_pretrained = False
+        else:
+            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
+            use_pretrained = False
 
     # --- Build the appropriate pipeline using TUNED params ---
-    log.info("  - Using standard pipeline for all data types...")
     
     # Create checkpoint directory for this data type
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
     
-    pipeline = Pipeline([
-        ('imputer', MaskedTransformer(SimpleImputer(strategy='median'), fallback='raise')),
-        ('scaler', MaskedTransformer(scaler, fallback='raise')),
-        ('pca', MaskedTransformer(PCA(n_components=config['n_qubits']), fallback='raise')),
-        ('qml', MulticlassQuantumClassifierDataReuploadingDR(
-            n_qubits=config['n_qubits'], 
-            n_layers=config['n_layers'], 
-            steps=config['steps'], 
-            n_classes=n_classes, 
-            verbose=args.verbose,
-            checkpoint_dir=checkpoint_dir,
-            checkpoint_fallback_dir=args.checkpoint_fallback_dir,
-            checkpoint_frequency=args.checkpoint_frequency,
-            keep_last_n=args.keep_last_n,
-            max_training_time=args.max_training_time,
-            validation_frequency=args.validation_frequency,
-            use_wandb=args.use_wandb,
-            wandb_project=args.wandb_project,
-            wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}'
-        ))
-    ])
+    if use_pretrained:
+        embed_dim = X_train_pretrained.shape[1]
+        n_qubits_final = min(config['n_qubits'], embed_dim)
+        log.info(f"  - Using pretrained features pipeline (embed_dim={embed_dim}, n_qubits={n_qubits_final})")
+        
+        pipeline = Pipeline([
+            ('scaler', scaler_obj),
+            ('pca', PCA(n_components=n_qubits_final)),
+            ('qml', MulticlassQuantumClassifierDataReuploadingDR(
+                n_qubits=n_qubits_final, 
+                n_layers=config['n_layers'], 
+                steps=config['steps'], 
+                n_classes=n_classes, 
+                verbose=args.verbose,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_fallback_dir=args.checkpoint_fallback_dir,
+                checkpoint_frequency=args.checkpoint_frequency,
+                keep_last_n=args.keep_last_n,
+                max_training_time=args.max_training_time,
+                validation_frequency=args.validation_frequency,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}_pretrained'
+            ))
+        ])
+        X_train = pd.DataFrame(X_train_pretrained, index=X_train.index)
+        X_test = pd.DataFrame(X_test_pretrained, index=X_test.index)
+    else:
+        log.info("  - Using standard pipeline for all data types...")
+        
+        pipeline = Pipeline([
+            ('imputer', MaskedTransformer(SimpleImputer(strategy='median'), fallback='raise')),
+            ('scaler', MaskedTransformer(scaler_obj, fallback='raise')),
+            ('pca', MaskedTransformer(PCA(n_components=config['n_qubits']), fallback='raise')),
+            ('qml', MulticlassQuantumClassifierDataReuploadingDR(
+                n_qubits=config['n_qubits'], 
+                n_layers=config['n_layers'], 
+                steps=config['steps'], 
+                n_classes=n_classes, 
+                verbose=args.verbose,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_fallback_dir=args.checkpoint_fallback_dir,
+                checkpoint_frequency=args.checkpoint_frequency,
+                keep_last_n=args.keep_last_n,
+                max_training_time=args.max_training_time,
+                validation_frequency=args.validation_frequency,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}'
+            ))
+        ])
+        
     # --- Generate and Save Multiclass Predictions ---
     if not args.skip_cross_validation:
         log.info("  - Generating OOF predictions with cross_val_predict...")

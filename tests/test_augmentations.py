@@ -150,7 +150,7 @@ class TestOmicsAugmentation:
     
     def test_augmentation_pipeline_creates_views(self):
         """Test that pipeline creates correct number of views."""
-        aug = OmicsAugmentation('GeneExp')
+        aug = OmicsAugmentation('GeneExpr')
         x = torch.randn(50)
         
         views = aug(x, num_views=2)
@@ -160,7 +160,7 @@ class TestOmicsAugmentation:
     
     def test_augmentation_views_differ(self):
         """Test that different views are actually different."""
-        aug = OmicsAugmentation('GeneExp', use_dropout=True, use_noise=True)
+        aug = OmicsAugmentation('GeneExpr', use_dropout=True, use_noise=True)
         x = torch.randn(50)
         
         views = aug(x, num_views=2)
@@ -204,16 +204,16 @@ class TestGetAugmentationPipeline:
     
     def test_get_known_modality(self):
         """Test getting pipeline for known modality."""
-        aug = get_augmentation_pipeline('GeneExp')
+        aug = get_augmentation_pipeline('GeneExpr')
         
         assert isinstance(aug, OmicsAugmentation)
-        assert aug.modality_name == 'GeneExp'
+        assert aug.modality_name == 'GeneExpr'
         assert aug.use_dropout is True
         assert aug.use_noise is True
     
     def test_get_all_modalities(self):
         """Test getting pipelines for all defined modalities."""
-        modalities = ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'Mut']
+        modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
         
         for modality in modalities:
             aug = get_augmentation_pipeline(modality)

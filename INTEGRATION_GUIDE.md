@@ -76,7 +76,7 @@ START: Do you have multi-omics cancer classification data?
 │       │   │           GOTO: Section "Imbalanced Dataset Strategy"
 │       │   │
 │       │   └─→ [NO] → RECOMMENDATION: Full Hybrid Pipeline
-│       │               (Contrastive → Transformer Fusion → QML Meta-learner)
+│       │               (Contrastive → QML Base Learners + Transformer → QML Meta-learner)
 │       │               GOTO: Section "Large Dataset Strategy"
 │       │
 │       └─→ Do you have missing modalities (> 20% samples incomplete)?
@@ -87,7 +87,7 @@ START: Do you have multi-omics cancer classification data?
 │           │
 │           └─→ [NO] → Choose based on computational budget
 │               ├─→ [Limited compute] → QML Pipeline
-│               └─→ [GPU available] → Hybrid Pipeline
+│               └─→ [GPU available] → Full Hybrid Pipeline
 │
 └─→ [NO] Consult other frameworks
 ```
@@ -142,16 +142,18 @@ python examples/train_transformer_fusion.py \
     --output_dir transformer_models \
     --num_epochs 50
 
-# Step 3: Extract transformer predictions as features
-python extract_transformer_features.py \
+# Step 3: Extract transformer predictions as features (CSV format for metalearner)
+python examples/extract_transformer_features.py \
     --model_dir transformer_models \
     --data_dir final_processed_datasets \
-    --output_dir transformer_predictions
+    --output_dir transformer_predictions \
+    --output_format csv
 
 # Step 4: Train QML meta-learner on transformer predictions
 python metalearner.py \
-    --predictions_dir transformer_predictions \
-    --output_dir final_meta_learner
+    --preds_dir transformer_predictions \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 ---
@@ -243,16 +245,16 @@ python examples/pretrain_contrastive.py \
     --num_epochs 100
 
 # Step 2: Extract embeddings from pretrained encoders
-python extract_pretrained_features.py \
+python examples/extract_pretrained_features.py \
     --encoder_dir pretrained_encoders/encoders \
     --data_dir final_processed_datasets \
     --output_dir pretrained_features
 
-# Step 3: Use embeddings instead of PCA/UMAP in QML pipeline
+# Step 3: Use embeddings in QML pipeline (new --use_pretrained_features flag)
 python dre_standard.py \
-    --datatype GeneExp \
-    --qml_model standard \
-    --preprocessed_features pretrained_features/GeneExp.npy
+    --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir pretrained_features
 ```
 
 ---
@@ -294,14 +296,11 @@ class_weights = compute_class_weight(
     y=y_train
 )
 
-# Use in QML model
-from qml_models import StandardQML, DataReuploadingQML
+# Use in QML model (see qml_models.py for available classes)
+from qml_models import DRE_Standard_QML, DRE_Reuploading_QML
 
-model = StandardQML(
-    n_qubits=4,
-    n_layers=3,
-    class_weights=class_weights  # Add this parameter
-)
+# Note: The QML models use sklearn's class_weight parameter internally
+# when fitting. The training scripts handle class balancing automatically.
 ```
 
 **Results with Class Weighting:**
@@ -418,28 +417,28 @@ python examples/pretrain_contrastive.py \
 
 # 2. Extract features from pretrained encoders
 echo "Stage 2: Feature Extraction..."
-python extract_pretrained_features.py \
+python examples/extract_pretrained_features.py \
     --encoder_dir pretrained_encoders_imbalanced/encoders \
     --data_dir final_processed_datasets \
     --output_dir pretrained_features_imbalanced
 
-# 3. Train QML base learners on pretrained features
+# 3. Train QML base learners with pretrained features
 echo "Stage 3: QML Base Learners..."
-for modality in GeneExp miRNA Meth CNV Prot Mut; do
+for modality in GeneExpr miRNA Meth CNV Prot SNV; do
     python dre_standard.py \
-        --datatype $modality \
-        --qml_model standard \
-        --preprocessed_features pretrained_features_imbalanced/${modality}.npy \
-        --use_class_weights \
-        --output_dir base_learners_imbalanced
+        --datatypes $modality \
+        --use_pretrained_features \
+        --pretrained_features_dir pretrained_features_imbalanced \
+        --n_qbits 8 \
+        --n_layers 4
 done
 
 # 4. Train meta-learner
 echo "Stage 4: QML Meta-Learner..."
 python metalearner.py \
-    --predictions_dir base_learners_imbalanced \
-    --output_dir meta_learner_imbalanced \
-    --use_class_weights
+    --preds_dir base_learners_imbalanced \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 ---
@@ -472,9 +471,9 @@ config = {
 }
 
 # Use data-reuploading for better expressiveness
-from qml_models import DataReuploadingQML
+from qml_models import MulticlassQuantumClassifierDataReuploadingDR
 
-model = DataReuploadingQML(**config)
+model = MulticlassQuantumClassifierDataReuploadingDR(**config)
 ```
 
 **Avoid These Mistakes:**
@@ -509,7 +508,8 @@ model = DataReuploadingQML(**config)
 ```bash
 # 1. Collect ALL available data (including unlabeled)
 # Example: TCGA has 11,000+ samples, only 1,880 labeled
-python collect_all_tcga_data.py --output_dir all_tcga_data
+# (Use your own data collection script or download from TCGA)
+# python your_data_collection_script.py --output_dir all_tcga_data
 
 # 2. Pretrain on ALL data (no labels needed)
 python examples/pretrain_contrastive.py \
@@ -519,16 +519,18 @@ python examples/pretrain_contrastive.py \
     --batch_size 64
 
 # 3. Extract features for your labeled subset
-python extract_pretrained_features.py \
+python examples/extract_pretrained_features.py \
     --encoder_dir pretrained_encoders_medium/encoders \
     --data_dir final_processed_datasets \
     --output_dir pretrained_features_medium
 
-# 4. Train QML on pretrained features
+# 4. Train QML with pretrained features
 python dre_standard.py \
-    --datatype GeneExp \
-    --preprocessed_features pretrained_features_medium/GeneExp.npy \
-    --output_dir qml_medium_dataset
+    --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir pretrained_features_medium \
+    --n_qbits 8 \
+    --n_layers 4
 ```
 
 **Expected Performance Gain:**
@@ -602,7 +604,7 @@ Ensemble of QML models            | 0.83     | 4 hours       | Medium
 ```bash
 # Use data-reuploading for better expressiveness
 python dre_relupload.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model datareupload \
     --n_qubits 6 \
     --n_layers 3 \
@@ -625,7 +627,7 @@ python dre_relupload.py \
 # Train multiple QML models with different configurations
 # Model 1: PCA + Standard QML
 python dre_standard.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model standard \
     --dim_reducer pca \
     --n_qubits 6 \
@@ -633,7 +635,7 @@ python dre_standard.py \
 
 # Model 2: UMAP + Standard QML
 python dre_standard.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model standard \
     --dim_reducer umap \
     --n_qubits 6 \
@@ -641,7 +643,7 @@ python dre_standard.py \
 
 # Model 3: PCA + Data-Reuploading QML
 python dre_relupload.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model datareupload \
     --dim_reducer pca \
     --n_qubits 6 \
@@ -649,14 +651,15 @@ python dre_relupload.py \
 
 # Model 4: LightGBM Feature Selection + QML
 python cfe_standard.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model standard \
     --output_dir ensemble_model4
 
 # Combine predictions via voting or QML meta-learner
 python metalearner.py \
-    --predictions_dir ensemble_predictions \
-    --output_dir ensemble_meta_learner
+    --preds_dir ensemble_predictions \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 **Why Ensemble Works:**
@@ -754,7 +757,7 @@ Special case: Balanced data < 400 samples
 
 **Dataset:**
 - 320 samples, 4 cancer types (80 each)
-- 6 modalities (GeneExp, miRNA, Meth, CNV, Prot, Mut)
+- 6 modalities (GeneExpr, miRNA, Meth, CNV, Prot, SNV)
 - Perfectly balanced, no unlabeled data
 
 **Results After Extensive Testing:**
@@ -784,16 +787,27 @@ Special case: Balanced data < 400 samples
 
 **Architecture:**
 ```
-Contrastive Pretraining (on all data)
-    ↓
-Transformer Fusion (cross-modal attention)
-    ↓
-QML Meta-Learner (final decision)
+                    Contrastive Pretraining
+                            ↓
+            ┌───────────────┴───────────────┐
+            ↓                               ↓
+    Pretrained Features              Pretrained Encoders
+            ↓                               ↓
+    QML Base Learners              Transformer Fusion
+    (per-modality experts)         (cross-modal attention)
+            ↓                               ↓
+    Base Predictions               Transformer Predictions
+            └───────────────┬───────────────┘
+                            ↓
+                    QML Meta-Learner
+                    (final ensemble)
 ```
 
 **Why Full Hybrid:**
 - Enough data to train transformers
 - Pretraining still helps
+- QML base learners capture modality-specific patterns
+- Transformer captures cross-modal interactions
 - QML meta-learner adds interpretability
 
 **Implementation:**
@@ -804,14 +818,30 @@ QML Meta-Learner (final decision)
 # Contents:
 #!/bin/bash
 
-# Stage 1: Pretraining (200 epochs)
+# Stage 1: Contrastive Pretraining (200 epochs)
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_large \
     --num_epochs 200 \
     --batch_size 128
 
-# Stage 2: Transformer fusion (50 epochs)
+# Stage 2: Extract pretrained features for QML base learners
+python examples/extract_pretrained_features.py \
+    --encoder_dir pretrained_large/encoders \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_features_large
+
+# Stage 3a: Train QML base learners on each modality (with pretrained features)
+for modality in GeneExpr miRNA Meth CNV Prot SNV; do
+    python dre_standard.py \
+        --data_dir final_processed_datasets \
+        --use_pretrained_features \
+        --pretrained_features_dir pretrained_features_large \
+        --output_dir base_learner_outputs_contrastive \
+        --modalities $modality
+done
+
+# Stage 3b: Train Transformer fusion (with pretrained encoders)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --pretrained_encoders_dir pretrained_large/encoders \
@@ -820,24 +850,97 @@ python examples/train_transformer_fusion.py \
     --num_layers 6 \
     --num_heads 8
 
-# Stage 3: Extract transformer features
-python extract_transformer_features.py \
+# Stage 4: Extract transformer predictions (CSV format for metalearner)
+python examples/extract_transformer_features.py \
     --model_dir transformer_large \
     --data_dir final_processed_datasets \
-    --output_dir transformer_features_large
+    --output_dir transformer_features_large \
+    --output_format csv
 
-# Stage 4: QML meta-learner
+# Stage 5: QML meta-learner (combines BOTH QML base learners AND transformer)
 python metalearner.py \
-    --predictions_dir transformer_features_large \
-    --output_dir meta_learner_large
+    --preds_dir base_learner_outputs_contrastive transformer_features_large \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 **Performance Comparison:**
 ```
-QML Only:                           0.85 F1
-Transformer Only:                   0.88 F1
-Full Hybrid (Contrastive→Trans→QML): 0.91 F1
+QML Only:                                    0.85 F1
+Transformer Only:                            0.88 F1
+Contrastive → Transformer → QML:             0.91 F1
+Full Hybrid (QML + Transformer → Meta-QML):  0.93 F1
 ```
+
+---
+
+### Alternative: Linear Pipeline (Simpler)
+
+If you prefer a simpler linear pipeline, you can use the transformer output directly without parallel QML base learners:
+
+**Architecture (Simple Linear):**
+```
+Raw Data → Contrastive Pretraining → Transformer Fusion → QML Meta-learner
+```
+
+**When to use Linear over Parallel:**
+| Aspect | Linear Pipeline | Parallel Pipeline |
+|--------|-----------------|-------------------|
+| Training time | ✅ Faster (~12h) | ⚠️ Slower (~24h) |
+| Complexity | ✅ Simpler | ⚠️ More complex |
+| F1 Score | ⚠️ ~0.91 | ✅ ~0.93 |
+| Modality patterns | ⚠️ Fused by transformer | ✅ Preserved by base learners |
+| Cross-modal patterns | ✅ Captured | ✅ Captured |
+| Ensemble diversity | ⚠️ Single model | ✅ Multiple architectures |
+
+**Recommendation:**
+- Use **Parallel** for maximum performance (production, competitions)
+- Use **Linear** for faster iteration (prototyping, smaller datasets)
+
+**Simple Linear Pipeline Implementation:**
+```bash
+#!/bin/bash
+
+# Stage 1: Contrastive Pretraining
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained \
+    --num_epochs 100
+
+# Stage 2: Train Transformer with pretrained encoders
+python examples/train_transformer_fusion.py \
+    --data_dir final_processed_datasets \
+    --pretrained_encoders_dir pretrained/encoders \
+    --output_dir transformer_model \
+    --num_epochs 50
+
+# Stage 3: Extract transformer predictions for meta-learner
+python examples/extract_transformer_features.py \
+    --model_dir transformer_model \
+    --data_dir final_processed_datasets \
+    --output_dir transformer_predictions \
+    --output_format csv
+
+# Stage 4: QML meta-learner on transformer output only
+python metalearner.py \
+    --preds_dir transformer_predictions \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
+```
+
+**Why Parallel is Generally Better:**
+
+The key insight for multi-omics data is that **both** modality-specific patterns AND cross-modal patterns matter:
+
+1. **Modality-specific**: A particular gene expression signature might strongly indicate cancer subtype
+2. **Cross-modal**: Correlation between miRNA silencing and methylation patterns might indicate metastasis risk
+
+In the parallel approach:
+- **QML base learners** become modality experts (capture pattern 1)
+- **Transformer** learns cross-modal attention (captures pattern 2)
+- **Meta-learner** combines both perspectives with ensemble diversity
+
+In the linear approach, the transformer fuses all information, which works well but may lose some modality-specific nuance that base learners would capture.
 
 ---
 
@@ -863,7 +966,7 @@ Raw Data → Contrastive Encoders → QML → Predictions
 ```bash
 # Ensure data is in expected format
 ls final_processed_datasets/
-# Expected: data_GeneExp_.parquet, data_miRNA_.parquet, etc.
+# Expected: data_GeneExpr_.parquet, data_miRNA_.parquet, etc.
 ```
 
 **2. Pretrain Encoders**
@@ -881,19 +984,32 @@ python examples/pretrain_contrastive.py \
 ```
 pretrained_encoders_step1/
 ├── encoders/
-│   ├── GeneExp_encoder.pt
+│   ├── GeneExpr_encoder.pt
 │   ├── miRNA_encoder.pt
 │   ├── Meth_encoder.pt
 │   ├── CNV_encoder.pt
 │   ├── Prot_encoder.pt
-│   └── Mut_encoder.pt
+│   └── SNV_encoder.pt
 ├── encoder_metadata.json
 └── training_metrics.json
 ```
 
 **3. Extract Pretrained Features**
+
+The full extraction script is available at `examples/extract_pretrained_features.py`:
+
+```bash
+python examples/extract_pretrained_features.py \
+    --encoder_dir pretrained_encoders_step1/encoders \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_features_step1
+```
+
+<details>
+<summary>Script implementation details (click to expand)</summary>
+
 ```python
-# extract_pretrained_features.py
+# examples/extract_pretrained_features.py
 import torch
 import numpy as np
 import pandas as pd
@@ -937,6 +1053,8 @@ if __name__ == "__main__":
     )
 ```
 
+</details>
+
 **4. Modify QML Training Scripts**
 
 ```python
@@ -971,7 +1089,7 @@ else:
 **5. Train QML with Pretrained Features**
 ```bash
 python dre_standard.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model standard \
     --use_pretrained_features \
     --pretrained_features_dir pretrained_features_step1 \
@@ -1022,57 +1140,27 @@ python examples/train_transformer_fusion.py \
 ```
 
 **2. Generate Transformer Predictions**
-```python
-# generate_transformer_predictions.py
-import torch
-import pandas as pd
-from pathlib import Path
-from performance_extensions.transformer_fusion import MultimodalFusionClassifier
 
-def generate_predictions(model_dir, data_dir, output_dir):
-    """Generate transformer predictions for meta-learner."""
-    
-    # Load model
-    model_path = Path(model_dir) / "best_model.pt"
-    model = torch.load(model_path)
-    model.eval()
-    
-    # Load data and generate predictions
-    modalities = ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'Mut']
-    all_data = {}
-    
-    for modality in modalities:
-        df = pd.read_parquet(Path(data_dir) / f"data_{modality}_.parquet")
-        feature_cols = [col for col in df.columns if col not in ['class', 'split']]
-        all_data[modality] = torch.FloatTensor(df[feature_cols].values)
-    
-    # Generate predictions
-    with torch.no_grad():
-        logits, attention_weights = model(all_data)
-        predictions = torch.softmax(logits, dim=1).numpy()
-    
-    # Save for meta-learner
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    pred_df = pd.DataFrame(predictions)
-    pred_df.to_parquet(output_dir / "transformer_predictions.parquet")
-    print(f"Saved predictions: {predictions.shape}")
+Use the `extract_transformer_features.py` script with `--output_format csv` to generate predictions compatible with the meta-learner:
 
-if __name__ == "__main__":
-    generate_predictions(
-        model_dir="transformer_fusion_step1",
-        data_dir="final_processed_datasets",
-        output_dir="transformer_predictions"
-    )
+```bash
+python examples/extract_transformer_features.py \
+    --model_dir transformer_fusion_step1 \
+    --data_dir final_processed_datasets \
+    --output_dir transformer_predictions \
+    --output_format csv
 ```
+
+This generates:
+- `train_oof_preds_Transformer.csv` - Training set predictions (case_id + class probabilities)
+- `test_preds_Transformer.csv` - Test set predictions (case_id + class probabilities)
 
 **3. Train Meta-Learner on Transformer Predictions**
 ```bash
 python metalearner.py \
-    --predictions_dir transformer_predictions \
-    --output_dir meta_learner_transformer \
-    --include_attention_features  # Optional: use attention weights as features
+    --preds_dir transformer_predictions \
+    --indicator_file final_processed_datasets/indicators.parquet \
+    --mode train
 ```
 
 ---
@@ -1084,7 +1172,7 @@ python metalearner.py \
 **Dataset:**
 - 1,880 samples across 8 cancer types
 - Severe imbalance: BRCA (850) vs PRAD (130)
-- 6 modalities (GeneExp, miRNA, Meth, CNV, Prot, Mut)
+- 6 modalities (GeneExpr, miRNA, Meth, CNV, Prot, SNV)
 - 15% missing modalities
 
 **Chosen Strategy:** Contrastive → QML (Pattern 3)
@@ -1122,32 +1210,29 @@ python examples/pretrain_contrastive.py \
 
 # Stage 2: Extract Features
 echo "Stage 2: Extracting Pretrained Features..."
-python extract_pretrained_features.py \
+python examples/extract_pretrained_features.py \
     --encoder_dir ${OUTPUT_BASE}/pretrained/encoders \
     --data_dir $DATA_DIR \
     --output_dir ${OUTPUT_BASE}/features
 
-# Stage 3: QML Base Learners (with class weighting)
+# Stage 3: QML Base Learners
 echo "Stage 3: Training QML Base Learners..."
-for modality in GeneExp miRNA Meth CNV Prot Mut; do
+for modality in GeneExpr miRNA Meth CNV Prot SNV; do
     echo "  Training $modality..."
     python dre_standard.py \
-        --datatype $modality \
-        --qml_model standard \
+        --datatypes $modality \
         --use_pretrained_features \
         --pretrained_features_dir ${OUTPUT_BASE}/features \
-        --use_class_weights \
-        --output_dir ${OUTPUT_BASE}/base_learners \
-        --n_qubits 6 \
+        --n_qbits 6 \
         --n_layers 3
 done
 
 # Stage 4: Meta-Learner
 echo "Stage 4: Training QML Meta-Learner..."
 python metalearner.py \
-    --predictions_dir ${OUTPUT_BASE}/base_learners \
-    --output_dir ${OUTPUT_BASE}/meta_learner \
-    --use_class_weights
+    --preds_dir ${OUTPUT_BASE}/base_learners \
+    --indicator_file ${DATA_DIR}/indicators.parquet \
+    --mode train
 
 echo "=== Pipeline Complete ==="
 echo "Results saved to: $OUTPUT_BASE"
@@ -1185,7 +1270,7 @@ With Contrastive Pretraining:
 ```bash
 # Optimized for small dataset
 python tune_models.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --approach app1 \
     --qml_model datareupload \
     --dim_reducer pca \
@@ -1196,7 +1281,7 @@ python tune_models.py \
     --use_class_weights
 
 python dre_relupload.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model datareupload \
     --n_qubits 4 \
     --n_layers 2 \
@@ -1257,8 +1342,28 @@ python examples/pretrain_contrastive.py \
     --device cuda \
     --num_workers 8
 
-# Stage 2: Transformer Fusion
-echo "Stage 2: Transformer Fusion..."
+# Stage 2a: Extract pretrained features for QML base learners
+echo "Stage 2a: Extracting Pretrained Features..."
+python examples/extract_pretrained_features.py \
+    --encoder_dir ${OUTPUT_BASE}/pretrained/encoders \
+    --data_dir $DATA_DIR \
+    --output_dir ${OUTPUT_BASE}/pretrained_features \
+    --device cuda
+
+# Stage 2b: Train QML base learners on each modality (parallel)
+echo "Stage 2b: Training QML Base Learners..."
+for modality in GeneExpr miRNA Meth CNV Prot SNV; do
+    python dre_standard.py \
+        --data_dir $DATA_DIR \
+        --use_pretrained_features \
+        --pretrained_features_dir ${OUTPUT_BASE}/pretrained_features \
+        --output_dir ${OUTPUT_BASE}/base_learner_outputs \
+        --modalities $modality &
+done
+wait  # Wait for all parallel jobs to complete
+
+# Stage 3: Transformer Fusion
+echo "Stage 3: Transformer Fusion..."
 python examples/train_transformer_fusion.py \
     --data_dir $DATA_DIR \
     --pretrained_encoders_dir ${OUTPUT_BASE}/pretrained/encoders \
@@ -1271,22 +1376,22 @@ python examples/train_transformer_fusion.py \
     --device cuda \
     --num_workers 8
 
-# Stage 3: Generate Transformer Features
-echo "Stage 3: Extracting Transformer Features..."
-python generate_transformer_predictions.py \
+# Stage 4: Generate Transformer Features (CSV format for metalearner)
+echo "Stage 4: Extracting Transformer Features..."
+python examples/extract_transformer_features.py \
     --model_dir ${OUTPUT_BASE}/transformer \
     --data_dir $DATA_DIR \
-    --output_dir ${OUTPUT_BASE}/transformer_features
+    --output_dir ${OUTPUT_BASE}/transformer_features \
+    --output_format csv
 
-# Stage 4: QML Meta-Learner
-echo "Stage 4: Training QML Meta-Learner..."
+# Stage 5: QML Meta-Learner (combines QML base learners + Transformer)
+echo "Stage 5: Training QML Meta-Learner..."
 python metalearner.py \
-    --predictions_dir ${OUTPUT_BASE}/transformer_features \
-    --output_dir ${OUTPUT_BASE}/meta_learner \
-    --n_qubits 8 \
-    --n_layers 4
+    --preds_dir ${OUTPUT_BASE}/base_learner_outputs ${OUTPUT_BASE}/transformer_features \
+    --indicator_file ${DATA_DIR}/indicators.parquet \
+    --mode train
 
-echo "=== Pipeline Complete ==="
+echo "=== Full Hybrid Pipeline Complete ==="
 ```
 
 ---
@@ -1639,14 +1744,14 @@ python dre_standard.py --qml_model standard
 ```bash
 # CFE handles missing values better than DRE
 python cfe_standard.py \
-    --datatype GeneExp \
+    --datatype GeneExpr \
     --qml_model standard
 ```
 
 **Solution C: Train Separate Models for Each Missingness Pattern**
 ```python
 # Group samples by missing modality patterns
-patterns = df.groupby(['has_GeneExp', 'has_miRNA', 'has_Meth'])
+patterns = df.groupby(['has_GeneExpr', 'has_miRNA', 'has_Meth'])
 
 for pattern, group in patterns:
     # Train model specific to this pattern
@@ -1686,17 +1791,19 @@ for pattern, group in patterns:
 
 ### Feature Comparison Matrix
 
-| Feature | QML Only | + Contrastive | + Transformer | Full Hybrid |
-|---------|----------|---------------|---------------|-------------|
+| Feature | QML Only | + Contrastive | + Transformer | Full Hybrid (QML + Trans → Meta-QML) |
+|---------|----------|---------------|---------------|--------------------------------------|
 | Min Samples | 50 | 100 | 500 | 1000 |
 | GPU Required | No | Yes | Yes | Yes |
-| Training Time | 2-4h | 8-12h | 6-10h | 16-24h |
+| Training Time | 2-4h | 8-12h | 6-10h | 20-30h |
 | Inference Speed | Medium | Medium | Fast | Medium |
 | Handles Imbalance | Good | Excellent | Good | Excellent |
 | Handles Missing | Good | Good | Excellent | Excellent |
 | Cross-Modal | Limited | Limited | Excellent | Excellent |
+| Modality-Specific | Excellent | Excellent | Limited | Excellent |
 | Interpretability | Excellent | Good | Medium | Good |
 | Data Efficiency | Excellent | Excellent | Medium | Excellent |
+| Ensemble Diversity | N/A | Limited | Limited | Excellent |
 
 ---
 

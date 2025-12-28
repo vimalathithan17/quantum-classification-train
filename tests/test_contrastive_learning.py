@@ -67,7 +67,7 @@ class TestContrastiveMultiOmicsEncoder:
     
     def test_encoder_initialization(self):
         """Test multi-omics encoder initializes correctly."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80, 'Meth': 120}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80, 'Meth': 120}
         
         encoder = ContrastiveMultiOmicsEncoder(
             modality_dims=modality_dims,
@@ -77,17 +77,17 @@ class TestContrastiveMultiOmicsEncoder:
         
         assert len(encoder.encoders) == 3
         assert len(encoder.projection_heads) == 3
-        assert 'GeneExp' in encoder.encoders
+        assert 'GeneExpr' in encoder.encoders
         assert 'Prot' in encoder.encoders
         assert 'Meth' in encoder.encoders
     
     def test_encode_single_modality(self):
         """Test encoding a single modality."""
-        modality_dims = {'GeneExp': 100}
+        modality_dims = {'GeneExpr': 100}
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
         
         x = torch.randn(8, 100)
-        output = encoder.encode(x, 'GeneExp')
+        output = encoder.encode(x, 'GeneExpr')
         
         assert output.shape == (8, 256)
     
@@ -119,7 +119,7 @@ class TestContrastiveMultiOmicsEncoder:
     
     def test_unknown_modality_error(self):
         """Test that unknown modality raises error."""
-        modality_dims = {'GeneExp': 100}
+        modality_dims = {'GeneExpr': 100}
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
         
         x = torch.randn(8, 100)
@@ -210,14 +210,14 @@ class TestContrastiveLearningLoss:
     
     def test_intra_modal_loss_only(self):
         """Test loss with only intra-modal component."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         model = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256, projection_dim=128)
         
         loss_fn = ContrastiveLearningLoss(temperature=0.5, use_cross_modal=False)
         
         # Create augmented views
         augmented_views = {
-            'GeneExp': [torch.randn(8, 100), torch.randn(8, 100)],
+            'GeneExpr': [torch.randn(8, 100), torch.randn(8, 100)],
             'Prot': [torch.randn(8, 80), torch.randn(8, 80)]
         }
         
@@ -232,21 +232,21 @@ class TestContrastiveLearningLoss:
         total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
         
         assert total_loss.item() >= 0
-        assert 'intra_GeneExp' in loss_dict
+        assert 'intra_GeneExpr' in loss_dict
         assert 'intra_Prot' in loss_dict
         # Should not have cross-modal losses
         assert not any('cross' in key for key in loss_dict.keys())
     
     def test_cross_modal_loss_included(self):
         """Test loss with cross-modal component."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
         model = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256, projection_dim=128)
         
         loss_fn = ContrastiveLearningLoss(temperature=0.5, use_cross_modal=True)
         
         # Create augmented views
         augmented_views = {
-            'GeneExp': [torch.randn(8, 100), torch.randn(8, 100)],
+            'GeneExpr': [torch.randn(8, 100), torch.randn(8, 100)],
             'Prot': [torch.randn(8, 80), torch.randn(8, 80)]
         }
         
@@ -262,25 +262,25 @@ class TestContrastiveLearningLoss:
         
         assert total_loss.item() >= 0
         # Should have both intra and cross-modal losses
-        assert 'intra_GeneExp' in loss_dict
+        assert 'intra_GeneExpr' in loss_dict
         assert 'intra_Prot' in loss_dict
         assert any('cross' in key for key in loss_dict.keys())
     
     def test_specified_cross_modal_pairs(self):
         """Test loss with specified cross-modal pairs."""
-        modality_dims = {'GeneExp': 100, 'Prot': 80, 'Meth': 120}
+        modality_dims = {'GeneExpr': 100, 'Prot': 80, 'Meth': 120}
         model = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256, projection_dim=128)
         
-        # Only use GeneExp-Prot pair
+        # Only use GeneExpr-Prot pair
         loss_fn = ContrastiveLearningLoss(
             temperature=0.5,
             use_cross_modal=True,
-            cross_modal_pairs=[('GeneExp', 'Prot')]
+            cross_modal_pairs=[('GeneExpr', 'Prot')]
         )
         
         # Create augmented views for all modalities
         augmented_views = {
-            'GeneExp': [torch.randn(8, 100), torch.randn(8, 100)],
+            'GeneExpr': [torch.randn(8, 100), torch.randn(8, 100)],
             'Prot': [torch.randn(8, 80), torch.randn(8, 80)],
             'Meth': [torch.randn(8, 120), torch.randn(8, 120)]
         }
@@ -296,7 +296,7 @@ class TestContrastiveLearningLoss:
         total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
         
         assert total_loss.item() >= 0
-        # Should have cross_GeneExp_Prot but not other cross-modal pairs
-        assert 'cross_GeneExp_Prot' in loss_dict
-        assert 'cross_GeneExp_Meth' not in loss_dict
+        # Should have cross_GeneExpr_Prot but not other cross-modal pairs
+        assert 'cross_GeneExpr_Prot' in loss_dict
+        assert 'cross_GeneExpr_Meth' not in loss_dict
         assert 'cross_Prot_Meth' not in loss_dict

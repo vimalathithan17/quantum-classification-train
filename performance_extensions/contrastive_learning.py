@@ -9,7 +9,7 @@ Implements self-supervised pretraining using contrastive learning:
 Key Concepts:
 -------------
 Input Dimension (input_dim):
-    - Variable per modality (e.g., GeneExp: 5000, Prot: 200, miRNA: 800)
+    - Variable per modality (e.g., GeneExpr: 5000, Prot: 200, miRNA: 800)
     - Can be ANY value (< 256, = 256, or > 256)
     - Each modality can have a different input dimension
     
@@ -35,13 +35,13 @@ Input (variable dim) → Encoder → Embedding (embed_dim) → Projection Head �
 
 Example:
 --------
->>> modality_dims = {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+>>> modality_dims = {'GeneExpr': 5000, 'Prot': 200, 'miRNA': 800}
 >>> encoder = ContrastiveMultiOmicsEncoder(
 ...     modality_dims=modality_dims,
 ...     embed_dim=256,        # All modalities → 256-dim
 ...     projection_dim=128    # For contrastive loss
 ... )
->>> # GeneExp: (batch, 5000) → (batch, 256) → (batch, 128)
+>>> # GeneExpr: (batch, 5000) → (batch, 256) → (batch, 128)
 >>> # Prot:    (batch, 200)  → (batch, 256) → (batch, 128)
 >>> # miRNA:   (batch, 800)  → (batch, 256) → (batch, 128)
 
@@ -120,7 +120,7 @@ class ModalityEncoder(nn.Module):
         
         Args:
             input_dim: Number of input features (can be any value)
-                      - For GeneExp: typically 500-20000
+                      - For GeneExpr: typically 500-20000
                       - For miRNA: typically 200-1000
                       - For Prot: typically 100-500
                       - Can be less than, equal to, or greater than embed_dim
@@ -222,19 +222,19 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
     Dimension Flow:
         Raw Data → Encoder → Embedding → Projection Head → Projection → Loss
         
-        GeneExp (5000) → (256) → (128) ┐
+        GeneExpr (5000) → (256) → (128) ┐
         miRNA   (800)  → (256) → (128) ├→ Contrastive Loss
         Prot    (200)  → (256) → (128) ┘
         
     After Pretraining:
-        GeneExp (5000) → (256) → [Use for downstream tasks]
+        GeneExpr (5000) → (256) → [Use for downstream tasks]
         miRNA   (800)  → (256) → [Use for downstream tasks]
         Prot    (200)  → (256) → [Use for downstream tasks]
         
     Example:
         >>> # Define modalities with different input dimensions
         >>> modality_dims = {
-        ...     'GeneExp': 5000,  # 5000 gene expression features
+        ...     'GeneExpr': 5000,  # 5000 gene expression features
         ...     'miRNA': 800,     # 800 miRNA features
         ...     'Prot': 200,      # 200 protein features
         ...     'CNV': 1500       # 1500 CNV features
@@ -249,7 +249,7 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         >>> 
         >>> # Process each modality
         >>> x_gene = torch.randn(32, 5000)
-        >>> embedding, projection = encoder(x_gene, 'GeneExp')
+        >>> embedding, projection = encoder(x_gene, 'GeneExpr')
         >>> # embedding: (32, 256) - keep for downstream
         >>> # projection: (32, 128) - use for contrastive loss
     """
@@ -267,7 +267,7 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         
         Args:
             modality_dims: Dictionary mapping modality names to input dimensions
-                          Example: {'GeneExp': 5000, 'Prot': 200, 'miRNA': 800}
+                          Example: {'GeneExpr': 5000, 'Prot': 200, 'miRNA': 800}
                           - Keys: modality names (strings)
                           - Values: input feature dimensions (integers, any size)
                           - Each modality can have a different input dimension

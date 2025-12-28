@@ -637,7 +637,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   # Tune Approach 1 (DRE) with standard QML
-  python tune_models.py --datatype GeneExp --approach 1 --qml_model standard --n_trials 50
+  python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard --n_trials 50
   
   # Tune Approach 2 (CFE) with data-reuploading
   python tune_models.py --datatype CNV --approach 2 --qml_model reuploading --n_trials 100
@@ -649,7 +649,7 @@ def main():
     # Required arguments
     required = parser.add_argument_group('required arguments')
     required.add_argument('--datatype', type=str, required=True,
-                         help='Data modality to tune (e.g., GeneExp, CNV, Meth, miRNA, Prot, Mut)')
+                         help='Data modality to tune (e.g., GeneExpr, CNV, Meth, miRNA, Prot, SNV)')
     required.add_argument('--approach', type=int, required=True, choices=[1, 2],
                          help='Preprocessing approach: 1=DRE (Dimensionality Reduction), 2=CFE (Feature Selection)')
     

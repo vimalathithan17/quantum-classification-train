@@ -44,7 +44,7 @@ def load_multiomics_data(data_dir):
     """
     data_dir = Path(data_dir)
     
-    modalities = ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'Mut']
+    modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
     data = {}
     modality_dims = {}
     
