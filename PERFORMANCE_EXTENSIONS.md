@@ -330,7 +330,7 @@ for batch in dataloader:
     modality_data_list = []  # Will hold encoded features for each modality
     modality_masks = []
     
-    for modality_name in ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'Mut']:
+    for modality_name in ['GeneExp', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']:
         if modality_name in batch and batch[modality_name] is not None:
             # Encode the modality
             encoded = encoders[modality_name](batch[modality_name])
@@ -595,7 +595,7 @@ augmentation_config = {
     'CNV': [feature_dropout],  # Copy number should preserve structure
     'Prot': [feature_dropout, add_noise],
     'miRNA': [feature_dropout],
-    'Mut': [feature_dropout]  # Mutation data is sparse/binary
+    'SNV': [feature_dropout]  # Mutation data is sparse/binary
 }
 ```
 
@@ -1452,7 +1452,7 @@ transformers>=4.30.0  # For reference/components
 - **Methylation (Meth)**: Can be 1,000-27,000+ CpG sites
 - **Copy Number Variation (CNV)**: Often 100-1,000 genomic regions
 - **Protein (Prot)**: Typically 100-500 proteins measured
-- **Mutation (Mut)**: Usually 50-500 mutation features
+- **Mutation (SNV)**: Usually 50-500 mutation features
 
 **Example**: If GeneExp has 5,000 features after preprocessing, the encoder architecture is:
 ```

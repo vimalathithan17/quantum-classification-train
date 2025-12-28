@@ -21,7 +21,7 @@ These can be used independently or combined for maximum performance improvement.
 - Methylation (Meth): 1,000-27,000 features
 - Copy Number Variation (CNV): 100-1,000 features
 - Protein (Prot): 100-500 features
-- Mutation (Mut): 50-500 features
+- Mutation (SNV): 50-500 features
 
 **Output Dimensions** (configurable via `--embed_dim`):
 - Default: 256 dimensions
@@ -205,7 +205,7 @@ The scripts expect parquet files in the data directory with the following naming
 - `data_Meth_.parquet` - Methylation data
 - `data_CNV_.parquet` - Copy number variation data
 - `data_Prot_.parquet` - Protein data
-- `data_Mut_.parquet` - Mutation data
+- `data_SNV_.parquet` - Mutation data
 
 Each parquet file should have:
 - Feature columns (numeric)

@@ -41,7 +41,7 @@ Input: Multi-Omics Data (6 modalities)
 ├── Methylation (Meth)
 ├── Copy Number Variation (CNV)
 ├── Protein (Prot)
-└── Mutation (Mut)
+└── Mutation (SNV)
 
 ↓ [Independent preprocessing per modality]
 
@@ -234,7 +234,7 @@ Each encoder maps from modality-specific input to shared embedding space:
 ├── Meth Encoder:    (batch, 3000) → Deep Network → (batch, 256)
 ├── CNV Encoder:     (batch, 1500) → Deep Network → (batch, 256)
 ├── Prot Encoder:    (batch, 200)  → Deep Network → (batch, 256)
-└── Mut Encoder:     (batch, 500)  → Deep Network → (batch, 256)
+└── SNV Encoder:     (batch, 500)  → Deep Network → (batch, 256)
 
 Why 256-dim? Balance between expressiveness and efficiency (configurable)
 
@@ -303,7 +303,7 @@ Each modality has different input dimensions:
 ├── Meth:    (samples, 3000 features)
 ├── CNV:     (samples, 1500 features)
 ├── Prot:    (samples, 200 features)
-└── Mut:     (samples, 500 features)
+└── SNV:     (samples, 500 features)
 
 ↓
 Data Augmentation (create two views)
@@ -318,7 +318,7 @@ Each encoder maps from its input dimension to shared embedding space:
 ├── Meth Encoder:    (batch, 3000) → (batch, 256)
 ├── CNV Encoder:     (batch, 1500) → (batch, 256)
 ├── Prot Encoder:    (batch, 200)  → (batch, 256)
-└── Mut Encoder:     (batch, 500)  → (batch, 256)
+└── SNV Encoder:     (batch, 500)  → (batch, 256)
 
 ↓  
 Shared Embeddings (256-dim by default, configurable)
@@ -601,7 +601,7 @@ Final Ensemble Prediction
 - GeneExp: Dropout + Noise (tolerates noise)
 - miRNA: Dropout only (more discrete)
 - Meth: Dropout + Masking  
-- CNV, Prot, Mut: Dropout only
+- CNV, Prot, SNV: Dropout only
 
 #### Component 2: Contrastive Learning
 **File:** `performance_extensions/contrastive_learning.py`
