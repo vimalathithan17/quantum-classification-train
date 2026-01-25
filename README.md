@@ -12,6 +12,7 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 | **[DATA_PROCESSING.md](DATA_PROCESSING.md)** | Data pipeline: notebooks, outputs, formats |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Quantum circuits and design decisions |
 | **[PERFORMANCE_EXTENSIONS.md](PERFORMANCE_EXTENSIONS.md)** | Transformer fusion and contrastive learning |
+| **[RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md)** | Memory-constrained pipeline (30GB RAM, 14 qubits) |
 | **[examples/README.md](examples/README.md)** | Running example scripts |
 
 ### Quick Decision Guide

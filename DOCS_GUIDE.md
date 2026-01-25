@@ -11,6 +11,7 @@ Quick reference to find information and choose your approach.
 | **New user** | [README.md](README.md) | 10 min |
 | **Need to choose approach** | [Decision Tree](#decision-tree) below | 5 min |
 | **Ready to integrate extensions** | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) | 20 min |
+| **Memory-constrained (30GB RAM)** | [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md) | 15 min |
 | **Understand data pipeline** | [DATA_PROCESSING.md](DATA_PROCESSING.md) | 15 min |
 
 ---
@@ -64,6 +65,8 @@ README.md                    ← Start here: QML pipeline, setup, commands
 │
 ├── PERFORMANCE_EXTENSIONS.md ← Transformer fusion & contrastive learning specs
 │
+├── RESOURCE_OPTIMIZED_WORKFLOW.md ← Memory-constrained pipeline (30GB RAM, 14 qubits)
+│
 ├── examples/README.md       ← Running example scripts
 │
 └── COMPREHENSIVE_TEST_COVERAGE_SUMMARY.md ← Test inventory
@@ -88,6 +91,10 @@ README.md                    ← Start here: QML pipeline, setup, commands
 ### "I'm getting OOM errors"
 → Reduce batch size, use gradient accumulation, reduce model dimensions.
 → [INTEGRATION_GUIDE.md - Troubleshooting](INTEGRATION_GUIDE.md#issue-1-out-of-memory-during-transformer-training)
+
+### "I have limited RAM (30GB) or limited qubits (14). What do I do?"
+→ Use the resource-optimized workflow with reduced embedding dimensions.
+→ [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md)
 
 ### "What's the data flow through the notebooks?"
 ```
@@ -119,4 +126,5 @@ data-process.ipynb (10 stages)
 2. [ARCHITECTURE.md](ARCHITECTURE.md)
 3. [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)
 4. [PERFORMANCE_EXTENSIONS.md](PERFORMANCE_EXTENSIONS.md)
-5. [DATA_PROCESSING.md](DATA_PROCESSING.md)
+5. [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md)
+6. [DATA_PROCESSING.md](DATA_PROCESSING.md)
