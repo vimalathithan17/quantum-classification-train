@@ -3,6 +3,7 @@ import os
 import joblib
 import json
 import argparse
+import random
 import numpy as np
 from sklearn.model_selection import train_test_split, cross_val_predict, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
@@ -20,6 +21,20 @@ from logging_utils import log
 # Import the corrected multiclass model with the improved "DR" naming
 from qml_models import MulticlassQuantumClassifierDataReuploadingDR
 
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass  # PyTorch not required for QML scripts
+    log.info(f"Random seed set to {seed}")
+
 # --- Configuration ---
 # Directories (configurable via environment variables)
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
@@ -30,6 +45,9 @@ ID_COL = 'case_id'
 LABEL_COL = 'class'
 DATA_TYPES_TO_TRAIN = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+# Initialize random seeds for reproducibility
+set_seed(RANDOM_STATE)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

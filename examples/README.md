@@ -79,13 +79,20 @@ python examples/pretrain_contrastive.py \
     --output_dir pretrained_models/contrastive \
     --num_epochs 100
 
-# With cross-modal contrastive learning
+# With cross-modal contrastive learning (recommended for multi-omics)
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_models/contrastive \
     --num_epochs 100 \
     --use_cross_modal \
-    --temperature 0.5
+    --temperature 0.07
+
+# Skip certain modalities and use mean imputation
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_models/contrastive \
+    --skip_modalities SNV Prot \
+    --impute_strategy mean
 
 # On GPU with larger batch size
 python examples/pretrain_contrastive.py \
@@ -270,8 +277,22 @@ python metalearner.py \
 | `--lr` | `1e-3` | Learning rate |
 | `--temperature` | `0.5` | Temperature for NT-Xent loss |
 | `--use_cross_modal` | `False` | Use cross-modal contrastive loss |
+| `--impute_strategy` | `median` | Strategy for handling NaN values: `median`, `mean`, `zero`, or `drop` |
+| `--skip_modalities` | `None` | List of modalities to skip (e.g., `SNV Prot`) |
+| `--seed` | `42` | Random seed for reproducibility |
+| `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
+
+**Ignored Columns:** The encoder automatically excludes metadata columns: `class`, `split`, `case_id`, `sample_id`, `patient_id`, `barcode`
+
+**Example - Skip modalities and use mean imputation:**
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --skip_modalities SNV Prot \
+    --impute_strategy mean
+```
 
 ### train_transformer_fusion.py
 
@@ -286,6 +307,8 @@ python metalearner.py \
 | `--batch_size` | `32` | Batch size |
 | `--num_epochs` | `50` | Number of epochs |
 | `--lr` | `1e-3` | Learning rate |
+| `--seed` | `42` | Random seed for reproducibility |
+| `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--freeze_encoders` | `False` | Freeze pretrained encoders |
 | `--test_size` | `0.2` | Test set size (fraction) |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
@@ -353,8 +376,21 @@ Each parquet file should have:
 ### Missing Modalities
 
 Missing data files are handled gracefully:
-- Contrastive pretraining: Only available modalities are used
+- Contrastive pretraining: Missing modalities use learnable missing tokens (same as Transformer Fusion)
 - Transformer fusion: Missing modalities are replaced with learnable tokens
+
+**Missing Modality Architecture (both use the same approach):**
+```python
+# Each modality encoder has a learnable missing token
+class ModalityEncoder(nn.Module):
+    def __init__(self, ...):
+        self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
+    
+    def forward(self, x, is_missing=False):
+        if is_missing or x is None:
+            return self.missing_token.expand(batch_size, -1)
+        return self.encoder(x)
+```
 
 ## Monitoring Training
 

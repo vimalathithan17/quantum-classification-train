@@ -15,12 +15,25 @@ Usage:
 import os
 import argparse
 import json
+import random
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from pathlib import Path
+
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    print(f"Random seed set to {seed}")
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 
@@ -78,8 +91,20 @@ def load_multiomics_data(data_dir, modalities=None):
     return data, labels, modality_dims
 
 
-def train_epoch(model, dataloader, optimizer, criterion, device):
-    """Train for one epoch."""
+def train_epoch(model, dataloader, optimizer, criterion, device, max_grad_norm=None):
+    """Train for one epoch.
+    
+    Args:
+        model: Model to train
+        dataloader: Training data loader
+        optimizer: Optimizer
+        criterion: Loss criterion
+        device: Device to train on
+        max_grad_norm: Maximum gradient norm for clipping (None or 0 to disable)
+    
+    Returns:
+        Tuple of (avg_loss, accuracy)
+    """
     model.train()
     total_loss = 0
     correct = 0
@@ -99,6 +124,11 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
+        
+        # Gradient clipping
+        if max_grad_norm is not None and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        
         optimizer.step()
         
         # Track metrics
@@ -236,6 +266,10 @@ def main():
                            help='Number of training epochs (default: 50)')
     train_args.add_argument('--lr', type=float, default=1e-3,
                            help='Learning rate (default: 0.001)')
+    train_args.add_argument('--seed', type=int, default=42,
+                           help='Random seed for reproducibility (default: 42)')
+    train_args.add_argument('--max_grad_norm', type=float, default=1.0,
+                           help='Maximum gradient norm for clipping, 0 to disable (default: 1.0)')
     
     # Checkpoint configuration
     checkpoint_args = parser.add_argument_group('checkpoint configuration')
@@ -263,6 +297,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Set seed for reproducibility
+    set_seed(args.seed)
+    
     # Initialize wandb if requested
     wandb_run = None
     if args.use_wandb:
@@ -278,6 +315,8 @@ def main():
                     'batch_size': args.batch_size,
                     'num_epochs': args.num_epochs,
                     'lr': args.lr,
+                    'seed': args.seed,
+                    'max_grad_norm': args.max_grad_norm,
                     'device': args.device,
                     'freeze_encoders': args.freeze_encoders
                 },
@@ -407,7 +446,10 @@ def main():
     
     for epoch in range(start_epoch, args.num_epochs):
         # Train
-        train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss, train_acc = train_epoch(
+            model, train_loader, optimizer, criterion, device, 
+            max_grad_norm=args.max_grad_norm
+        )
         
         # Evaluate (skip comprehensive metrics during training for speed)
         val_loss, val_acc, _, _, _ = evaluate(model, test_loader, criterion, device)

@@ -155,18 +155,37 @@ class ModalityEncoder(nn.Module):
             nn.Linear(hidden_dim // 2, embed_dim),
             nn.BatchNorm1d(embed_dim)
         )
+        
+        # Learnable token for missing modality
+        self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> torch.Tensor:
         """
-        Encode input features.
+        Encode input features or return missing token.
         
         Args:
-            x: Input tensor of shape (batch, input_dim)
+            x: Input tensor of shape (batch, input_dim), or None if missing
+            is_missing: Whether this modality is missing for all samples
             
         Returns:
             Embeddings of shape (batch, embed_dim)
+            
+        Raises:
+            ValueError: If batch size is 0 or input shape is invalid
         """
-        return self.encoder(x)
+        if is_missing or x is None:
+            # Return learnable missing token
+            batch_size = 1 if x is None else x.shape[0]
+            if batch_size == 0:
+                raise ValueError("Batch size cannot be 0")
+            return self.missing_token.expand(batch_size, -1)
+        else:
+            # Validate input shape
+            if len(x.shape) != 2:
+                raise ValueError(f"Expected 2D tensor (batch, features), got shape {x.shape}")
+            if x.shape[1] != self.input_dim:
+                raise ValueError(f"Expected {self.input_dim} features, got {x.shape[1]}")
+            return self.encoder(x)
 
 
 class ProjectionHead(nn.Module):
@@ -314,13 +333,16 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
             for modality in modality_dims.keys()
         })
     
-    def encode(self, x: torch.Tensor, modality_name: str) -> torch.Tensor:
+    def encode(self, x: Optional[torch.Tensor], modality_name: str, is_missing: bool = False) -> torch.Tensor:
         """
         Encode input for a specific modality (without projection).
         
+        Supports missing modality handling via learnable missing tokens.
+        
         Args:
-            x: Input tensor of shape (batch, features)
+            x: Input tensor of shape (batch, features), or None if missing
             modality_name: Name of the modality
+            is_missing: Whether this modality is missing
             
         Returns:
             Embeddings of shape (batch, embed_dim)
@@ -328,21 +350,25 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         if modality_name not in self.encoders:
             raise ValueError(f"Unknown modality: {modality_name}")
         
-        return self.encoders[modality_name](x)
+        return self.encoders[modality_name](x, is_missing=is_missing)
     
     def forward(
         self,
-        x: torch.Tensor,
+        x: Optional[torch.Tensor],
         modality_name: str,
-        return_projection: bool = True
+        return_projection: bool = True,
+        is_missing: bool = False
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Forward pass through encoder and optionally projection head.
         
+        Supports missing modality handling via learnable missing tokens.
+        
         Args:
-            x: Input tensor of shape (batch, features)
+            x: Input tensor of shape (batch, features), or None if missing
             modality_name: Name of the modality
             return_projection: Whether to return projection for contrastive loss
+            is_missing: Whether this modality is missing
             
         Returns:
             Tuple of (embedding, projection) if return_projection=True
@@ -351,8 +377,8 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         if modality_name not in self.encoders:
             raise ValueError(f"Unknown modality: {modality_name}")
         
-        # Encode
-        embedding = self.encoders[modality_name](x)
+        # Encode (handles missing modality internally)
+        embedding = self.encoders[modality_name](x, is_missing=is_missing)
         
         if return_projection:
             # Project for contrastive learning

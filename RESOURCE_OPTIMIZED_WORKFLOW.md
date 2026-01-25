@@ -17,6 +17,194 @@ This guide addresses integrating the contrastive encoder with QML models under t
 - **UMAP reduction is built into the QML training scripts** (`--dim_reducer umap`) - no separate reduction step needed
 - **All scripts support W&B logging** (`--use_wandb`) and checkpointing
 - **All training scripts support `--resume`** for resuming interrupted training from checkpoints
+- **NaN handling**: Data is imputed during loading (`--impute_strategy median`)
+
+---
+
+## Understanding the Encoder Architecture
+
+### How Encoders Are Created and Saved
+
+**One encoder is created per modality file:**
+
+```
+data_GeneExpr_.parquet → encoder_GeneExpr.pt
+data_miRNA_.parquet    → encoder_miRNA.pt
+data_Meth_.parquet     → encoder_Meth.pt
+data_CNV_.parquet      → encoder_CNV.pt
+data_Prot_.parquet     → encoder_Prot.pt
+data_SNV_.parquet      → encoder_SNV.pt
+```
+
+**Output directory structure:**
+```
+pretrained_models/contrastive/
+├── encoders/
+│   ├── encoder_GeneExpr.pt   # Encoder weights for GeneExpr
+│   ├── encoder_miRNA.pt      # Encoder weights for miRNA
+│   ├── encoder_Meth.pt       # Encoder weights for Meth
+│   ├── encoder_CNV.pt        # Encoder weights for CNV
+│   ├── encoder_Prot.pt       # Encoder weights for Prot
+│   ├── encoder_SNV.pt        # Encoder weights for SNV
+│   └── metadata.json         # Dimensions, config, NaN stats
+├── checkpoints/              # Training checkpoints
+├── training_metrics.json     # Loss history and statistics
+└── loss_curve.png           # Training visualization
+```
+
+### Columns Ignored by Contrastive Encoder
+
+The following columns are automatically excluded from features:
+- `class` - Target label
+- `split` - Train/test split indicator
+- `case_id` - Sample identifier
+- `sample_id` - Sample identifier
+- `patient_id` - Patient identifier
+- `barcode` - Sample barcode
+
+**All other columns are used as input features.**
+
+### NaN Handling
+
+The contrastive encoder handles missing values via imputation:
+
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| `median` (default) | Replace NaN with column median | Most datasets |
+| `mean` | Replace NaN with column mean | Normally distributed data |
+| `zero` | Replace NaN with 0 | Sparse data |
+| `drop` | Drop samples with any NaN | Small NaN percentage |
+
+```bash
+# Example: Use mean imputation
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --impute_strategy mean
+```
+
+### Missing Modality Handling
+
+The contrastive encoder natively handles **missing modalities** using learnable missing tokens:
+
+```python
+# Each modality encoder has a learnable missing token
+class ModalityEncoder(nn.Module):
+    def __init__(self, ...):
+        # Learnable token for missing modality
+        self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
+    
+    def forward(self, x, is_missing=False):
+        if is_missing or x is None:
+            # Return learnable missing token
+            return self.missing_token.expand(batch_size, -1)
+        return self.encoder(x)
+```
+
+**How it works:**
+- When a modality is missing for a sample, the encoder returns a **learnable token** instead of encoded features
+- The missing token is learned during training to represent "no data available"
+- This is the same approach used by Transformer Fusion (`ModalityFeatureEncoder`)
+
+**Use cases:**
+- Some patients have missing modality files entirely
+- Individual samples have missing values (after `--impute_strategy drop` removes rows with NaN)
+- Programmatically excluding modalities during inference
+
+### Skipping Modalities
+
+You can exclude specific modalities from training:
+
+```bash
+# Skip SNV and Prot modalities
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --skip_modalities SNV Prot
+```
+
+---
+
+## Comparing Encoder Performance
+
+Since contrastive learning is **unsupervised**, you can't directly use classification metrics during pretraining. Here are the evaluation strategies:
+
+### Method 1: Compare Loss Statistics (Quick Check)
+
+After training with different configurations (e.g., temperatures), compare `training_metrics.json`:
+
+```bash
+# Compare different temperature runs
+cat pretrained_encoders_temp07/training_metrics.json | python -c "import sys,json; d=json.load(sys.stdin); print(f\"Final: {d['loss_statistics']['final_loss']:.4f}, Best: {d['loss_statistics']['min_loss']:.4f}, Improvement: {d['loss_statistics']['improvement_ratio']*100:.1f}%\")"
+```
+
+**Key metrics:**
+| Metric | Description | Prefer |
+|--------|-------------|--------|
+| `final_loss` | Loss at end of training | Lower |
+| `min_loss` | Best loss achieved | Lower |
+| `improvement_ratio` | (initial - final) / initial | Higher |
+| `best_epoch` | When best loss occurred | Not too early |
+
+### Method 2: Downstream Task Evaluation (Best Practice)
+
+The **gold standard** is to evaluate on your actual classification task:
+
+```bash
+#!/bin/bash
+# compare_encoders.sh - Compare different encoder configurations
+
+for config in "temp07" "temp05" "temp03"; do
+    echo "=== Evaluating encoder: $config ==="
+    
+    # 1. Extract features
+    python examples/extract_pretrained_features.py \
+        --encoder_dir pretrained_encoders_${config}/encoders \
+        --data_dir final_processed_datasets \
+        --output_dir pretrained_features_${config}
+    
+    # 2. Train QML on one modality (quick test)
+    OUTPUT_DIR=test_outputs_${config} python dre_standard.py \
+        --datatypes GeneExpr \
+        --use_pretrained_features \
+        --pretrained_features_dir pretrained_features_${config} \
+        --steps 50 \
+        --skip_cross_validation
+    
+    # 3. Show test metrics
+    echo "Test metrics for $config:"
+    cat test_outputs_${config}/test_metrics_GeneExpr.json
+    echo ""
+done
+```
+
+### Method 3: W&B Comparison (Recommended for Multiple Runs)
+
+Use Weights & Biases to track and compare experiments:
+
+```bash
+# Train with different temperatures, all logged to same project
+for temp in 0.03 0.07 0.1 0.5; do
+    python examples/pretrain_contrastive.py \
+        --data_dir final_processed_datasets \
+        --output_dir pretrained_encoders_temp${temp} \
+        --temperature $temp \
+        --use_cross_modal \
+        --use_wandb \
+        --wandb_project contrastive-comparison \
+        --wandb_run_name temp_${temp}
+done
+```
+
+Then compare in W&B dashboard at `https://wandb.ai/<your-username>/contrastive-comparison`.
+
+### Temperature Guidelines
+
+| Temperature | Effect | Best For |
+|-------------|--------|----------|
+| 0.03-0.07 (low) | Harder negatives, more discriminative | Large batches (64+), distinct classes |
+| 0.1-0.2 (medium) | Balanced | General use |
+| 0.5-1.0 (high) | Softer negatives, smoother gradients | Small batches, noisy data |
+
+**Recommendation:** Start with `--temperature 0.07` for multi-omics data.
 
 ---
 
@@ -78,6 +266,9 @@ python examples/pretrain_contrastive.py \
     --temperature 0.07 \
     --use_cross_modal \
     --checkpoint_interval 10 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_64dim \
     --device cpu
 ```
 
@@ -166,6 +357,9 @@ python examples/pretrain_contrastive.py \
     --temperature 0.07 \
     --use_cross_modal \
     --checkpoint_interval 10 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_256dim \
     --device cpu
 ```
 
@@ -241,6 +435,9 @@ python examples/pretrain_contrastive.py \
     --temperature 0.07 \
     --use_cross_modal \
     --checkpoint_interval 10 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_128dim \
     --device cpu
 ```
 
@@ -387,6 +584,8 @@ python examples/train_transformer_fusion.py \
     --batch_size 32 \
     --num_epochs 50 \
     --lr 1e-3 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
     --device cpu \
     --checkpoint_interval 10 \
     --keep_last_n 3 \
@@ -563,7 +762,10 @@ python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_encoders_64dim \
     --embed_dim 64 --projection_dim 32 --batch_size 64 --num_epochs 100 \
-    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 --device cpu
+    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
+    --seed 42 --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_64dim \
+    --device cpu
 
 # 2. Extract features
 python examples/extract_pretrained_features.py \
@@ -597,7 +799,10 @@ python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_encoders_128dim \
     --embed_dim 128 --projection_dim 64 --batch_size 32 --num_epochs 150 \
-    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 --device cpu
+    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
+    --seed 42 --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_128dim \
+    --device cpu
 
 # 2. Extract features
 python examples/extract_pretrained_features.py \
@@ -631,7 +836,10 @@ python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_encoders_128dim \
     --embed_dim 128 --projection_dim 64 --batch_size 32 --num_epochs 150 \
-    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 --device cpu
+    --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
+    --seed 42 --max_grad_norm 1.0 \
+    --use_wandb --wandb_project qml_hybrid --wandb_run_name contrastive_encoder \
+    --device cpu
 
 # 2. Extract features
 python examples/extract_pretrained_features.py \
@@ -655,7 +863,9 @@ python examples/train_transformer_fusion.py \
     --output_dir transformer_models \
     --pretrained_encoders_dir pretrained_encoders_128dim/encoders \
     --embed_dim 128 --num_heads 8 --num_layers 4 \
-    --batch_size 32 --num_epochs 50 --lr 1e-3 --device cpu \
+    --batch_size 32 --num_epochs 50 --lr 1e-3 \
+    --seed 42 --max_grad_norm 1.0 \
+    --device cpu \
     --checkpoint_interval 10 --keep_last_n 3 \
     --use_wandb --wandb_project qml_hybrid --wandb_run_name transformer_128d
 
@@ -719,6 +929,51 @@ python examples/train_transformer_fusion.py \
 
 ---
 
+## Training Stability & Reproducibility
+
+### Reproducibility
+
+All contrastive pretraining runs use seed-based reproducibility by default:
+
+```bash
+# Use a specific seed for reproducibility
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_encoders \
+    --seed 42
+```
+
+The seed controls:
+- PyTorch random number generator
+- NumPy random number generator
+- Python's `random` module
+- CUDA random state (if available)
+- CuDNN determinism settings
+
+### Gradient Clipping
+
+Gradient clipping prevents training instabilities and exploding gradients:
+
+```bash
+# Use gradient clipping (default: 1.0)
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_encoders \
+    --max_grad_norm 1.0
+
+# Disable gradient clipping
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --output_dir pretrained_encoders \
+    --max_grad_norm 0
+```
+
+### Best Model Tracking
+
+The training loop automatically tracks and saves the best model based on the lowest training loss. The best model is saved to `{output_dir}/checkpoints/best_model.pt` in addition to epoch checkpoints.
+
+---
+
 ## Recommendations
 
 1. **Start with Approach C** (embed_dim=128) - best balance of performance and memory
@@ -730,3 +985,4 @@ python examples/train_transformer_fusion.py \
 7. **Enable W&B logging** with `--use_wandb --wandb_project <project>` for experiment tracking
 8. **Enable checkpointing** with `--checkpoint_frequency` for long training runs
 9. **Use `--resume auto`** when restarting after interruptions to continue from the best available checkpoint
+10. **Use `--seed` for reproducible experiments** - always set a seed when comparing configurations

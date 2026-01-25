@@ -386,8 +386,16 @@ class MultimodalFusionClassifier(nn.Module):
                 if isinstance(encoder, ModalityFeatureEncoder):
                     encoded = encoder(None, is_missing=True)
                 elif hasattr(encoder, 'missing_token'):
-                    # ModalityFeatureEncoder has missing_token
-                    encoded = encoder.missing_token.expand(batch_size, -1)
+                    # Encoder has missing_token (e.g., ModalityEncoder from contrastive_learning)
+                    # Check if it supports is_missing parameter in forward
+                    import inspect
+                    sig = inspect.signature(encoder.forward)
+                    if 'is_missing' in sig.parameters:
+                        encoded = encoder(None, is_missing=True)
+                        if encoded.shape[0] == 1:
+                            encoded = encoded.expand(batch_size, -1)
+                    else:
+                        encoded = encoder.missing_token.expand(batch_size, -1)
                 else:
                     # Fallback: use zeros
                     encoded = torch.zeros(batch_size, self.embed_dim, device=next(encoder.parameters()).device)
@@ -476,6 +484,16 @@ class MultimodalFusionClassifier(nn.Module):
                 encoder = self.encoders[modality]
                 if isinstance(encoder, ModalityFeatureEncoder):
                     encoded = encoder(None, is_missing=True)
+                elif hasattr(encoder, 'missing_token'):
+                    # Encoder has missing_token (e.g., ModalityEncoder from contrastive_learning)
+                    import inspect
+                    sig = inspect.signature(encoder.forward)
+                    if 'is_missing' in sig.parameters:
+                        encoded = encoder(None, is_missing=True)
+                        if encoded.shape[0] == 1:
+                            encoded = encoded.expand(batch_size, -1)
+                    else:
+                        encoded = encoder.missing_token.expand(batch_size, -1)
                 else:
                     encoded = torch.zeros(batch_size, self.embed_dim, device=next(encoder.parameters()).device)
                 

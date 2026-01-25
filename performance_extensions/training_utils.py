@@ -159,6 +159,7 @@ def pretrain_contrastive(
     log_interval: int = 10,
     checkpoint_dir: Optional[Path] = None,
     checkpoint_interval: int = 10,
+    max_grad_norm: Optional[float] = 1.0,
     verbose: bool = True,
     wandb_run = None
 ) -> Dict[str, List[float]]:
@@ -176,6 +177,7 @@ def pretrain_contrastive(
         log_interval: How often to log (in batches)
         checkpoint_dir: Directory to save checkpoints
         checkpoint_interval: Save checkpoint every N epochs
+        max_grad_norm: Maximum gradient norm for clipping (None or 0 to disable)
         verbose: Whether to print progress
         wandb_run: Weights & Biases run object for logging (optional)
         
@@ -186,6 +188,7 @@ def pretrain_contrastive(
     model.train()
     
     metrics = {'epoch_losses': [], 'batch_losses': []}
+    best_loss = float('inf')
     
     if checkpoint_dir is not None:
         checkpoint_dir = Path(checkpoint_dir)
@@ -217,6 +220,11 @@ def pretrain_contrastive(
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
+            
+            # Gradient clipping
+            if max_grad_norm is not None and max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            
             optimizer.step()
             
             # Track metrics
@@ -257,7 +265,21 @@ def pretrain_contrastive(
             except Exception:
                 pass  # Non-fatal, continue training
         
-        # Save checkpoint
+        # Save best model
+        if checkpoint_dir is not None and avg_epoch_loss < best_loss:
+            best_loss = avg_epoch_loss
+            best_model_path = checkpoint_dir / "best_model.pt"
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_epoch_loss,
+            }, best_model_path)
+            
+            if verbose:
+                print(f"  New best model saved (loss: {best_loss:.4f})")
+        
+        # Save periodic checkpoint
         if checkpoint_dir is not None and (epoch + 1) % checkpoint_interval == 0:
             checkpoint_path = checkpoint_dir / f"contrastive_epoch_{epoch+1}.pt"
             torch.save({
@@ -269,6 +291,9 @@ def pretrain_contrastive(
             
             if verbose:
                 print(f"Saved checkpoint: {checkpoint_path}")
+    
+    # Add best_loss to metrics
+    metrics['best_loss'] = best_loss
     
     return metrics
 

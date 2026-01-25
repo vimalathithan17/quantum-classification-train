@@ -37,6 +37,55 @@ class TestModalityEncoder:
         
         assert output is not None
         assert not torch.isnan(output).any()
+    
+    def test_encoder_missing_modality_is_missing_flag(self):
+        """Test encoder returns missing token when is_missing=True."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        x = torch.randn(8, 100)
+        
+        output = encoder(x, is_missing=True)
+        
+        assert output.shape == (8, 256)
+        # All rows should be the same (expanded missing token)
+        assert torch.allclose(output[0], output[1])
+    
+    def test_encoder_missing_modality_none_input(self):
+        """Test encoder returns missing token when x=None."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        
+        output = encoder(None, is_missing=True)
+        
+        assert output.shape == (1, 256)
+    
+    def test_encoder_has_missing_token(self):
+        """Test encoder has learnable missing_token parameter."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        
+        assert hasattr(encoder, 'missing_token')
+        assert encoder.missing_token.shape == (1, 256)
+        assert encoder.missing_token.requires_grad
+    
+    def test_encoder_batch_size_zero_error(self):
+        """Test encoder raises error for batch_size=0."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        x = torch.randn(0, 100)  # Empty batch
+        
+        with pytest.raises(ValueError, match="Batch size cannot be 0"):
+            encoder(x, is_missing=True)
+    
+    def test_encoder_invalid_input_shape(self):
+        """Test encoder raises error for invalid input shape."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        
+        # Wrong feature dimension
+        x = torch.randn(8, 50)  # 50 features instead of 100
+        with pytest.raises(ValueError, match="Expected 100 features"):
+            encoder(x)
+        
+        # Wrong tensor dimension
+        x_3d = torch.randn(8, 10, 100)  # 3D instead of 2D
+        with pytest.raises(ValueError, match="Expected 2D tensor"):
+            encoder(x_3d)
 
 
 class TestProjectionHead:
@@ -126,6 +175,35 @@ class TestContrastiveMultiOmicsEncoder:
         
         with pytest.raises(ValueError, match="Unknown modality"):
             encoder.encode(x, 'UnknownModality')
+    
+    def test_encode_missing_modality(self):
+        """Test encoding with missing modality returns missing token."""
+        modality_dims = {'GeneExpr': 100, 'Prot': 80}
+        encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
+        
+        x = torch.randn(8, 100)
+        output = encoder.encode(x, 'GeneExpr', is_missing=True)
+        
+        assert output.shape == (8, 256)
+        # All rows should be the same (expanded missing token)
+        assert torch.allclose(output[0], output[1])
+    
+    def test_forward_missing_modality(self):
+        """Test forward pass with missing modality."""
+        modality_dims = {'Prot': 80}
+        encoder = ContrastiveMultiOmicsEncoder(
+            modality_dims,
+            embed_dim=256,
+            projection_dim=128
+        )
+        
+        x = torch.randn(8, 80)
+        embedding, projection = encoder(x, 'Prot', return_projection=True, is_missing=True)
+        
+        assert embedding.shape == (8, 256)
+        assert projection.shape == (8, 128)
+        # Embedding should be missing token (all rows same)
+        assert torch.allclose(embedding[0], embedding[1])
 
 
 class TestNTXentLoss:

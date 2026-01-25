@@ -11,11 +11,24 @@ Usage:
 
 import os
 import argparse
+import random
 import numpy as np
 import pandas as pd
 import torch
 import torch.optim as optim
 from pathlib import Path
+
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    print(f"Random seed set to {seed}")
 
 # Add parent directory to path for imports
 import sys
@@ -33,41 +46,97 @@ from performance_extensions.training_utils import (
 )
 
 
-def load_multiomics_data(data_dir):
+def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median'):
     """
-    Load multi-omics data from parquet files.
+    Load multi-omics data from parquet files with NaN handling.
     
     Args:
         data_dir: Directory containing data files
+        skip_modalities: List of modality names to skip (e.g., ['SNV', 'Prot'])
+        impute_strategy: How to handle NaN values:
+            - 'median': Replace NaN with column median (default)
+            - 'mean': Replace NaN with column mean
+            - 'zero': Replace NaN with 0
+            - 'drop': Drop samples with any NaN (may reduce dataset size)
         
     Returns:
-        Dict mapping modality names to numpy arrays
+        Tuple of (data_dict, modality_dims, nan_stats)
+        - data_dict: Dict mapping modality names to numpy arrays (NaN-free)
+        - modality_dims: Dict mapping modality names to feature dimensions
+        - nan_stats: Dict with NaN statistics per modality
     """
     data_dir = Path(data_dir)
     
-    modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
+    all_modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
+    skip_modalities = set(skip_modalities or [])
+    
     data = {}
     modality_dims = {}
+    nan_stats = {}
     
-    for modality in modalities:
+    # Metadata columns to exclude from features
+    METADATA_COLS = {'class', 'split', 'case_id', 'sample_id', 'patient_id', 'barcode'}
+    
+    for modality in all_modalities:
+        if modality in skip_modalities:
+            print(f"Skipping {modality} (excluded via --skip_modalities)")
+            continue
+            
         file_path = data_dir / f"data_{modality}_.parquet"
         
         if file_path.exists():
             print(f"Loading {modality} from {file_path}")
             df = pd.read_parquet(file_path)
             
-            # Extract features (exclude 'class' and 'split' columns)
-            feature_cols = [col for col in df.columns if col not in ['class', 'split']]
+            # Extract features (exclude metadata columns)
+            feature_cols = [col for col in df.columns if col.lower() not in METADATA_COLS and col not in METADATA_COLS]
             features = df[feature_cols].values.astype(np.float32)
+            
+            # Track NaN statistics
+            nan_mask = np.isnan(features)
+            nan_count = np.sum(nan_mask)
+            nan_samples = np.sum(np.any(nan_mask, axis=1))
+            nan_features = np.sum(np.any(nan_mask, axis=0))
+            
+            nan_stats[modality] = {
+                'total_nan': int(nan_count),
+                'samples_with_nan': int(nan_samples),
+                'features_with_nan': int(nan_features),
+                'nan_percentage': float(nan_count / features.size * 100) if features.size > 0 else 0.0
+            }
+            
+            if nan_count > 0:
+                print(f"  Found {nan_count} NaN values ({nan_stats[modality]['nan_percentage']:.2f}%) in {nan_samples} samples")
+                
+                # Handle NaN values
+                if impute_strategy == 'median':
+                    col_medians = np.nanmedian(features, axis=0)
+                    nan_indices = np.where(nan_mask)
+                    features[nan_indices] = col_medians[nan_indices[1]]
+                    print(f"  Imputed with column medians")
+                elif impute_strategy == 'mean':
+                    col_means = np.nanmean(features, axis=0)
+                    nan_indices = np.where(nan_mask)
+                    features[nan_indices] = col_means[nan_indices[1]]
+                    print(f"  Imputed with column means")
+                elif impute_strategy == 'zero':
+                    features = np.nan_to_num(features, nan=0.0)
+                    print(f"  Replaced NaN with zeros")
+                elif impute_strategy == 'drop':
+                    valid_rows = ~np.any(nan_mask, axis=1)
+                    features = features[valid_rows]
+                    print(f"  Dropped {nan_samples} samples with NaN, {features.shape[0]} remaining")
+                else:
+                    raise ValueError(f"Unknown impute_strategy: {impute_strategy}")
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
             
-            print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
+            print(f"  Final: {features.shape[0]} samples with {features.shape[1]} features")
         else:
             print(f"Warning: {file_path} not found, skipping {modality}")
     
-    return data, modality_dims
+    return data, modality_dims, nan_stats
 
 
 def main():
@@ -77,6 +146,9 @@ def main():
         epilog="""Examples:
   # Basic pretraining with defaults
   python pretrain_contrastive.py --data_dir final_processed_datasets
+  
+  # Skip certain modalities
+  python pretrain_contrastive.py --data_dir data --skip_modalities SNV Prot
   
   # With cross-modal contrastive learning
   python pretrain_contrastive.py --data_dir data --use_cross_modal --temperature 0.07
@@ -91,6 +163,11 @@ def main():
                           help='Directory with parquet data files (default: final_processed_datasets)')
     data_args.add_argument('--output_dir', type=str, default='pretrained_models/contrastive',
                           help='Output directory for pretrained encoders (default: pretrained_models/contrastive)')
+    data_args.add_argument('--skip_modalities', nargs='+', type=str, default=None,
+                          help='Modalities to skip (e.g., --skip_modalities SNV Prot)')
+    data_args.add_argument('--impute_strategy', type=str, default='median',
+                          choices=['median', 'mean', 'zero', 'drop'],
+                          help='How to handle NaN values: median, mean, zero, or drop (default: median)')
     
     # Model architecture
     model_args = parser.add_argument_group('model architecture')
@@ -124,6 +201,10 @@ def main():
                             help='Save checkpoint every N epochs (default: 10)')
     system_args.add_argument('--resume', type=str, default=None,
                             help='Path to checkpoint file to resume training from')
+    system_args.add_argument('--seed', type=int, default=42,
+                            help='Random seed for reproducibility (default: 42)')
+    system_args.add_argument('--max_grad_norm', type=float, default=1.0,
+                            help='Max gradient norm for clipping (default: 1.0, set to 0 to disable)')
     
     # Logging configuration
     log_args = parser.add_argument_group('logging configuration')
@@ -135,6 +216,9 @@ def main():
                          help='W&B run name')
     
     args = parser.parse_args()
+    
+    # Set random seed for reproducibility
+    set_seed(args.seed)
     
     # Initialize wandb if requested
     wandb_run = None
@@ -152,7 +236,11 @@ def main():
                     'lr': args.lr,
                     'temperature': args.temperature,
                     'use_cross_modal': args.use_cross_modal,
-                    'device': args.device
+                    'device': args.device,
+                    'seed': args.seed,
+                    'max_grad_norm': args.max_grad_norm,
+                    'impute_strategy': args.impute_strategy,
+                    'skip_modalities': args.skip_modalities
                 },
                 reinit=True
             )
@@ -169,9 +257,13 @@ def main():
         print(f"  {arg}: {value}")
     print()
     
-    # Load data
+    # Load data with NaN handling
     print("Loading multi-omics data...")
-    data, modality_dims = load_multiomics_data(args.data_dir)
+    data, modality_dims, nan_stats = load_multiomics_data(
+        args.data_dir, 
+        skip_modalities=args.skip_modalities,
+        impute_strategy=args.impute_strategy
+    )
     
     if not data:
         print("Error: No data files found!")
@@ -179,7 +271,17 @@ def main():
     
     print(f"\nLoaded {len(data)} modalities:")
     for modality, dim in modality_dims.items():
-        print(f"  {modality}: {dim} features")
+        nan_info = nan_stats.get(modality, {})
+        nan_pct = nan_info.get('nan_percentage', 0.0)
+        if nan_pct > 0:
+            print(f"  {modality}: {dim} features (had {nan_pct:.1f}% NaN, imputed with {args.impute_strategy})")
+        else:
+            print(f"  {modality}: {dim} features (no NaN)")
+    
+    # Note: One encoder is created per modality file
+    print(f"\n📦 Encoders to be created: {len(data)} (one per modality)")
+    for modality in data.keys():
+        print(f"  - encoder_{modality}.pt")
     
     # Create dataset (no labels needed for pretraining)
     print("\nCreating dataset with augmentation...")
@@ -264,6 +366,7 @@ def main():
         log_interval=10,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=args.checkpoint_interval,
+        max_grad_norm=args.max_grad_norm if args.max_grad_norm > 0 else None,
         verbose=True,
         wandb_run=wandb_run
     )
@@ -285,7 +388,10 @@ def main():
             'lr': args.lr,
             'temperature': args.temperature,
             'use_cross_modal': args.use_cross_modal,
-            'final_loss': metrics['epoch_losses'][-1]
+            'final_loss': metrics['epoch_losses'][-1],
+            'impute_strategy': args.impute_strategy,
+            'skipped_modalities': args.skip_modalities or [],
+            'nan_statistics': nan_stats
         }
     )
     

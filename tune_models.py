@@ -1,6 +1,7 @@
 # Final Universal Tuning Script (`tune_models.py`)
 import pandas as pd
 import numpy as np
+import random
 import optuna
 import argparse
 import os
@@ -39,11 +40,29 @@ from qml_models import (
     ConditionalMulticlassQuantumClassifierDataReuploadingFS
 )
 
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass  # PyTorch not required for QML scripts
+    log.info(f"Random seed set to {seed}")
+
+
 # Directories configurable via environment
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
 TUNING_RESULTS_DIR = os.environ.get('TUNING_RESULTS_DIR', 'tuning_results')
 OPTUNA_DB_PATH = os.environ.get('OPTUNA_DB_PATH', './optuna_studies.db')
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+# Initialize random seeds for reproducibility
+set_seed(RANDOM_STATE)
 
 # Global flag for interruption handling
 interrupted = False

@@ -5,6 +5,7 @@ import optuna
 import joblib
 import json
 import shutil
+import random
 from sklearn.model_selection import train_test_split
 # No feature scaling required for meta-learner (base learner outputs are probabilities)
 from sklearn.metrics import (
@@ -28,11 +29,28 @@ from qml_models import (
     GatedMulticlassQuantumClassifierDataReuploadingDR,
 )
 
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    _np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass  # PyTorch not required for QML scripts
+    log.info(f"Random seed set to {seed}")
+
 # Environment-configurable directories
 ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 TUNING_JOURNAL_FILE = os.environ.get('TUNING_JOURNAL_FILE', 'tuning_journal.log')
 RANDOM_STATE = int(os.environ.get('RANDOM_STATE', 42))
+
+# Initialize random seeds for reproducibility
+set_seed(RANDOM_STATE)
 
 
 def _per_class_specificity(cm_arr):
