@@ -21,11 +21,61 @@ from .augmentations import get_augmentation_pipeline
 
 __all__ = [
     'MultiOmicsDataset',
+    'collate_augmented_multiomics',
     'pretrain_contrastive',
     'finetune_supervised',
     'save_pretrained_encoders',
     'load_pretrained_encoders'
 ]
+
+
+def collate_augmented_multiomics(batch):
+    """
+    Custom collate function for augmented multi-omics data.
+    
+    When apply_augmentation=True in MultiOmicsDataset, each sample's data_dict
+    contains lists of augmented view tensors. The default PyTorch collate
+    won't correctly handle this structure. This function properly batches
+    the augmented views.
+    
+    Args:
+        batch: List of (data_dict, label) tuples from MultiOmicsDataset
+        
+    Returns:
+        Tuple of (collated_data_dict, labels_tensor)
+        - collated_data_dict: Dict mapping modality to list of batched tensors
+          (one batched tensor per augmented view)
+        - labels_tensor: Batched labels or None if all labels are None
+    """
+    data_dicts, labels = zip(*batch)
+    
+    collated_data = {}
+    modalities = data_dicts[0].keys()
+    
+    for modality in modalities:
+        first_sample = data_dicts[0][modality]
+        
+        # Check if this is augmented (list of tensors) or non-augmented (single tensor)
+        if isinstance(first_sample, list):
+            # Augmented: list of view tensors
+            n_views = len(first_sample)
+            
+            # Stack each view across batch
+            collated_data[modality] = [
+                torch.stack([d[modality][v] for d in data_dicts])
+                for v in range(n_views)
+            ]
+        else:
+            # Non-augmented: single tensor per sample
+            collated_data[modality] = torch.stack([d[modality] for d in data_dicts])
+    
+    # Handle labels
+    if labels[0] is None:
+        labels_tensor = None
+    else:
+        labels_tensor = torch.tensor(labels, dtype=torch.long)
+    
+    return collated_data, labels_tensor
 
 
 class MultiOmicsDataset(Dataset):
@@ -105,9 +155,12 @@ def pretrain_contrastive(
     loss_fn: ContrastiveLearningLoss,
     device: torch.device,
     num_epochs: int = 100,
+    start_epoch: int = 0,
     log_interval: int = 10,
     checkpoint_dir: Optional[Path] = None,
-    verbose: bool = True
+    checkpoint_interval: int = 10,
+    verbose: bool = True,
+    wandb_run = None
 ) -> Dict[str, List[float]]:
     """
     Pretrain model with contrastive learning.
@@ -119,9 +172,12 @@ def pretrain_contrastive(
         loss_fn: Contrastive loss function
         device: Device to train on
         num_epochs: Number of epochs
+        start_epoch: Starting epoch (for resuming training)
         log_interval: How often to log (in batches)
         checkpoint_dir: Directory to save checkpoints
+        checkpoint_interval: Save checkpoint every N epochs
         verbose: Whether to print progress
+        wandb_run: Weights & Biases run object for logging (optional)
         
     Returns:
         Dictionary of training metrics
@@ -135,7 +191,7 @@ def pretrain_contrastive(
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0.0
         epoch_loss_dict = {}
         
@@ -191,8 +247,18 @@ def pretrain_contrastive(
             for key, vals in epoch_loss_dict.items():
                 print(f"  {key}: {np.mean(vals):.4f}")
         
+        # Log to wandb
+        if wandb_run is not None:
+            try:
+                log_dict = {'epoch': epoch + 1, 'loss': avg_epoch_loss}
+                for key, vals in epoch_loss_dict.items():
+                    log_dict[key] = np.mean(vals)
+                wandb_run.log(log_dict)
+            except Exception:
+                pass  # Non-fatal, continue training
+        
         # Save checkpoint
-        if checkpoint_dir is not None and (epoch + 1) % 10 == 0:
+        if checkpoint_dir is not None and (epoch + 1) % checkpoint_interval == 0:
             checkpoint_path = checkpoint_dir / f"contrastive_epoch_{epoch+1}.pt"
             torch.save({
                 'epoch': epoch,
@@ -360,7 +426,8 @@ def save_pretrained_encoders(
     metadata.update({
         'modality_dims': model.modality_dims,
         'embed_dim': model.embed_dim,
-        'modality_names': list(model.encoders.keys())
+        'modality_names': list(model.encoders.keys()),
+        'hidden_dim': 512  # Default hidden_dim used in ModalityEncoder
     })
     
     metadata_path = save_dir / "metadata.json"
@@ -427,13 +494,14 @@ def load_pretrained_encoders(
         
         input_dim = metadata['modality_dims'][modality]
         embed_dim = metadata['embed_dim']
+        hidden_dim = metadata.get('hidden_dim', 512)  # Default if not saved in older metadata
         
         if not isinstance(input_dim, int) or input_dim <= 0:
             raise ValueError(f"Invalid input_dim for {modality}: {input_dim}")
         if not isinstance(embed_dim, int) or embed_dim <= 0:
             raise ValueError(f"Invalid embed_dim: {embed_dim}")
         
-        encoder = ModalityEncoder(input_dim, embed_dim)
+        encoder = ModalityEncoder(input_dim, embed_dim, hidden_dim=hidden_dim)
         
         # Load weights
         try:

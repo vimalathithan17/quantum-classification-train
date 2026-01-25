@@ -152,7 +152,7 @@ python examples/extract_transformer_features.py \
 # Step 4: Train QML meta-learner on transformer predictions
 python metalearner.py \
     --preds_dir transformer_predictions \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -437,7 +437,7 @@ done
 echo "Stage 4: QML Meta-Learner..."
 python metalearner.py \
     --preds_dir base_learners_imbalanced \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -604,15 +604,11 @@ Ensemble of QML models            | 0.83     | 4 hours       | Medium
 ```bash
 # Use data-reuploading for better expressiveness
 python dre_relupload.py \
-    --datatype GeneExpr \
-    --qml_model datareupload \
-    --n_qubits 6 \
+    --datatypes GeneExpr \
+    --n_qbits 6 \
     --n_layers 3 \
-    --dim_reducer umap \
-    --learning_rate 0.01 \
-    --max_iterations 100 \
-    --batch_size 16 \
-    --output_dir qml_datareupload_320samples
+    --steps 100 \
+    --verbose
 ```
 
 **Why This Works:**
@@ -627,38 +623,33 @@ python dre_relupload.py \
 # Train multiple QML models with different configurations
 # Model 1: PCA + Standard QML
 python dre_standard.py \
-    --datatype GeneExpr \
-    --qml_model standard \
+    --datatypes GeneExpr \
     --dim_reducer pca \
-    --n_qubits 6 \
-    --output_dir ensemble_model1
+    --n_qbits 6 \
+    --verbose
 
-# Model 2: UMAP + Standard QML
+# Model 2: UMAP + Standard QML  
 python dre_standard.py \
-    --datatype GeneExpr \
-    --qml_model standard \
+    --datatypes GeneExpr \
     --dim_reducer umap \
-    --n_qubits 6 \
-    --output_dir ensemble_model2
+    --n_qbits 6 \
+    --verbose
 
-# Model 3: PCA + Data-Reuploading QML
+# Model 3: Data-Reuploading QML
 python dre_relupload.py \
-    --datatype GeneExpr \
-    --qml_model datareupload \
-    --dim_reducer pca \
-    --n_qubits 6 \
-    --output_dir ensemble_model3
+    --datatypes GeneExpr \
+    --n_qbits 6 \
+    --verbose
 
 # Model 4: LightGBM Feature Selection + QML
 python cfe_standard.py \
-    --datatype GeneExpr \
-    --qml_model standard \
-    --output_dir ensemble_model4
+    --datatypes GeneExpr \
+    --verbose
 
 # Combine predictions via voting or QML meta-learner
 python metalearner.py \
     --preds_dir ensemble_predictions \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -833,12 +824,10 @@ python examples/extract_pretrained_features.py \
 
 # Stage 3a: Train QML base learners on each modality (with pretrained features)
 for modality in GeneExpr miRNA Meth CNV Prot SNV; do
-    python dre_standard.py \
-        --data_dir final_processed_datasets \
+    OUTPUT_DIR=base_learner_outputs_contrastive python dre_standard.py \
         --use_pretrained_features \
         --pretrained_features_dir pretrained_features_large \
-        --output_dir base_learner_outputs_contrastive \
-        --modalities $modality
+        --datatypes $modality
 done
 
 # Stage 3b: Train Transformer fusion (with pretrained encoders)
@@ -860,7 +849,7 @@ python examples/extract_transformer_features.py \
 # Stage 5: QML meta-learner (combines BOTH QML base learners AND transformer)
 python metalearner.py \
     --preds_dir base_learner_outputs_contrastive transformer_features_large \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -924,7 +913,7 @@ python examples/extract_transformer_features.py \
 # Stage 4: QML meta-learner on transformer output only
 python metalearner.py \
     --preds_dir transformer_predictions \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -1089,11 +1078,10 @@ else:
 **5. Train QML with Pretrained Features**
 ```bash
 python dre_standard.py \
-    --datatype GeneExpr \
-    --qml_model standard \
+    --datatypes GeneExpr \
     --use_pretrained_features \
     --pretrained_features_dir pretrained_features_step1 \
-    --output_dir base_learners_pretrained
+    --verbose
 ```
 
 **6. Evaluate Improvement**
@@ -1159,7 +1147,7 @@ This generates:
 ```bash
 python metalearner.py \
     --preds_dir transformer_predictions \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -1231,7 +1219,7 @@ done
 echo "Stage 4: Training QML Meta-Learner..."
 python metalearner.py \
     --preds_dir ${OUTPUT_BASE}/base_learners \
-    --indicator_file ${DATA_DIR}/indicators.parquet \
+    --indicator_file ${DATA_DIR}/indicator_features.parquet \
     --mode train
 
 echo "=== Pipeline Complete ==="
@@ -1271,21 +1259,19 @@ With Contrastive Pretraining:
 # Optimized for small dataset
 python tune_models.py \
     --datatype GeneExpr \
-    --approach app1 \
-    --qml_model datareupload \
+    --approach 1 \
+    --qml_model reuploading \
     --dim_reducer pca \
-    --n_qubits 4 \
-    --n_layers 2 \
-    --n_trials 50 \
-    --cv_folds 5 \
-    --use_class_weights
+    --min_qbits 4 \
+    --max_qbits 8 \
+    --min_layers 2 \
+    --max_layers 3 \
+    --n_trials 50
 
 python dre_relupload.py \
-    --datatype GeneExpr \
-    --qml_model datareupload \
-    --n_qubits 4 \
-    --n_layers 2 \
-    --output_dir small_dataset_results
+    --datatypes GeneExpr \
+    --n_qbits 4 \
+    --n_layers 2
 ```
 
 **Key Configurations:**
@@ -1294,12 +1280,11 @@ python dre_relupload.py \
 config = {
     'n_qubits': 4,              # Small circuit
     'n_layers': 2,              # Shallow to avoid overfitting
-    'learning_rate': 0.01,      # Higher LR
-    'max_iterations': 50,       # Fewer iterations
-    'batch_size': 8,            # Small batches
-    'cv_folds': 5,              # Stratified K-fold
-    'use_class_weights': True,  # Even if balanced
-    'early_stopping': True,     # Stop when val loss increases
+    'learning_rate': 0.01,      # Higher LR (use --learning_rate in metalearner)
+    'steps': 50,                # Fewer iterations
+    'batch_size': 8,            # Small batches (for contrastive pretraining)
+    'cv_folds': 3,              # Hardcoded 3-fold CV in scripts
+    'early_stopping': True,     # Implemented via best_loss tracking
     'patience': 10              # Early stopping patience
 }
 ```
@@ -1353,12 +1338,10 @@ python examples/extract_pretrained_features.py \
 # Stage 2b: Train QML base learners on each modality (parallel)
 echo "Stage 2b: Training QML Base Learners..."
 for modality in GeneExpr miRNA Meth CNV Prot SNV; do
-    python dre_standard.py \
-        --data_dir $DATA_DIR \
+    OUTPUT_DIR=${OUTPUT_BASE}/base_learner_outputs python dre_standard.py \
         --use_pretrained_features \
         --pretrained_features_dir ${OUTPUT_BASE}/pretrained_features \
-        --output_dir ${OUTPUT_BASE}/base_learner_outputs \
-        --modalities $modality &
+        --datatypes $modality &
 done
 wait  # Wait for all parallel jobs to complete
 
@@ -1388,7 +1371,7 @@ python examples/extract_transformer_features.py \
 echo "Stage 5: Training QML Meta-Learner..."
 python metalearner.py \
     --preds_dir ${OUTPUT_BASE}/base_learner_outputs ${OUTPUT_BASE}/transformer_features \
-    --indicator_file ${DATA_DIR}/indicators.parquet \
+    --indicator_file ${DATA_DIR}/indicator_features.parquet \
     --mode train
 
 echo "=== Full Hybrid Pipeline Complete ==="
@@ -1724,8 +1707,8 @@ X_train_sample, _, y_train_sample, _ = train_test_split(
 
 **Solution C: Use Standard QML Instead of Data-Reuploading**
 ```bash
-# Faster but less expressive
-python dre_standard.py --qml_model standard
+# Faster but less expressive (use dre_standard.py instead of dre_relupload.py)
+python dre_standard.py --verbose
 ```
 
 ---
@@ -1744,8 +1727,8 @@ python dre_standard.py --qml_model standard
 ```bash
 # CFE handles missing values better than DRE
 python cfe_standard.py \
-    --datatype GeneExpr \
-    --qml_model standard
+    --datatypes GeneExpr \
+    --verbose
 ```
 
 **Solution C: Train Separate Models for Each Missingness Pattern**

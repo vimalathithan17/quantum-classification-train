@@ -99,6 +99,119 @@ If you don't set these, the defaults will be used:
 
 ---
 
+## 📊 Weights & Biases (W&B) Setup
+
+All training scripts support optional experiment tracking with [Weights & Biases](https://wandb.ai/). This section explains how to set up W&B and use it with this codebase.
+
+### Step 1: Create a W&B Account
+
+1. Go to [https://wandb.ai/](https://wandb.ai/) and click **Sign Up**
+2. Create an account (free tier is sufficient for most use cases)
+3. After signing in, you'll see your dashboard
+
+### Step 2: Get Your API Key
+
+1. Click on your profile icon (top right) → **Settings**
+2. Scroll to **API keys** section
+3. Copy your API key (it looks like a long string of letters and numbers)
+
+### Step 3: Install and Login
+
+```bash
+# Install wandb (already in requirements.txt)
+pip install wandb
+
+# Login with your API key (one-time setup)
+wandb login
+# Paste your API key when prompted
+```
+
+Alternatively, set the API key as an environment variable:
+```bash
+export WANDB_API_KEY=your_api_key_here
+```
+
+### Step 4: Understanding Project and Run Names
+
+W&B organizes experiments hierarchically:
+
+| Concept | Description | Example |
+|---------|-------------|---------|
+| **Entity** | Your username or team name | `john_doe` |
+| **Project** | A collection of related experiments | `qml_cancer_classification` |
+| **Run** | A single training execution | `dre_standard_CNV_20260124` |
+
+**`--wandb_project`**: Groups related experiments together. Use consistent project names across related runs:
+- `qml_base_learners` - for base learner training
+- `qml_metalearner` - for meta-learner experiments
+- `qml_tuning` - for hyperparameter tuning
+- `cancer_classification_full` - for complete pipeline runs
+
+**`--wandb_run_name`**: Identifies a specific training run. Good naming conventions:
+- Include the script type: `dre_standard_`, `cfe_relupload_`, `metalearner_`
+- Include the data type: `CNV`, `GeneExpr`, `miRNA`
+- Include key parameters: `q8_l3` (8 qubits, 3 layers)
+- Example: `dre_standard_CNV_q8_l3_exp01`
+
+If not specified, W&B auto-generates a random run name like `wandering-sunset-42`.
+
+### Step 5: Using W&B with Training Scripts
+
+```bash
+# Basic usage with project name
+python dre_standard.py --use_wandb --wandb_project qml_base_learners
+
+# With custom run name
+python dre_standard.py \
+    --datatypes CNV \
+    --use_wandb \
+    --wandb_project qml_base_learners \
+    --wandb_run_name dre_standard_CNV_exp01
+
+# Hyperparameter tuning with W&B
+python tune_models.py \
+    --datatype GeneExpr \
+    --approach 1 \
+    --n_trials 50 \
+    --use_wandb \
+    --wandb_project qml_tuning
+
+# Meta-learner with W&B
+python metalearner.py \
+    --preds_dir base_learner_outputs_app1_standard \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
+    --mode train \
+    --use_wandb \
+    --wandb_project qml_metalearner \
+    --wandb_run_name metalearner_final_v1
+```
+
+### W&B Dashboard Features
+
+After running experiments, visit [https://wandb.ai/](https://wandb.ai/) to:
+- **View training curves**: Loss, accuracy, F1 scores over time
+- **Compare runs**: Side-by-side comparison of different hyperparameters
+- **Track hyperparameters**: Automatic logging of all configuration
+- **System metrics**: GPU/CPU usage, memory consumption
+- **Artifacts**: Model checkpoints (when saved to W&B)
+
+### Offline Mode
+
+For environments without internet access:
+```bash
+export WANDB_MODE=offline
+python dre_standard.py --use_wandb --wandb_project my_project
+
+# Later, sync offline runs when connected:
+wandb sync ./wandb/offline-run-*
+```
+
+### Disabling W&B
+
+Simply omit the `--use_wandb` flag - training proceeds normally without W&B.
+
+---
+
 ## Full workflow (commands)
 
 Below are concrete example commands for each step. Commands assume you are in the repository root and have the environment variables configured as needed.
@@ -158,8 +271,11 @@ Notes:
 - Both approaches use a 2-step funnel: imputation/preservation → reduction/selection
 - The number of training steps for tuning defaults to 100 (can be changed with `--steps`).
 - Optimizes weighted F1 score (handles class imbalance better than accuracy)
+- Comprehensive metrics computed per fold: accuracy, precision, recall, F1, specificity (macro/weighted)
 
-Output: one or more JSON files saved to `tuning_results/` (default). These contain best parameters including the 2-step funnel configuration.
+Output:
+- Best parameters JSON saved to `tuning_results/` (default)
+- Per-trial per-fold metrics saved to `tuning_results/trial_N/fold_M_metrics.json`
 
 Quick inspection: there is a small helper script included to view saved parameter files:
 
@@ -245,6 +361,9 @@ Outputs (per data type):
 - `train_oof_preds_<datatype>.csv` (used to train meta-learner)
 - `test_preds_<datatype>.csv`
 - model artifacts: `pipeline_<datatype>.joblib` or `selector_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
+- `confusion_matrix_<datatype>.csv` - raw confusion matrix
+- `confusion_matrix_<datatype>_normalized.csv` - row-normalized confusion matrix
+- `test_metrics_<datatype>.json` - comprehensive metrics (accuracy, precision, recall, F1, specificity - macro/weighted)
 
 ### 4) Curate the "best-of" predictions for the meta-learner
 
@@ -572,7 +691,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 2) `tune_models.py`
 	- `--datatype` (str, required): Data type to tune (e.g., `CNV`, `Meth`, `Prot`).
 	- `--approach` (int, required): `1` or `2` selecting Approach 1 (Dimensionality Reduction Encoding) or Approach 2 (Conditional Feature Encoding).
-	- `--dim_reducer` (str, default `pca`): `pca` or `umap` (used by Approach 1).
+	- `--dim_reducer` (str, default `umap`): `pca` or `umap` (used by Approach 1).
 	- `--qml_model` (str, default `standard`): `standard` or `reuploading`.
 	- `--scalers` (str, default `smr`): String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). E.g., 'sm' for Standard and MinMax.
 	- `--n_trials` (int, default 9): Number of NEW Optuna trials to run (if study exists, these are added to existing trials).
@@ -606,7 +725,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
 	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frac` (float, default 0.1): Fraction of training data for internal validation during QML training.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name.
@@ -633,7 +754,9 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
 	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frac` (float, default 0.1): Fraction of training data for internal validation during QML training.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name.
@@ -656,6 +779,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--checkpoint_frequency` (int, default 50): Save checkpoint every N steps.
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
+	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
 	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
@@ -684,7 +808,7 @@ Environment variables relevant to CLI behavior
 |---|---|---|---|---|---|
 | `--datatype` | str | Yes | - | - | Data type (e.g., `CNV`, `Meth`). |
 | `--approach` | int | Yes | - | `1`, `2` | `1` for Classical+QML, `2` for Conditional QML. |
-| `--dim_reducer` | str | No | `pca` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
+| `--dim_reducer` | str | No | `umap` | `pca`, `umap` | Dimensionality reducer for Approach 1. |
 | `--qml_model` | str | No | `standard` | `standard`, `reuploading` | QML circuit type. |
 | `--n_trials` | int | No | `9` | - | Number of NEW Optuna trials to run (mutually exclusive with `--total_trials`). |
 | `--total_trials` | int | No | `None` | - | Target TOTAL number of trials (computes remaining if study exists, mutually exclusive with `--n_trials`). |
@@ -731,7 +855,9 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_t
 | `--checkpoint_frequency` | int | No | `50` | - | Save checkpoint every N steps. |
 | `--keep_last_n` | int | No | `3` | - | Keep last N checkpoints. |
 | `--checkpoint_fallback_dir` | str | No | `None` | - | Fallback directory for checkpoints if primary is read-only. |
+| `--resume` | str | No | `None` | `best`, `latest`, `auto` | Resume from checkpoint: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). |
 | `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
+| `--validation_frac` | float | No | `0.1` | - | Fraction of training data for internal validation during QML training. |
 | `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging. |
 | `--wandb_project` | str | No | `None` | - | W&B project name. |
 | `--wandb_run_name` | str | No | `None` | - | W&B run name. |

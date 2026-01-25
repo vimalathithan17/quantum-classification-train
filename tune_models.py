@@ -25,6 +25,7 @@ from sklearn.metrics import (
     confusion_matrix,
     classification_report
 )
+from utils.metrics_utils import compute_metrics
 import numpy as _np  # local alias to avoid shadowing pennylane.numpy
 
 # Import the centralized logger
@@ -182,20 +183,6 @@ def safe_load_parquet(file_path):
     except Exception as e:
         log.error(f"Error loading {file_path}: {e}")
         return None
-
-def _per_class_specificity(cm_arr):
-    """Compute per-class specificity from confusion matrix."""
-    K = cm_arr.shape[0]
-    speci = _np.zeros(K, dtype=float)
-    total = cm_arr.sum()
-    for i in range(K):
-        TP = cm_arr[i, i]
-        FP = cm_arr[:, i].sum() - TP
-        FN = cm_arr[i, :].sum() - TP
-        TN = total - (TP + FP + FN)
-        denom = TN + FP
-        speci[i] = float(TN / denom) if denom > 0 else 0.0
-    return speci
 
 
 def _log_fold_metrics_to_wandb(trial_wandb_run, fold, acc, f1_weighted, f1_macro, 
@@ -361,8 +348,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     # Build scaler only for Approach 1; for Approach 2 keep scaler as None
     if args.approach == 1:
         scaler = get_scaler(params['scaler'])
-        # wrap scaler so it ignores all-zero rows during fit/transform
-        scaler = MaskedTransformer(scaler)
+        # Note: scaler will be wrapped with MaskedTransformer when added to steps_list
     else:
         scaler = None
     steps = args.steps  # Use steps from command-line arguments
@@ -437,28 +423,29 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
                     log.warning(f"pipeline.predict_proba failed: {e}")
                     y_val_proba = None
 
-            # compute metrics
-            acc = float(accuracy_score(y_val, y_val_pred))
-            prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val, y_val_pred, average='macro', zero_division=0)
-            prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val, y_val_pred, average='weighted', zero_division=0)
-            cm = confusion_matrix(y_val, y_val_pred)
-
-            # per-class specificity
-            per_class_spec = _per_class_specificity(cm)
-            spec_macro = float(_np.mean(per_class_spec))
-            # weighted specificity (by support)
-            support = _np.bincount(y_val)
-            spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
+            # compute metrics using centralized compute_metrics
+            n_classes = len(_np.unique(y_val))
+            metrics = compute_metrics(y_val, y_val_pred, n_classes)
+            acc = float(metrics['accuracy'])
+            f1_macro = float(metrics['f1_macro'])
+            f1_weighted = float(metrics['f1_weighted'])
+            prec_macro = float(metrics['precision_macro'])
+            prec_weighted = float(metrics['precision_weighted'])
+            rec_macro = float(metrics['recall_macro'])
+            rec_weighted = float(metrics['recall_weighted'])
+            spec_macro = float(metrics['specificity_macro'])
+            spec_weighted = float(metrics['specificity_weighted'])
+            cm = metrics['confusion_matrix']
 
             # pack fold metrics
             fold_metrics = {
                 'accuracy': acc,
-                'precision_macro': float(prec_macro),
-                'recall_macro': float(rec_macro),
-                'f1_macro': float(f1_macro),
-                'precision_weighted': float(prec_weighted),
-                'recall_weighted': float(rec_weighted),
-                'f1_weighted': float(f1_weighted),
+                'precision_macro': prec_macro,
+                'recall_macro': rec_macro,
+                'f1_macro': f1_macro,
+                'precision_weighted': prec_weighted,
+                'recall_weighted': rec_weighted,
+                'f1_weighted': f1_weighted,
                 'specificity_macro': spec_macro,
                 'specificity_weighted': spec_weighted,
                 'confusion_matrix': cm.tolist(),
@@ -562,24 +549,28 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
                         log.warning(f"predict_proba not available or failed for fold {fold+1}: {e}")
                         y_val_proba = None
 
-            # compute metrics (same as above)
-            acc = float(accuracy_score(y_val.values, y_val_pred))
-            prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val.values, y_val_pred, average='macro', zero_division=0)
-            prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val.values, y_val_pred, average='weighted', zero_division=0)
-            cm = confusion_matrix(y_val.values, y_val_pred)
-            per_class_spec = _per_class_specificity(cm)
-            spec_macro = float(_np.mean(per_class_spec))
-            support = _np.bincount(y_val.values)
-            spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
+            # compute metrics using centralized compute_metrics
+            n_classes = len(_np.unique(y_val.values))
+            metrics = compute_metrics(y_val.values, y_val_pred, n_classes)
+            acc = float(metrics['accuracy'])
+            f1_macro = float(metrics['f1_macro'])
+            f1_weighted = float(metrics['f1_weighted'])
+            prec_macro = float(metrics['precision_macro'])
+            prec_weighted = float(metrics['precision_weighted'])
+            rec_macro = float(metrics['recall_macro'])
+            rec_weighted = float(metrics['recall_weighted'])
+            spec_macro = float(metrics['specificity_macro'])
+            spec_weighted = float(metrics['specificity_weighted'])
+            cm = metrics['confusion_matrix']
 
             fold_metrics = {
                 'accuracy': acc,
-                'precision_macro': float(prec_macro),
-                'recall_macro': float(rec_macro),
-                'f1_macro': float(f1_macro),
-                'precision_weighted': float(prec_weighted),
-                'recall_weighted': float(rec_weighted),
-                'f1_weighted': float(f1_weighted),
+                'precision_macro': prec_macro,
+                'recall_macro': rec_macro,
+                'f1_macro': f1_macro,
+                'precision_weighted': prec_weighted,
+                'recall_weighted': rec_weighted,
+                'f1_weighted': f1_weighted,
                 'specificity_macro': spec_macro,
                 'specificity_weighted': spec_weighted,
                 'confusion_matrix': cm.tolist(),
@@ -657,8 +648,8 @@ def main():
     model_args = parser.add_argument_group('model configuration')
     model_args.add_argument('--qml_model', type=str, default='standard', choices=['standard', 'reuploading'],
                            help='QML circuit type (default: standard)')
-    model_args.add_argument('--dim_reducer', type=str, default='pca', choices=['pca', 'umap'],
-                           help='Dimensionality reducer for Approach 1 (default: pca)')
+    model_args.add_argument('--dim_reducer', type=str, default='umap', choices=['pca', 'umap'],
+                           help='Dimensionality reducer for Approach 1/DRE (default: umap)')
     
     # Tuning configuration
     tuning_args = parser.add_argument_group('tuning parameters')

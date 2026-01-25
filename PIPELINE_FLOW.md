@@ -51,7 +51,7 @@ RAW TCGA DATA → DATA PROCESSING → CONTRASTIVE PRETRAINING → PARALLEL BRANC
 
 **Output:** 
 - Processed parquet files: data_GeneExpr_.parquet, data_miRNA_.parquet, etc.
-- Indicator file: indicators.parquet
+- Indicator file: indicator_features.parquet
 - Each file contains: case_id, class (cancer type), split (train/test), features
 
 ---

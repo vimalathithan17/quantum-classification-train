@@ -6,7 +6,6 @@ import joblib
 import json
 import numpy as np
 import argparse
-import os
 
 # Import the centralized logger
 from logging_utils import log
@@ -132,7 +131,40 @@ def make_single_prediction(model_dir, new_patient_data_dir):
         log.warning(f"Meta features missing expected columns; filling with zeros: {missing_cols}")
     meta_features_df = meta_features_df.reindex(columns=meta_columns_order, fill_value=0.0)
     
-    final_prediction_encoded = meta_learner.predict(meta_features_df.values)
+    # Separate base prediction columns from indicator columns for the gated meta-learner.
+    # Indicators follow pattern 'is_missing_{datatype}'; base predictions are all others.
+    indicator_cols = [c for c in meta_columns_order if c.startswith('is_missing_')]
+    base_cols = [c for c in meta_columns_order if c not in indicator_cols]
+    
+    X_base = meta_features_df[base_cols].values
+    
+    # Build a mask matching the shape of X_base. For each base prediction column,
+    # find the corresponding indicator (inverted: indicator=1 -> missing -> mask=0).
+    # Default to 1.0 (present) if no indicator found.
+    mask_columns = []
+    indicator_map = {ic.replace('is_missing_', '').lower(): ic for ic in indicator_cols}
+    for col in base_cols:
+        # Extract datatype from pattern 'pred_{datatype}_{class...}'
+        parts = col.split('_')
+        if len(parts) >= 2:
+            datatype = parts[1].lower()
+        else:
+            datatype = col.lower()
+        
+        ind_col = indicator_map.get(datatype)
+        if ind_col is not None and ind_col in meta_features_df.columns:
+            # is_missing=1 means data was missing -> mask=0 (exclude)
+            # is_missing=0 means data was present -> mask=1 (include)
+            mask_columns.append(1.0 - meta_features_df[ind_col].values)
+        else:
+            # Default to present (include)
+            mask_columns.append(np.ones(len(meta_features_df)))
+    
+    X_mask = np.column_stack(mask_columns) if mask_columns else np.ones_like(X_base)
+    
+    log.info(f"Meta-learner input: X_base shape={X_base.shape}, X_mask shape={X_mask.shape}")
+    
+    final_prediction_encoded = meta_learner.predict((X_base, X_mask))
     final_prediction_label = le.inverse_transform(final_prediction_encoded)
     
     return final_prediction_label[0]

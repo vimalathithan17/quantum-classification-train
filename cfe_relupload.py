@@ -8,8 +8,8 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
-from utils.masked_transformers import MaskedTransformer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from utils.metrics_utils import compute_metrics
 
 # Import the centralized logger
 from logging_utils import log
@@ -116,6 +116,8 @@ train_args.add_argument('--max_training_time', type=float, default=None,
                        help='Max training hours (overrides --steps)')
 train_args.add_argument('--validation_frequency', type=int, default=10,
                        help='Validation frequency (default: 10 steps)')
+train_args.add_argument('--validation_frac', type=float, default=0.1,
+                       help='Fraction of training data for validation during QML training (default: 0.1)')
 
 checkpoint_args = parser.add_argument_group('checkpointing')
 checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
@@ -124,6 +126,9 @@ checkpoint_args.add_argument('--keep_last_n', type=int, default=3,
                             help='Checkpoints to keep (default: 3)')
 checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
                             help='Alternative checkpoint directory')
+checkpoint_args.add_argument('--resume', type=str, default=None,
+                            choices=['best', 'latest', 'auto'],
+                            help='Resume from checkpoint: best, latest, or auto (default: None)')
 
 log_args = parser.add_argument_group('logging')
 log_args.add_argument('--verbose', action='store_true',
@@ -179,8 +184,9 @@ for data_type in data_types:
     if args.n_qbits is not None:
         config['n_qubits'] = args.n_qbits
     elif 'n_qubits' not in config:
-        config['n_qubits'] = 10  # default for CFE approaches
-        log.info(f"Using default n_qubits: {config['n_qubits']}")
+        # Unify default with number of classes for consistency
+        config['n_qubits'] = n_classes
+        log.info(f"Using default n_qubits (equal to n_classes): {config['n_qubits']}")
     
     if args.n_layers is not None:
         config['n_layers'] = args.n_layers
@@ -249,7 +255,7 @@ for data_type in data_types:
             # Use raw features (with NaNs) for LightGBM feature importance so
             # LightGBM can use native missing-value handling. Do NOT impute or
             # scale here for selection; preserve missingness signal.
-            n_qubits = config.get('n_qubits', 10)
+            n_qubits = config.get('n_qubits', n_classes)  # fallback to n_classes for consistency
 
             log.info("      - Using LightGBM importance-based selection on raw data (no impute/scale)...")
             # Lightweight LightGBM: fewer trees, feature subsampling, no verbose output
@@ -277,7 +283,7 @@ for data_type in data_types:
             X_val_scaled = X_val_filled
 
             # 3. Train model on this fold and predict on the validation part
-            checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if args.max_training_time else None
+            checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if (args.max_training_time or args.resume) else None
             model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
@@ -287,9 +293,11 @@ for data_type in data_types:
                 keep_last_n=args.keep_last_n,
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
+                validation_frac=args.validation_frac,
+                resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_fold{fold_idx}'
+                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_fold{fold+1}'
             )
             model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
             val_preds = model.predict_proba((X_val_scaled, is_missing_val))
@@ -311,7 +319,7 @@ for data_type in data_types:
     log.info("  - Training final model on full training data...")
     # Re-run feature selection on the full training data using raw data
     # (with NaNs) so LightGBM can incorporate missingness when computing importances.
-    n_qubits = config.get('n_qubits', 10)
+    n_qubits = config.get('n_qubits', n_classes)  # fallback to n_classes for consistency
     log.info("    - Using LightGBM importance-based selection for final model on raw data (no impute/scale)...")
     lgb_final = LGBMClassifier(n_estimators=50, learning_rate=0.1, feature_fraction=0.7,
                                n_jobs=1, random_state=RANDOM_STATE, verbosity=-1)
@@ -331,7 +339,7 @@ for data_type in data_types:
     final_scaler = None
     X_train_scaled = X_train_filled
     
-    checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
+    checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if (args.max_training_time or args.resume) else None
     final_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
@@ -341,9 +349,11 @@ for data_type in data_types:
                 keep_last_n=args.keep_last_n,
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
+                validation_frac=args.validation_frac,
+                resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_fold{fold_idx}'
+                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_final'
             )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
@@ -377,6 +387,18 @@ for data_type in data_types:
         acc = accuracy_score(y_test, test_preds_labels)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
+        # Compute comprehensive metrics
+        metrics = compute_metrics(y_test, test_preds_labels, n_classes)
+        log.info(f"Comprehensive Metrics for {data_type}:")
+        log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
+        log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
+        log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
+        log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
+        log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
+        log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
+        log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
+        log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
+        
         report = classification_report(y_test, test_preds_labels, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
@@ -397,5 +419,22 @@ for data_type in data_types:
         cmn_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}_normalized.csv')
         cmn_df.to_csv(cmn_path)
         log.info(f"Saved normalized confusion matrix to {cmn_path}")
+        
+        # Save comprehensive metrics to JSON
+        metrics_json = {
+            'accuracy': float(metrics['accuracy']),
+            'precision_macro': float(metrics['precision_macro']),
+            'precision_weighted': float(metrics['precision_weighted']),
+            'recall_macro': float(metrics['recall_macro']),
+            'recall_weighted': float(metrics['recall_weighted']),
+            'f1_macro': float(metrics['f1_macro']),
+            'f1_weighted': float(metrics['f1_weighted']),
+            'specificity_macro': float(metrics['specificity_macro']),
+            'specificity_weighted': float(metrics['specificity_weighted'])
+        }
+        metrics_path = os.path.join(OUTPUT_DIR, f'test_metrics_{data_type}.json')
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_json, f, indent=2)
+        log.info(f"Saved comprehensive metrics to {metrics_path}")
     except Exception as e:
         log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")

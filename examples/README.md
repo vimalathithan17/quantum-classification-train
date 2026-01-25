@@ -99,6 +99,7 @@ python examples/pretrain_contrastive.py \
 **Output:**
 - Pretrained encoders saved to `pretrained_models/contrastive/encoders/`
 - Training metrics saved to `pretrained_models/contrastive/training_metrics.json`
+  - Includes loss statistics: min/max/mean/std, best epoch, improvement ratio
 - Loss curve plot saved to `pretrained_models/contrastive/loss_curve.png`
 
 ### 2. Transformer Fusion Training (Option 1)
@@ -134,7 +135,12 @@ python examples/train_transformer_fusion.py \
 
 **Output:**
 - Best model saved to `transformer_models/best_model.pt`
+- Config saved to `transformer_models/config.json`
 - Training history saved to `transformer_models/training_history.json`
+  - Includes comprehensive final metrics: accuracy, precision, recall, F1, specificity (macro/weighted)
+- Test metrics saved to `transformer_models/test_metrics.json`
+- Confusion matrix saved to `transformer_models/confusion_matrix.csv`
+- Normalized confusion matrix saved to `transformer_models/confusion_matrix_normalized.csv`
 
 ## Complete Workflow
 
@@ -219,12 +225,10 @@ python examples/extract_pretrained_features.py \
 
 # Step 2b: Train QML base learners on each modality
 for modality in GeneExpr miRNA Meth CNV Prot SNV; do
-    python dre_standard.py \
-        --data_dir final_processed_datasets \
+    OUTPUT_DIR=base_learner_outputs python dre_standard.py \
         --use_pretrained_features \
         --pretrained_features_dir pretrained_features \
-        --output_dir base_learner_outputs \
-        --modalities $modality
+        --datatypes $modality
 done
 
 # Step 3: Train transformer fusion with pretrained encoders
@@ -247,7 +251,7 @@ python examples/extract_transformer_features.py \
 # Step 5: Train QML meta-learner on BOTH QML base learners and transformer
 python metalearner.py \
     --preds_dir base_learner_outputs transformer_predictions \
-    --indicator_file final_processed_datasets/indicators.parquet \
+    --indicator_file final_processed_datasets/indicator_features.parquet \
     --mode train
 ```
 
@@ -266,6 +270,7 @@ python metalearner.py \
 | `--lr` | `1e-3` | Learning rate |
 | `--temperature` | `0.5` | Temperature for NT-Xent loss |
 | `--use_cross_modal` | `False` | Use cross-modal contrastive loss |
+| `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
 
 ### train_transformer_fusion.py
@@ -283,6 +288,7 @@ python metalearner.py \
 | `--lr` | `1e-3` | Learning rate |
 | `--freeze_encoders` | `False` | Freeze pretrained encoders |
 | `--test_size` | `0.2` | Test set size (fraction) |
+| `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
 
 ### extract_pretrained_features.py

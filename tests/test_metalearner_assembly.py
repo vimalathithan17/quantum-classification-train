@@ -43,12 +43,14 @@ def test_assemble_meta_data_and_mask(tmp_path, monkeypatch):
     df_test.to_csv(preds_dir / 'test_preds_miRNA.csv', index=False)
 
     # Create indicator parquet file with class labels and indicator column
+    # Note: In production, this file is named indicator_features.parquet
+    # Here we use a local test file name
     indicators = pd.DataFrame({
         'case_id': ['caseA', 'caseB', 'caseC', 'caseD', 'caseE'],
         'class': ['astrocytoma', 'glioblastoma', 'astrocytoma', 'glioblastoma', 'astrocytoma'],
         'is_missing_miRNA_': [0.0, 0.0, 0.0, 0.0, 0.0]
     })
-    ind_file = tmp_path / 'indicators.parquet'
+    ind_file = tmp_path / 'indicator_features.parquet'
     # to_parquet requires a parquet engine; assume available in CI
     indicators.to_parquet(ind_file, index=False)
 

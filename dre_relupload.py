@@ -10,7 +10,9 @@ from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from utils.masked_transformers import MaskedTransformer
 from sklearn.pipeline import Pipeline
+from umap import UMAP
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from utils.metrics_utils import compute_metrics
 
 # Import the centralized logger
 from logging_utils import log
@@ -67,7 +69,7 @@ try:
     n_classes = len(le.classes_)
     log.info(f"Master label encoder loaded successfully. Found {n_classes} classes: {list(le.classes_)}")
 except FileNotFoundError:
-    log.critical(f"Master label encoder not found at '{label_encoder_path}'. Please run the 'create_master_encoder.py' script first.")
+    log.critical(f"Master label encoder not found at '{label_encoder_path}'. Please run the 'create_master_label_encoder.py' script first.")
     exit()
 
 # --- Argument Parser ---
@@ -95,6 +97,8 @@ feature_args.add_argument('--use_pretrained_features', action='store_true',
                          help='Use pretrained embeddings instead of PCA/UMAP preprocessing')
 feature_args.add_argument('--pretrained_features_dir', type=str, default=None,
                          help='Directory containing pretrained feature .npy files (e.g., GeneExpr_embeddings.npy)')
+feature_args.add_argument('--dim_reducer', type=str, default='umap', choices=['pca', 'umap'],
+                         help='Dimensionality reducer for pretrained features: pca or umap (default: umap)')
 
 model_args = parser.add_argument_group('model parameters (override tuned values)')
 model_args.add_argument('--n_qbits', type=int, default=None,
@@ -119,6 +123,8 @@ train_args.add_argument('--max_training_time', type=float, default=None,
                        help='Maximum training hours (overrides --steps)')
 train_args.add_argument('--validation_frequency', type=int, default=10,
                        help='Validation frequency in steps (default: 10)')
+train_args.add_argument('--validation_frac', type=float, default=0.1,
+                       help='Fraction of training data for validation during QML training (default: 0.1)')
 
 checkpoint_args = parser.add_argument_group('checkpointing')
 checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
@@ -127,6 +133,9 @@ checkpoint_args.add_argument('--keep_last_n', type=int, default=3,
                             help='Checkpoints to keep (default: 3)')
 checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
                             help='Alternative checkpoint directory')
+checkpoint_args.add_argument('--resume', type=str, default=None,
+                            choices=['best', 'latest', 'auto'],
+                            help='Resume from checkpoint: best, latest, or auto (default: None)')
 
 log_args = parser.add_argument_group('logging')
 log_args.add_argument('--verbose', action='store_true',
@@ -243,17 +252,25 @@ for data_type in data_types:
 
     # --- Build the appropriate pipeline using TUNED params ---
     
-    # Create checkpoint directory for this data type
-    checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if args.max_training_time else None
+    # Create checkpoint directory for this data type (needed for max_training_time OR resume)
+    checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if (args.max_training_time or args.resume) else None
     
     if use_pretrained:
         embed_dim = X_train_pretrained.shape[1]
         n_qubits_final = min(config['n_qubits'], embed_dim)
-        log.info(f"  - Using pretrained features pipeline (embed_dim={embed_dim}, n_qubits={n_qubits_final})")
+        log.info(f"  - Using pretrained features pipeline (embed_dim={embed_dim}, n_qubits={n_qubits_final}, reducer={args.dim_reducer})")
+        
+        # Select dimensionality reducer based on argument
+        if args.dim_reducer == 'umap':
+            dim_reducer = UMAP(n_components=n_qubits_final, n_neighbors=15, min_dist=0.1, random_state=RANDOM_STATE)
+            log.info(f"  - Using UMAP for dimensionality reduction ({embed_dim} -> {n_qubits_final})")
+        else:
+            dim_reducer = PCA(n_components=n_qubits_final)
+            log.info(f"  - Using PCA for dimensionality reduction ({embed_dim} -> {n_qubits_final})")
         
         pipeline = Pipeline([
             ('scaler', scaler_obj),
-            ('pca', PCA(n_components=n_qubits_final)),
+            ('dim_reducer', dim_reducer),
             ('qml', MulticlassQuantumClassifierDataReuploadingDR(
                 n_qubits=n_qubits_final, 
                 n_layers=config['n_layers'], 
@@ -266,6 +283,8 @@ for data_type in data_types:
                 keep_last_n=args.keep_last_n,
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
+                validation_frac=args.validation_frac,
+                resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}_pretrained'
@@ -292,6 +311,8 @@ for data_type in data_types:
                 keep_last_n=args.keep_last_n,
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
+                validation_frac=args.validation_frac,
+                resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}'
@@ -339,6 +360,18 @@ for data_type in data_types:
         acc = accuracy_score(y_test, y_test_pred)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
+        # Compute comprehensive metrics
+        metrics = compute_metrics(y_test, y_test_pred, n_classes)
+        log.info(f"Comprehensive Metrics for {data_type}:")
+        log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
+        log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
+        log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
+        log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
+        log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
+        log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
+        log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
+        log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
+        
         report = classification_report(y_test, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
@@ -360,5 +393,22 @@ for data_type in data_types:
         cmn_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}_normalized.csv')
         cmn_df.to_csv(cmn_path)
         log.info(f"Saved normalized confusion matrix to {cmn_path}")
+        
+        # Save comprehensive metrics to JSON
+        metrics_json = {
+            'accuracy': float(metrics['accuracy']),
+            'precision_macro': float(metrics['precision_macro']),
+            'precision_weighted': float(metrics['precision_weighted']),
+            'recall_macro': float(metrics['recall_macro']),
+            'recall_weighted': float(metrics['recall_weighted']),
+            'f1_macro': float(metrics['f1_macro']),
+            'f1_weighted': float(metrics['f1_weighted']),
+            'specificity_macro': float(metrics['specificity_macro']),
+            'specificity_weighted': float(metrics['specificity_weighted'])
+        }
+        metrics_path = os.path.join(OUTPUT_DIR, f'test_metrics_{data_type}.json')
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_json, f, indent=2)
+        log.info(f"Saved comprehensive metrics to {metrics_path}")
     except Exception as e:
         log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")

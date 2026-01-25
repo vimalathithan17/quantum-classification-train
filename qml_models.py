@@ -2449,7 +2449,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train_scaled, X_val_scaled, mask_train, mask_val, y_train, y_val = train_test_split(
-                X_scaled, is_missing_mask, y, test_size=self.validation_frac, stratify=y, random_state=42
+                X_scaled, is_missing_mask, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train_scaled, mask_train, y_train = X_scaled, is_missing_mask, y
@@ -2636,9 +2636,17 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                     val_probs = np.array([self._softmax(logit) for logit in val_logits_array])
                     val_per_sample_loss = -np.sum(y_val_one_hot * np.log(val_probs + 1e-9), axis=1)
                     try:
-                        val_sample_has_data = np.any(X_val != 0, axis=1)
+                        val_all_zero = np.all(X_val_scaled == 0, axis=1)
                     except Exception:
-                        val_sample_has_data = np.ones(val_per_sample_loss.shape[0], dtype=bool)
+                        val_all_zero = np.zeros(val_per_sample_loss.shape[0], dtype=bool)
+                    try:
+                        val_mask_present = np.any(mask_val == 0, axis=1)
+                    except Exception:
+                        val_mask_present = np.ones(val_per_sample_loss.shape[0], dtype=bool)
+
+                    val_sample_has_data = (~val_all_zero) & val_mask_present
+                    if not np.any(val_sample_has_data) and np.any(~val_all_zero):
+                        val_sample_has_data = ~val_all_zero
                     if np.any(val_sample_has_data):
                         val_loss = np.mean(val_per_sample_loss[val_sample_has_data])
                     else:
@@ -3041,7 +3049,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         # Split into train/validation if requested
         if self.validation_frac > 0:
             X_train_scaled, X_val_scaled, mask_train, mask_val, y_train, y_val = train_test_split(
-                X_scaled, is_missing_mask, y, test_size=self.validation_frac, stratify=y, random_state=42
+                X_scaled, is_missing_mask, y, test_size=self.validation_frac, stratify=y, random_state=RANDOM_STATE
             )
         else:
             X_train_scaled, mask_train, y_train = X_scaled, is_missing_mask, y

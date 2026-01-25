@@ -13,6 +13,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     confusion_matrix
 )
+from utils.metrics_utils import compute_metrics
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 import numpy as _np  # local alias to avoid shadowing pennylane.numpy
@@ -696,16 +697,16 @@ def main():
         epilog="""Examples:
   # Tune hyperparameters
   python metalearner.py --mode tune --preds_dir base_learner_outputs_app1_standard \
-      --indicator_file final_processed_datasets/indicators.parquet --n_trials 50
+      --indicator_file final_processed_datasets/indicator_features.parquet --n_trials 50
   
   # Train final model with tuned parameters
   python metalearner.py --mode train --preds_dir base_learner_outputs_app1_standard \
-      --indicator_file final_processed_datasets/indicators.parquet
+      --indicator_file final_processed_datasets/indicator_features.parquet
   
   # Train with multiple prediction directories
   python metalearner.py --mode train \
       --preds_dir dir1 dir2 dir3 \
-      --indicator_file indicators.parquet
+      --indicator_file indicator_features.parquet
         """)
     
     # Required arguments
@@ -751,6 +752,8 @@ def main():
                            help='Max training hours (overrides --steps)')
     train_args.add_argument('--validation_frequency', type=int, default=10,
                            help='Validation frequency in steps (default: 10)')
+    train_args.add_argument('--validation_frac', type=float, default=0.1,
+                           help='Fraction of training data for validation during QML training (default: 0.1)')
     
     # Checkpointing
     checkpoint_args = parser.add_argument_group('checkpointing')
@@ -760,6 +763,9 @@ def main():
                                 help='Checkpoints to keep (default: 3)')
     checkpoint_args.add_argument('--checkpoint_fallback_dir', type=str, default=None,
                                 help='Alternative checkpoint directory')
+    checkpoint_args.add_argument('--resume', type=str, default=None,
+                                choices=['best', 'latest', 'auto'],
+                                help='Resume from checkpoint: best (best validation), latest (most recent), auto (try best, fallback to latest)')
     
     # Logging
     log_args = parser.add_argument_group('logging')
@@ -880,7 +886,7 @@ def main():
             n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else n_base
         else:
             n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else X_meta_train.shape[1]
-        checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if args.max_training_time else None
+        checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if (args.max_training_time or args.resume) else None
         model_params = {
             'n_qubits': n_qubits,
             'n_layers': params['n_layers'],
@@ -894,10 +900,12 @@ def main():
             'keep_last_n': args.keep_last_n,
             'max_training_time': args.max_training_time,
             'validation_frequency': args.validation_frequency,
+            'validation_frac': args.validation_frac,
             'use_wandb': args.use_wandb,
             'wandb_project': args.wandb_project,
             # Construct a clear W&B run name for the final training run
-            'wandb_run_name': args.wandb_run_name or f"meta_train_{params.get('qml_model','model')}_q{n_qubits}_l{params['n_layers']}_lr{params['learning_rate']:.4g}"
+            'wandb_run_name': args.wandb_run_name or f"meta_train_{params.get('qml_model','model')}_q{n_qubits}_l{params['n_layers']}_lr{params['learning_rate']:.4g}",
+            'resume': args.resume
         }
 
         # Instantiate only gated variants
@@ -940,9 +948,54 @@ def main():
         test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
         log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
 
+        # Compute comprehensive metrics
+        metrics = compute_metrics(y_meta_test.values, test_predictions, n_classes)
+        log.info("Comprehensive Metrics:")
+        log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
+        log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
+        log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
+        log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
+        log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
+        log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
+        log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
+        log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
+
         # Generate and print classification report
         report = classification_report(y_meta_test.values, test_predictions, labels=list(range(n_classes)), target_names=le.classes_)
         log.info("Classification Report:\n" + report)
+
+        # Save confusion matrix
+        cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
+        cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
+        cm_path = os.path.join(OUTPUT_DIR, 'confusion_matrix.csv')
+        cm_df.to_csv(cm_path)
+        log.info(f"Saved confusion matrix to {cm_path}")
+
+        # Normalized confusion matrix (per-row / true-class)
+        with _np.errstate(all='ignore'):
+            row_sums = cm.sum(axis=1, keepdims=True)
+            cm_norm = _np.divide(cm, row_sums, where=(row_sums != 0))
+        cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
+        cmn_path = os.path.join(OUTPUT_DIR, 'confusion_matrix_normalized.csv')
+        cmn_df.to_csv(cmn_path)
+        log.info(f"Saved normalized confusion matrix to {cmn_path}")
+
+        # Save comprehensive metrics to JSON
+        metrics_json = {
+            'accuracy': float(metrics['accuracy']),
+            'precision_macro': float(metrics['precision_macro']),
+            'precision_weighted': float(metrics['precision_weighted']),
+            'recall_macro': float(metrics['recall_macro']),
+            'recall_weighted': float(metrics['recall_weighted']),
+            'f1_macro': float(metrics['f1_macro']),
+            'f1_weighted': float(metrics['f1_weighted']),
+            'specificity_macro': float(metrics['specificity_macro']),
+            'specificity_weighted': float(metrics['specificity_weighted'])
+        }
+        metrics_path = os.path.join(OUTPUT_DIR, 'test_metrics.json')
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_json, f, indent=2)
+        log.info(f"Saved comprehensive metrics to {metrics_path}")
 
         # Save predictions to a file
         preds_df = pd.DataFrame({

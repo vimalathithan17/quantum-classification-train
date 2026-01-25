@@ -382,8 +382,16 @@ def nt_xent_loss(
         
     Returns:
         Scalar loss value
+        
+    Raises:
+        ValueError: If batch_size < 2 (NT-Xent requires at least 2 samples)
     """
     batch_size = z_i.shape[0]
+    
+    # NT-Xent requires at least 2 samples for meaningful contrastive learning
+    if batch_size < 2:
+        raise ValueError(f"NT-Xent loss requires batch_size >= 2, got {batch_size}. "
+                        "Use drop_last=True in DataLoader to avoid incomplete batches.")
     
     # Normalize projections
     z_i = F.normalize(z_i, dim=1, eps=eps)
@@ -402,9 +410,9 @@ def nt_xent_loss(
         torch.arange(batch_size, device=z_i.device)
     ], dim=0)
     
-    # Mask out diagonal (self-similarity)
+    # Mask out diagonal (self-similarity) using -inf for numerical stability
     mask_diag = torch.eye(2 * batch_size, dtype=torch.bool, device=z_i.device)
-    similarity_matrix = similarity_matrix.masked_fill(mask_diag, -1e9)
+    similarity_matrix = similarity_matrix.masked_fill(mask_diag, float('-inf'))
     
     # Standard cross-entropy loss (InfoNCE)
     loss = F.cross_entropy(similarity_matrix, labels)

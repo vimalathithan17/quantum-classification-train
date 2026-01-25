@@ -363,7 +363,7 @@ Meta-learner usage:
   # Use CSV outputs directly with metalearner.py:
   python metalearner.py \\
       --preds_dir transformer_predictions \\
-      --indicator_file final_processed_datasets/indicators.parquet
+      --indicator_file final_processed_datasets/indicator_features.parquet
         """)
     
     parser.add_argument('--model_dir', type=str, required=True,
