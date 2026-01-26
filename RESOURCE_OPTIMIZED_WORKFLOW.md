@@ -55,12 +55,8 @@ pretrained_models/contrastive/
 ### Columns Ignored by Contrastive Encoder
 
 The following columns are automatically excluded from features:
-- `class` - Target label
-- `split` - Train/test split indicator
+- `class` - Target label (GBM/LGG)
 - `case_id` - Sample identifier
-- `sample_id` - Sample identifier
-- `patient_id` - Patient identifier
-- `barcode` - Sample barcode
 
 **All other columns are used as input features.**
 

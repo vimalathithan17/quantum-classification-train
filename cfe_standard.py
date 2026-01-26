@@ -250,17 +250,42 @@ for data_type in data_types:
         if os.path.exists(pretrained_file):
             log.info(f"  - Loading pretrained features from {pretrained_file}")
             embeddings = np.load(pretrained_file)
-            labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
-            if os.path.exists(labels_file):
+            
+            # Load case_ids for proper alignment
+            case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
+            if os.path.exists(case_ids_file):
+                pretrained_case_ids = np.load(case_ids_file, allow_pickle=True)
+                
+                # Create mapping from case_id to embedding index
+                case_id_to_idx = {str(cid): i for i, cid in enumerate(pretrained_case_ids)}
+                
+                # Select embeddings aligned with X_train and X_test by case_id
+                try:
+                    train_embed_idx = [case_id_to_idx[str(cid)] for cid in X_train.index]
+                    test_embed_idx = [case_id_to_idx[str(cid)] for cid in X_test.index]
+                except KeyError as e:
+                    log.error(f"  - Case ID {e} not found in pretrained features. Ensure data was processed with same samples.")
+                    missing_train = [cid for cid in X_train.index if str(cid) not in case_id_to_idx]
+                    missing_test = [cid for cid in X_test.index if str(cid) not in case_id_to_idx]
+                    if missing_train:
+                        log.error(f"  - Missing from train: {missing_train[:10]}..." if len(missing_train) > 10 else f"  - Missing from train: {missing_train}")
+                    if missing_test:
+                        log.error(f"  - Missing from test: {missing_test[:10]}..." if len(missing_test) > 10 else f"  - Missing from test: {missing_test}")
+                    raise
+                
+                X_train = pd.DataFrame(embeddings[train_embed_idx], index=X_train.index)
+                X_test = pd.DataFrame(embeddings[test_embed_idx], index=X_test.index)
+                
+                log.info(f"  - Pretrained features aligned by case_id: train={X_train.shape}, test={X_test.shape}")
+                log.info("  - Note: LightGBM feature selection will be skipped, using PCA instead")
+            else:
+                # Fallback: use positional indices (assumes same order as sorted data)
+                log.warning(f"  - case_ids.npy not found, using positional alignment (assumes same order)")
                 all_indices = np.arange(len(embeddings))
                 train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
                 X_train = pd.DataFrame(embeddings[train_idx], index=X_train.index)
                 X_test = pd.DataFrame(embeddings[test_idx], index=X_test.index)
                 log.info(f"  - Pretrained features loaded: train={X_train.shape}, test={X_test.shape}")
-                log.info("  - Note: LightGBM feature selection will be skipped, using PCA instead")
-            else:
-                log.warning(f"  - labels.npy not found, falling back to standard pipeline")
-                use_pretrained = False
         else:
             log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
             use_pretrained = False
@@ -365,8 +390,7 @@ for data_type in data_types:
     importances = lgb_final.feature_importances_
     top_idx = np.argsort(importances)[-actual_k:][::-1]
     final_selected_cols = X.columns[top_idx]
-    joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
-    log.info(f"    - Saved {len(final_selected_cols)} selected features for {data_type}.")
+    log.info(f"    - Selected {len(final_selected_cols)} features for {data_type}.")
     log.info(f"    - Final selected features: {list(final_selected_cols)}")
 
     X_train_selected = X_train[final_selected_cols]
@@ -422,6 +446,25 @@ for data_type in data_types:
     joblib.dump(final_scaler, os.path.join(OUTPUT_DIR, f'scaler_{data_type}.joblib'))
     joblib.dump(final_model, os.path.join(OUTPUT_DIR, f'qml_model_{data_type}.joblib'))
     log.info(f"  - Saved final selector (selected_features), scaler(sentinel), and QML model for {data_type}.")
+    
+    # --- Save preprocessing config for inference ---
+    preprocessing_config = {
+        'data_type': data_type,
+        'n_qubits': config['n_qubits'],
+        'n_layers': config['n_layers'],
+        'steps': config['steps'],
+        'scaler': config.get('scaler', 'MinMax'),
+        'n_classes': n_classes,
+        'class_names': list(le.classes_),
+        'use_pretrained': use_pretrained,
+        'random_state': RANDOM_STATE,
+        'selected_features': list(final_selected_cols) if final_selected_cols is not None else None,
+        'feature_dim': X_train.shape[1]
+    }
+    config_path = os.path.join(OUTPUT_DIR, f'preprocessing_config_{data_type}.json')
+    with open(config_path, 'w') as f:
+        json.dump(preprocessing_config, f, indent=2)
+    log.info(f"  - Saved preprocessing config to {config_path}")
 
     # --- Classification report on the hold-out test set ---
     try:

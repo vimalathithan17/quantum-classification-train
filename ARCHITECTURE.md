@@ -189,7 +189,8 @@ We made several coordinated changes to how preprocessing and missingness are han
 - **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
 - **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location, ensuring training can proceed in restricted environments.
 - **Output:** 
-    - Final trained meta-learner model (`metalearner_model.joblib`)
+    - Final trained meta-learner model (`meta_learner_final.joblib`)
+    - Meta-learner column order (`meta_learner_columns.json`)
     - Best hyperparameters if tuning was run (`best_metalearner_params.json`)
     - Per-trial comprehensive metrics during tuning (`trial_{trial_id}/metrics.json`)
 
@@ -1101,12 +1102,10 @@ python cfe_relupload.py --max_training_time 8 --checkpoint_frequency 25
   - Confusion matrix per epoch
 
 **Output:** 
-    - Final trained meta-learner model as saved by the training script: `metalearner_model.joblib`
-    - Meta-learner scaler: `metalearner_scaler.joblib`
+    - Final trained meta-learner model: `meta_learner_final.joblib`
+    - Meta-learner column order: `meta_learner_columns.json`
     - Best hyperparameters if tuning was run: `best_metalearner_params.json`
     - Per-trial comprehensive metrics during tuning: `trial_{trial_id}/metrics.json`
-
-Note: the inference helper (`inference.py`) expects a slightly different deployment layout: it looks for `meta_learner_final.joblib` and a JSON file `meta_learner_columns.json` that contains the exact column order used to train the meta-learner. The training script writes `metalearner_model.joblib`; before running `inference.py` you should create a deployment directory and copy/rename these artifacts so they match what `inference.py` expects (see README for exact commands).
    - Precision/recall curves
    - PNG format, saved to model directory
 

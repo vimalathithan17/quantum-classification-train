@@ -9,6 +9,8 @@ Quick reference to find information and choose your approach.
 | Your Situation | Start Here | Time |
 |---|---|---|
 | **New user** | [README.md](README.md) | 10 min |
+| **Kaggle environment setup** | [KAGGLE_SETUP.md](KAGGLE_SETUP.md) | 5 min |
+| **Team collaboration** | [TEAM_TASKS.md](TEAM_TASKS.md) | 5 min |
 | **Need to choose approach** | [Decision Tree](#decision-tree) below | 5 min |
 | **Ready to integrate extensions** | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) | 20 min |
 | **Memory-constrained (30GB RAM)** | [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md) | 15 min |
@@ -56,6 +58,10 @@ START: How much labeled data do you have?
 README.md                    ← Start here: QML pipeline, setup, commands
 │
 ├── DOCS_GUIDE.md            ← This file: navigation & decision tree
+│
+├── KAGGLE_SETUP.md          ← Kaggle notebook environment setup
+│
+├── TEAM_TASKS.md            ← Team task assignments for parallel training
 │
 ├── INTEGRATION_GUIDE.md     ← Integration patterns, class imbalance, troubleshooting
 │

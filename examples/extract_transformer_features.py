@@ -51,7 +51,7 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
         modalities: List of modalities to load (default: all available)
         
     Returns:
-        Tuple of (data_dict, labels, split_info, modality_dims, case_ids)
+        Tuple of (data_dict, labels, modality_dims, case_ids)
     """
     if modalities is None:
         modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
@@ -59,7 +59,6 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
     data = {}
     modality_dims = {}
     labels = None
-    split_info = None
     case_ids = None
     
     for modality in modalities:
@@ -68,18 +67,23 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
         if file_path.exists():
             df = pd.read_parquet(file_path)
             
-            # Extract features (exclude class, split, and case_id columns)
-            feature_cols = [col for col in df.columns if col not in ['class', 'split', 'case_id']]
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            if 'case_id' in df.columns:
+                df = df.sort_values('case_id')
+            
+            # Metadata columns to exclude from features (only case_id and class exist in the data)
+            METADATA_COLS = {'class', 'case_id'}
+            
+            # Extract features (exclude metadata columns)
+            feature_cols = [col for col in df.columns if col not in METADATA_COLS]
             features = df[feature_cols].values.astype(np.float32)
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
             
-            # Get labels, split info, and case_ids from first modality
+            # Get labels and case_ids from first modality
             if labels is None and 'class' in df.columns:
                 labels = df['class'].values
-            if split_info is None and 'split' in df.columns:
-                split_info = df['split'].values
             if case_ids is None:
                 # Try to get case_id from column or index
                 if 'case_id' in df.columns:
@@ -90,7 +94,7 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
                     # Generate synthetic case_ids if not found
                     case_ids = np.array([f"sample_{i}" for i in range(len(df))])
     
-    return data, labels, split_info, modality_dims, case_ids
+    return data, labels, modality_dims, case_ids
 
 
 def load_transformer_model(model_dir: Path, device: torch.device) -> tuple:
@@ -181,7 +185,7 @@ def extract_features(
     modalities = list(config['modality_dims'].keys())
     
     # Load data (now includes case_ids)
-    data, labels, split_info, _, case_ids = load_multiomics_data(data_dir, modalities)
+    data, labels, _, case_ids = load_multiomics_data(data_dir, modalities)
     n_samples = list(data.values())[0].shape[0]
     print(f"\nLoaded {n_samples} samples across {len(data)} modalities")
     
@@ -238,7 +242,7 @@ def extract_features(
         print(f"Saved {filename}: {data.shape}")
     
     # Helper to save predictions in metalearner-compatible CSV format
-    def save_metalearner_csv(probabilities, case_ids, split_info, filename):
+    def save_metalearner_csv(probabilities, case_ids, filename):
         """Save predictions in format compatible with metalearner.py"""
         # Create column names for each class probability
         prob_cols = [f'class_{i}_prob' for i in range(probabilities.shape[1])]
@@ -269,39 +273,14 @@ def extract_features(
         if labels is not None:
             save_npy(labels, "labels.npy")
         
-        if split_info is not None:
-            save_npy(split_info, "split_info.npy")
+        if case_ids is not None:
+            save_npy(case_ids, "case_ids.npy")
     
     # Save in CSV format for metalearner.py compatibility
     if output_format in ['csv', 'both']:
         print("\n--- Generating metalearner-compatible CSV files ---")
-        
-        if split_info is not None:
-            # Separate train (for OOF) and test predictions
-            # Note: In a full cross-validation setup, OOF preds would be from validation folds
-            # Here we output all training samples as "OOF" since they'll be used as meta-features
-            train_mask = (split_info == 'train') | (split_info == 0)
-            test_mask = (split_info == 'test') | (split_info == 1)
-            
-            if np.any(train_mask):
-                save_metalearner_csv(
-                    probabilities[train_mask], 
-                    case_ids[train_mask], 
-                    split_info[train_mask],
-                    'train_oof_preds_Transformer.csv'
-                )
-            
-            if np.any(test_mask):
-                save_metalearner_csv(
-                    probabilities[test_mask], 
-                    case_ids[test_mask], 
-                    split_info[test_mask],
-                    'test_preds_Transformer.csv'
-                )
-        else:
-            # No split info - save all as training OOF predictions
-            print("  Warning: No split info found, saving all samples as train_oof_preds")
-            save_metalearner_csv(probabilities, case_ids, split_info, 'train_oof_preds_Transformer.csv')
+        # Save all samples as training OOF predictions (no split column in data)
+        save_metalearner_csv(probabilities, case_ids, 'train_oof_preds_Transformer.csv')
     
     # Compute and save accuracy if labels available
     if labels is not None:
@@ -350,7 +329,7 @@ Output files (NPY format):
   ├── transformer_predictions.npy    # Class predictions (N,)
   ├── transformer_embeddings.npy     # Penultimate layer features (N, embed_dim)
   ├── labels.npy                     # Ground truth labels (N,)
-  ├── split_info.npy                 # Train/val/test splits (N,)
+  ├── case_ids.npy                   # Sample identifiers (N,)
   └── extraction_metadata.json       # Extraction configuration
 
 Output files (CSV format - metalearner compatible):

@@ -1019,8 +1019,11 @@ def extract_features(encoder_dir, data_dir, output_dir):
         data_file = Path(data_dir) / f"data_{modality}_.parquet"
         df = pd.read_parquet(data_file)
         
-        # Extract features
-        feature_cols = [col for col in df.columns if col not in ['class', 'split']]
+        # Metadata columns to exclude from features (only case_id and class exist in the data)
+        METADATA_COLS = {'class', 'case_id'}
+        
+        # Extract features (exclude metadata columns)
+        feature_cols = [col for col in df.columns if col not in METADATA_COLS]
         X = df[feature_cols].values.astype(np.float32)
         
         # Encode

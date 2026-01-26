@@ -443,7 +443,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
                     y_val_proba = None
 
             # compute metrics using centralized compute_metrics
-            n_classes = len(_np.unique(y_val))
+            # Use n_classes from function parameter (full dataset) not from validation fold
             metrics = compute_metrics(y_val, y_val_pred, n_classes)
             acc = float(metrics['accuracy'])
             f1_macro = float(metrics['f1_macro'])
@@ -569,7 +569,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
                         y_val_proba = None
 
             # compute metrics using centralized compute_metrics
-            n_classes = len(_np.unique(y_val.values))
+            # Use n_classes from function parameter (full dataset) not from validation fold
             metrics = compute_metrics(y_val.values, y_val_pred, n_classes)
             acc = float(metrics['accuracy'])
             f1_macro = float(metrics['f1_macro'])
@@ -728,7 +728,9 @@ def main():
         log.error("Failed to load data, exiting.")
         return
 
-    X = df.drop(columns=['case_id', 'class'])
+    # CRITICAL: Sort by case_id for consistent ordering across all scripts
+    df = df.sort_values('case_id').set_index('case_id')
+    X = df.drop(columns=['class'])
     y_categorical = df['class']
 
     # Perform label encoding for the multiclass target

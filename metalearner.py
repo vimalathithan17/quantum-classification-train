@@ -187,7 +187,7 @@ def assemble_meta_data(preds_dirs, indicator_file):
     except FileNotFoundError:
         log.critical(f"Master label encoder not found in '{ENCODER_DIR}'.")
         log.critical("Please run the 'create_master_label_encoder.py' script first.")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     # Load indicator features and encode labels using the master encoder
     try:
@@ -195,7 +195,7 @@ def assemble_meta_data(preds_dirs, indicator_file):
         indicators.set_index('case_id', inplace=True)
     except FileNotFoundError:
         log.error(f"Indicator file not found at {indicator_file}")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     labels_categorical = indicators['class']
     labels = pd.Series(le.transform(labels_categorical), index=labels_categorical.index)
@@ -272,7 +272,7 @@ def assemble_meta_data(preds_dirs, indicator_file):
     
     if not oof_preds_list:
         log.error("No out-of-fold prediction files found in any of the provided directories.")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     # Concatenate all found predictions (align by case_id index)
     if oof_preds_list:
@@ -406,7 +406,7 @@ def assemble_meta_data(preds_dirs, indicator_file):
     # Validate resulting datasets
     if X_meta_train.empty:
         log.error("Assembled meta-training set is empty after joining predictions and indicators. Check input files and indices (case_id).")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     if X_meta_test.empty:
         log.warning("Assembled meta-test set is empty after joining predictions and indicators. Continuing but test set will be empty.")
@@ -947,9 +947,16 @@ def main():
             log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
 
         # Save the trained model
-        model_path = os.path.join(OUTPUT_DIR, 'metalearner_model.joblib')
+        model_path = os.path.join(OUTPUT_DIR, 'meta_learner_final.joblib')
         joblib.dump(final_model, model_path)
         log.info(f"Final meta-learner model saved to '{model_path}'")
+        
+        # Save column order for inference (inference.py expects this file)
+        columns_path = os.path.join(OUTPUT_DIR, 'meta_learner_columns.json')
+        all_columns = list(X_meta_train.columns)  # base predictions + indicators in training order
+        with open(columns_path, 'w') as fh:
+            json.dump(all_columns, fh, indent=2)
+        log.info(f"Saved meta-learner column order to '{columns_path}'")
 
         # Note: we do not save a scaler for the meta-learner because inputs are
         # already probabilities (0..1) from base learners plus indicator features.

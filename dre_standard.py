@@ -269,15 +269,35 @@ for data_type in data_types:
             log.info(f"  - Loading pretrained features from {pretrained_file}")
             embeddings = np.load(pretrained_file)
             
-            # Also load labels to align indices
-            labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
-            if os.path.exists(labels_file):
-                # Embeddings should be in same order as original data
-                # Split using same indices
-                n_train = len(X_train)
-                n_test = len(X_test)
+            # Load case_ids for proper alignment
+            case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
+            if os.path.exists(case_ids_file):
+                pretrained_case_ids = np.load(case_ids_file, allow_pickle=True)
                 
-                # Re-create the split indices
+                # Create mapping from case_id to embedding index
+                case_id_to_idx = {str(cid): i for i, cid in enumerate(pretrained_case_ids)}
+                
+                # Select embeddings aligned with X_train and X_test by case_id
+                try:
+                    train_embed_idx = [case_id_to_idx[str(cid)] for cid in X_train.index]
+                    test_embed_idx = [case_id_to_idx[str(cid)] for cid in X_test.index]
+                except KeyError as e:
+                    log.error(f"  - Case ID {e} not found in pretrained features. Ensure data was processed with same samples.")
+                    missing_train = [cid for cid in X_train.index if str(cid) not in case_id_to_idx]
+                    missing_test = [cid for cid in X_test.index if str(cid) not in case_id_to_idx]
+                    if missing_train:
+                        log.error(f"  - Missing from train: {missing_train[:10]}..." if len(missing_train) > 10 else f"  - Missing from train: {missing_train}")
+                    if missing_test:
+                        log.error(f"  - Missing from test: {missing_test[:10]}..." if len(missing_test) > 10 else f"  - Missing from test: {missing_test}")
+                    raise
+                
+                X_train_pretrained = embeddings[train_embed_idx]
+                X_test_pretrained = embeddings[test_embed_idx]
+                
+                log.info(f"  - Pretrained features aligned by case_id: train={X_train_pretrained.shape}, test={X_test_pretrained.shape}")
+            else:
+                # Fallback: use positional indices (assumes same order as sorted data)
+                log.warning(f"  - case_ids.npy not found, using positional alignment (assumes same order)")
                 all_indices = np.arange(len(embeddings))
                 train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
                 
@@ -285,9 +305,6 @@ for data_type in data_types:
                 X_test_pretrained = embeddings[test_idx]
                 
                 log.info(f"  - Pretrained features loaded: train={X_train_pretrained.shape}, test={X_test_pretrained.shape}")
-            else:
-                log.warning(f"  - labels.npy not found in {args.pretrained_features_dir}, falling back to standard pipeline")
-                use_pretrained = False
         else:
             log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
             use_pretrained = False
@@ -400,6 +417,25 @@ for data_type in data_types:
     
     joblib.dump(pipeline, os.path.join(OUTPUT_DIR, f'pipeline_{data_type}.joblib'))
     log.info(f"  - Saved test predictions and final pipeline for {data_type}.")
+    
+    # --- Save preprocessing config for inference ---
+    preprocessing_config = {
+        'data_type': data_type,
+        'n_qubits': config['n_qubits'],
+        'n_layers': config['n_layers'],
+        'steps': config['steps'],
+        'scaler': config.get('scaler', 'MinMax'),
+        'n_classes': n_classes,
+        'class_names': list(le.classes_),
+        'use_pretrained': use_pretrained,
+        'random_state': RANDOM_STATE,
+        'dim_reducer': args.dim_reducer if use_pretrained else 'pca',
+        'feature_dim': X_train.shape[1]
+    }
+    config_path = os.path.join(OUTPUT_DIR, f'preprocessing_config_{data_type}.json')
+    with open(config_path, 'w') as f:
+        json.dump(preprocessing_config, f, indent=2)
+    log.info(f"  - Saved preprocessing config to {config_path}")
 
     # --- Classification report and confusion matrix on the hold-out test set ---
     try:

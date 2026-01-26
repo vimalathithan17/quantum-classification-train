@@ -361,7 +361,7 @@ python dre_standard.py --n_qbits 8 --n_layers 4 --steps 150 --scaler m --verbose
 Outputs (per data type):
 - `train_oof_preds_<datatype>.csv` (used to train meta-learner)
 - `test_preds_<datatype>.csv`
-- model artifacts: `pipeline_<datatype>.joblib` or `selector_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
+- model artifacts: `pipeline_<datatype>.joblib` or `selected_features_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
 - `confusion_matrix_<datatype>.csv` - raw confusion matrix
 - `confusion_matrix_<datatype>_normalized.csv` - row-normalized confusion matrix
 - `test_metrics_<datatype>.json` - comprehensive metrics (accuracy, precision, recall, F1, specificity - macro/weighted)
@@ -424,7 +424,7 @@ cp master_label_encoder/label_encoder.joblib final_model_deployment/
 
 # Copy selected base learner artifacts (examples):
 cp base_learner_outputs_app1_standard/pipeline_CNV.joblib final_model_deployment/
-cp base_learner_outputs_app2_reuploading/selector_Prot.joblib final_model_deployment/
+cp base_learner_outputs_app2_reuploading/selected_features_Prot.joblib final_model_deployment/
 cp base_learner_outputs_app2_reuploading/scaler_Prot.joblib final_model_deployment/
 cp base_learner_outputs_app2_reuploading/qml_model_Prot.joblib final_model_deployment/
 ```
@@ -767,7 +767,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 		- Run fold-wise feature selection and train QML models. Save:
 			- OOF predictions: `train_oof_preds_{datatype}.csv`.
 			- Test predictions: `test_preds_{datatype}.csv`.
-			- Model artifacts: `selector_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib`.
+			- Model artifacts: `selected_features_{datatype}.joblib`, `scaler_{datatype}.joblib`, `qml_model_{datatype}.joblib`.
 
 5) `metalearner.py`
 	- `--preds_dir` (one or more, required): One or more directories to search for `train_oof_preds_*` and `test_preds_*` files (use your curated `final_ensemble_predictions` directory).
@@ -795,7 +795,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 6) `inference.py`
 	- `--model_dir` (str, required): Path to curated deployment directory that contains at minimum: `meta_learner_final.joblib`, `meta_learner_columns.json`, and `label_encoder.joblib` plus the selected base learner artifacts (pipelines or selector/scaler/qml_model files).
 	- `--patient_data_dir` (str, required): Path to a directory containing per-data-type parquet files named `data_<datatype>_.parquet` for the new patient. Missing files are tolerated (treated as missing data).
-	- Behavior: The script will detect whether a base-learner is saved as a `pipeline_{datatype}.joblib` (Approach 1) or as `selector_{datatype}.joblib` plus `scaler_...` and `qml_model_...` (Approach 2) and will combine base-learner predictions into meta-features and call the meta-learner to predict the final class.
+	- Behavior: The script will detect whether a base-learner is saved as a `pipeline_{datatype}.joblib` (Approach 1) or as `selected_features_{datatype}.joblib` plus `scaler_...` and `qml_model_...` (Approach 2) and will combine base-learner predictions into meta-features and call the meta-learner to predict the final class.
 
 Environment variables relevant to CLI behavior
 - `SOURCE_DIR` — directory where all `data_<datatype>_.parquet` files are read from (default `final_processed_datasets`).

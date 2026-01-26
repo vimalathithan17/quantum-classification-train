@@ -52,6 +52,9 @@ venv.bak/
 *.log
 *.db
 
+# W&B local files
+wandb/
+
 # Project-specific output directories (uncomment if you want to exclude)
 # final_processed_datasets/
 # tuning_results/

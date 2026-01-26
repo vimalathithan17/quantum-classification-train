@@ -48,7 +48,7 @@ def load_modality_data(data_dir: Path, modality: str) -> tuple:
         modality: Name of the modality (e.g., 'GeneExpr', 'miRNA')
         
     Returns:
-        Tuple of (features, labels, split_info) where features is np.ndarray
+        Tuple of (features, labels, case_ids) where features is np.ndarray
     """
     file_path = data_dir / f"data_{modality}_.parquet"
     
@@ -57,17 +57,24 @@ def load_modality_data(data_dir: Path, modality: str) -> tuple:
     
     df = pd.read_parquet(file_path)
     
+    # CRITICAL: Sort by case_id for consistent ordering across all scripts
+    if 'case_id' in df.columns:
+        df = df.sort_values('case_id')
+    
+    # Metadata columns to exclude from features (only case_id and class exist in the data)
+    METADATA_COLS = {'class', 'case_id'}
+    
     # Extract features (exclude metadata columns)
-    feature_cols = [col for col in df.columns if col not in ['class', 'split']]
+    feature_cols = [col for col in df.columns if col not in METADATA_COLS]
     features = df[feature_cols].values.astype(np.float32)
     
     # Extract labels if available
     labels = df['class'].values if 'class' in df.columns else None
     
-    # Extract split info if available
-    split_info = df['split'].values if 'split' in df.columns else None
+    # Extract case_id if available
+    case_ids = df['case_id'].values if 'case_id' in df.columns else None
     
-    return features, labels, split_info
+    return features, labels, case_ids
 
 
 def extract_features(
@@ -113,7 +120,7 @@ def extract_features(
     }
     
     labels_saved = False
-    split_saved = False
+    case_ids_saved = False
     
     for modality in metadata['modality_names']:
         print(f"\nProcessing {modality}...")
@@ -125,7 +132,7 @@ def extract_features(
             continue
         
         # Load data
-        features, labels, split_info = load_modality_data(data_dir, modality)
+        features, labels, case_ids = load_modality_data(data_dir, modality)
         n_samples = features.shape[0]
         print(f"  Loaded {n_samples} samples with {features.shape[1]} features")
         
@@ -163,12 +170,12 @@ def extract_features(
             print(f"  Saved labels -> {labels_file}")
             labels_saved = True
         
-        # Save split info once
-        if split_info is not None and not split_saved:
-            split_file = output_dir / "split_info.npy"
-            np.save(split_file, split_info)
-            print(f"  Saved split info -> {split_file}")
-            split_saved = True
+        # Save case_ids once (for sample identification)
+        if case_ids is not None and not case_ids_saved:
+            case_ids_file = output_dir / "case_ids.npy"
+            np.save(case_ids_file, case_ids)
+            print(f"  Saved case_ids -> {case_ids_file}")
+            case_ids_saved = True
     
     # Save extraction metadata
     metadata_file = output_dir / "extraction_metadata.json"
@@ -212,7 +219,7 @@ Output files:
   ├── Meth_embeddings.npy        # Shape: (N, embed_dim)
   ├── ...
   ├── labels.npy                 # Shape: (N,) - class labels
-  ├── split_info.npy             # Shape: (N,) - train/val/test splits
+  ├── case_ids.npy               # Shape: (N,) - sample identifiers
   └── extraction_metadata.json   # Extraction configuration
         """)
     

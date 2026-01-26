@@ -74,8 +74,8 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median
     modality_dims = {}
     nan_stats = {}
     
-    # Metadata columns to exclude from features
-    METADATA_COLS = {'class', 'split', 'case_id', 'sample_id', 'patient_id', 'barcode'}
+    # Metadata columns to exclude from features (only case_id and class exist in the data)
+    METADATA_COLS = {'class', 'case_id'}
     
     for modality in all_modalities:
         if modality in skip_modalities:
@@ -87,6 +87,10 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median
         if file_path.exists():
             print(f"Loading {modality} from {file_path}")
             df = pd.read_parquet(file_path)
+            
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            if 'case_id' in df.columns:
+                df = df.sort_values('case_id')
             
             # Extract features (exclude metadata columns)
             feature_cols = [col for col in df.columns if col.lower() not in METADATA_COLS and col not in METADATA_COLS]

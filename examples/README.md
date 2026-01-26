@@ -284,7 +284,7 @@ python metalearner.py \
 | `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
 
-**Ignored Columns:** The encoder automatically excludes metadata columns: `class`, `split`, `case_id`, `sample_id`, `patient_id`, `barcode`
+**Ignored Columns:** The encoder automatically excludes metadata columns: `class`, `case_id`
 
 **Example - Skip modalities and use mean imputation:**
 ```bash
@@ -371,7 +371,7 @@ The scripts expect parquet files in the data directory with the following naming
 Each parquet file should have:
 - Feature columns (numeric)
 - `class` column (labels, required for supervised training)
-- `split` column (optional, can be ignored)
+- `case_id` column (sample identifier)
 
 ### Missing Modalities
 

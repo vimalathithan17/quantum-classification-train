@@ -65,6 +65,7 @@ def load_multiomics_data(data_dir, modalities=None):
     data = {}
     modality_dims = {}
     labels = None
+    case_ids = None
     
     for modality in modalities:
         file_path = data_dir / f"data_{modality}_.parquet"
@@ -73,8 +74,18 @@ def load_multiomics_data(data_dir, modalities=None):
             print(f"Loading {modality} from {file_path}")
             df = pd.read_parquet(file_path)
             
-            # Extract features (exclude 'class' and 'split' columns)
-            feature_cols = [col for col in df.columns if col not in ['class', 'split']]
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            if 'case_id' in df.columns:
+                df = df.sort_values('case_id')
+                # Extract case_ids from first modality
+                if case_ids is None:
+                    case_ids = df['case_id'].values
+            
+            # Metadata columns to exclude from features (only case_id and class exist in the data)
+            METADATA_COLS = {'class', 'case_id'}
+            
+            # Extract features (exclude metadata columns)
+            feature_cols = [col for col in df.columns if col not in METADATA_COLS]
             features = df[feature_cols].values.astype(np.float32)
             
             data[modality] = features
@@ -352,12 +363,12 @@ def main():
     print(f"\nNumber of classes: {num_classes}")
     
     # Split data
-    print(f"\nSplitting data (test_size={args.test_size})...")
+    print(f"\nSplitting data (test_size={args.test_size}, seed={args.seed})...")
     indices = np.arange(len(labels))
     train_idx, test_idx = train_test_split(
         indices,
         test_size=args.test_size,
-        random_state=42,
+        random_state=args.seed,
         stratify=labels
     )
     
@@ -494,7 +505,10 @@ def main():
                 'num_classes': num_classes,
                 'dropout': 0.1,
                 'epoch': epoch,
-                'val_acc': float(val_acc)
+                'val_acc': float(val_acc),
+                'seed': args.seed,
+                'test_size': args.test_size,
+                'max_grad_norm': args.max_grad_norm
             }
             with open(output_dir / 'config.json', 'w') as f:
                 json.dump(config, f, indent=2)

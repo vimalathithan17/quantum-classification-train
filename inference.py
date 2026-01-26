@@ -174,19 +174,24 @@ def main():
         description="Run inference on a new patient's multimodal data using trained QML ensemble",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Example:
-  python inference.py --model_dir trained_models/ --patient_data_dir patient_001/
+  python inference.py --model_dir final_model_deployment/ --patient_data_dir patient_001/
   
 Description:
   Loads trained QML base learners and meta-learner to predict patient class.
-  Expects model_dir to contain:
-    - Base learner models (*.pkl)
-    - Meta-learner (metalearner.pkl)
-    - Label encoder (master_label_encoder.pkl)
   
-  Expects patient_data_dir to contain parquet files for all modalities:
-    - CNV_app1_pca.parquet, CNV_app2_pca.parquet
-    - clinical.parquet
-    - transcriptomics_pca.parquet
+  Expects model_dir to contain:
+    - meta_learner_final.joblib: Trained meta-learner model
+    - meta_learner_columns.json: Column order for meta-learner input
+    - label_encoder.joblib: Label encoder for class names
+    - For each modality, either:
+      - Approach 1: pipeline_{modality}.joblib
+      - Approach 2: selected_features_{modality}.joblib, scaler_{modality}.joblib, qml_model_{modality}.joblib
+  
+  Expects patient_data_dir to contain parquet files named:
+    - data_CNV_.parquet, data_GeneExpr_.parquet, data_miRNA_.parquet,
+    - data_Meth_.parquet, data_Prot_.parquet, data_SNV_.parquet
+    - Each file should have case_id and feature columns (class column optional)
+    - Missing files are handled gracefully (treated as missing modality)
         """)
     
     # Required arguments

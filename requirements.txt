@@ -1,5 +1,6 @@
 # Core quantum and scientific computing
 pennylane>=0.30.0
+pennylane-lightning>=0.30.0
 numpy>=1.20.0
 
 # Machine learning and optimization
@@ -25,8 +26,8 @@ umap-learn>=0.5.0
 wandb>=0.15.0
 
 # Deep learning for performance extensions (Option 1 & 2)
-torch>=2.6.0
-torchvision>=0.19.0
+torch>=2.0.0
+torchvision>=0.15.0
 
 # Testing framework
 pytest>=7.0.0
