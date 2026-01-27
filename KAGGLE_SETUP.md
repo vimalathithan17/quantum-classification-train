@@ -22,7 +22,7 @@ This guide covers setting up the quantum-classification-train project in a Kaggl
 ## Step 2: Add the Dataset
 
 1. Click **"+ Add Input"** in the right sidebar
-2. Search for: `gbm-lgg-balanced-xgb-reduced`
+2. Search for: `gbm_lgg_balanced_xgb_reduced`
 3. Select the dataset by `vimalathithan22i272`
 4. The dataset will be mounted at: `/kaggle/input/gbm-lgg-balanced-xgb-reduced/`
 
