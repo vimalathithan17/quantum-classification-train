@@ -52,6 +52,66 @@ pretrained_models/contrastive/
 └── loss_curve.png           # Training visualization
 ```
 
+### Evaluating and Choosing the Best Contrastive Encoder
+
+After training multiple encoder variants, you need to determine which is "best". There are two approaches:
+
+#### Method 1: Compare Contrastive Loss (Quick but Indirect)
+
+Look at the `loss` column in W&B or `training_metrics.json`. Lower contrastive loss means:
+- Positive pairs (same sample, different augmentations) are more similar
+- Negative pairs (different samples) are more dissimilar
+- The encoder learned better representations
+
+**Metrics to compare:**
+
+| Metric | Meaning | Goal |
+|--------|---------|------|
+| `loss` | Overall NT-Xent contrastive loss | Lower = better |
+| `intra_*` | Same-modality augmentation similarity | Lower = modality encodes well |
+| `cross_*_*` | Cross-modal patient alignment | Lower = modalities aligned |
+
+**⚠️ Limitation:** Low contrastive loss does NOT guarantee high downstream classification accuracy!
+
+#### Method 2: Evaluate on Downstream Task (Recommended)
+
+The only reliable way to choose the best encoder is to test on your actual task:
+
+```bash
+# For each trained encoder, extract features and run QML
+for encoder_name in member1_64dim member2_256dim member3_128dim; do
+    # Extract features
+    python examples/extract_pretrained_features.py \
+        --encoder_dir /path/to/$encoder_name/encoders \
+        --data_dir final_processed_datasets \
+        --output_dir pretrained_features_$encoder_name
+    
+    # Run QML with these features
+    python dre_standard.py \
+        --datatypes GeneExpr \
+        --use_pretrained_features \
+        --pretrained_features_dir pretrained_features_$encoder_name \
+        --use_wandb --wandb_project encoder-comparison
+done
+
+# Compare test accuracy / F1 scores across runs
+```
+
+**Decision criteria:**
+- **Best encoder = highest test F1 score** on your classification task
+- If multiple encoders have similar F1, prefer smaller `embed_dim` (faster QML training)
+
+#### Key Hyperparameters That Affect Quality
+
+From empirical testing:
+
+| Parameter | Recommendation | Why |
+|-----------|----------------|-----|
+| `temperature` | 0.05-0.1 | Lower = harder negatives, sharper representations |
+| `num_epochs` | 1000-2500 | Loss continues improving; diminishing returns after ~2000 |
+| `embed_dim` | 128-256 | 128 is often sufficient; 256 more expressive but slower |
+| `use_cross_modal` | Always `True` | Essential for multi-omics alignment |
+
 ### Columns Ignored by Contrastive Encoder
 
 The following columns are automatically excluded from features:
@@ -62,21 +122,45 @@ The following columns are automatically excluded from features:
 
 ### NaN Handling
 
-The contrastive encoder handles missing values via imputation:
+The contrastive encoder provides two approaches for handling missing values within features:
+
+**Approach 1: Transformer Encoder (Recommended for data with missing values)**
+
+Use `--encoder_type transformer` for native NaN handling. The transformer uses attention-based masking to learn from context of present features:
+
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --encoder_type transformer \
+    --impute_strategy none
+```
+
+**Approach 2: MLP Encoder (Faster, requires imputation)**
+
+Use `--encoder_type mlp` with an imputation strategy:
 
 | Strategy | Description | Best For |
 |----------|-------------|----------|
-| `median` (default) | Replace NaN with column median | Most datasets |
+| `none` | Keep NaN (only for transformer encoder) | Transformer encoder |
+| `median` | Replace NaN with column median | Most datasets with MLP |
 | `mean` | Replace NaN with column mean | Normally distributed data |
 | `zero` | Replace NaN with 0 | Sparse data |
 | `drop` | Drop samples with any NaN | Small NaN percentage |
 
 ```bash
-# Example: Use mean imputation
+# MLP encoder with median imputation
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
-    --impute_strategy mean
+    --encoder_type mlp \
+    --impute_strategy median
+
+# Full batch gradient descent (uses entire dataset per update)
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --full_batch
 ```
+
+**Note:** The indicator features (`indicator_features.parquet`) indicate which **entire modalities** are missing for each sample. The transformer encoder handles **feature-level** (column) NaN values within a modality.
 
 ### Missing Modality Handling
 
