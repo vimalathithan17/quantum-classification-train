@@ -703,12 +703,22 @@ def total_contrastive_loss(batch):
 #### Phase 1: Pretraining (Unlabeled Data)
 
 ```python
-# Training loop with learning rate warmup
+# Training loop with learning rate warmup and cosine decay
 base_lr = 1e-3
 warmup_epochs = 10
-pretrain_optimizer = torch.optim.Adam(encoder.parameters(), lr=base_lr)
+num_epochs = 1000
+weight_decay = 1e-4
 
-for epoch in range(pretrain_epochs):
+pretrain_optimizer = torch.optim.Adam(
+    encoder.parameters(), lr=base_lr, weight_decay=weight_decay
+)
+
+# Cosine annealing scheduler (starts after warmup)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    pretrain_optimizer, T_max=num_epochs - warmup_epochs, eta_min=base_lr * 0.01
+)
+
+for epoch in range(num_epochs):
     # Learning rate warmup to prevent early gradient explosion
     if epoch < warmup_epochs:
         warmup_factor = (epoch + 1) / warmup_epochs
@@ -728,12 +738,18 @@ for epoch in range(pretrain_epochs):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
         pretrain_optimizer.step()
+    
+    # Step scheduler after warmup completes
+    if epoch >= warmup_epochs:
+        scheduler.step()
 ```
 
 **Key Points**:
 - Uses ALL available data (labeled + unlabeled)
 - No need for tumor labels
 - **Learning rate warmup** (10 epochs default) prevents early gradient explosion
+- **Cosine LR decay** prevents late-stage divergence (loss exploding after many epochs)
+- **Weight decay** (L2 regularization) keeps weights bounded
 - **Gradient clipping** (`max_norm=1.0`) for additional stability
 - **NaN detection** automatically skips problematic batches
 - Can leverage larger datasets if available

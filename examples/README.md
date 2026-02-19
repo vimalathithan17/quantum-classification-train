@@ -308,6 +308,10 @@ python metalearner.py \
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--warmup_epochs` | `10` | Number of epochs for learning rate warmup (prevents gradient explosion) |
+| `--weight_decay` | `1e-4` | Weight decay (L2 regularization) for optimizer (0 to disable) |
+| `--lr_scheduler` | `cosine` | Learning rate scheduler: `none`, `cosine` (recommended), or `step` |
+| `--lr_step_size` | `100` | Step size for step scheduler |
+| `--lr_gamma` | `0.5` | Multiplicative factor for step scheduler |
 | `--checkpoint_interval` | `10` | Save checkpoint every N epochs |
 | `--keep_last_n_checkpoints` | `3` | Keep only last N checkpoints + best (0 = keep all) |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
@@ -478,7 +482,7 @@ Early stopping: The script automatically saves the best model based on validatio
 
 If you see `Warning: NaN/Inf gradient detected` or `Avg Loss: nan`:
 
-**Common Causes:**
+**Early Training NaN (first 100 epochs):**
 1. Temperature too low (< 0.05) with transformer encoder
 2. Learning rate too high for early training
 3. Data contains extreme values
@@ -496,6 +500,26 @@ If you see `Warning: NaN/Inf gradient detected` or `Avg Loss: nan`:
 
 # Ensure gradient clipping is enabled
 --max_grad_norm 1.0
+```
+
+**Late-Stage NaN (after 1000+ epochs):**
+
+If training was fine for many epochs but then diverges (all batches become NaN):
+
+**Causes:**
+1. No learning rate decay - constant LR causes eventual divergence
+2. Weights grow unboundedly over many epochs
+
+**Solutions:**
+```bash
+# Use cosine learning rate scheduler (default, recommended)
+--lr_scheduler cosine
+
+# Enable weight decay to prevent weight explosion
+--weight_decay 1e-4
+
+# Or use step scheduler for gradual decay
+--lr_scheduler step --lr_step_size 100 --lr_gamma 0.5
 ```
 
 **Note:** The code automatically skips batches with NaN gradients, but if most batches fail, the model cannot learn effectively.

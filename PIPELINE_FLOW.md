@@ -82,11 +82,18 @@ RAW TCGA DATA → DATA PROCESSING → CONTRASTIVE PRETRAINING → PARALLEL BRANC
 - Contrastive Loss (NT-Xent):
   - Positive pairs: Two augmented views of same sample
   - Negative pairs: Views from different samples in batch
-  - Temperature parameter: 0.5
+  - Temperature parameter: 0.07 (recommended)
 
 - Cross-Modal Contrastive (optional):
   - Align embeddings from different modalities of same patient
   - Encourages learning patient-level representations
+
+- Stability Features:
+  - Learning rate warmup (10% of epochs)
+  - Weight decay (L2 regularization, 1e-4)
+  - Cosine LR scheduler (prevents late-stage divergence)
+  - Gradient clipping (max_norm=1.0)
+  - NaN batch skipping (automatic recovery)
 
 **Output:** 
 - 6 pretrained modality encoders (GeneExpr_encoder.pt, miRNA_encoder.pt, etc.)

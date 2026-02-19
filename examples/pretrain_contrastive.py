@@ -230,6 +230,15 @@ def main():
                             help='Max gradient norm for clipping (default: 1.0, set to 0 to disable)')
     system_args.add_argument('--warmup_epochs', type=int, default=10,
                             help='Number of epochs for learning rate warmup (default: 10, set to 0 to disable)')
+    system_args.add_argument('--weight_decay', type=float, default=1e-4,
+                            help='Weight decay (L2 regularization) for optimizer (default: 1e-4, set to 0 to disable)')
+    system_args.add_argument('--lr_scheduler', type=str, default='cosine',
+                            choices=['none', 'cosine', 'step'],
+                            help='Learning rate scheduler: none, cosine (recommended), or step (default: cosine)')
+    system_args.add_argument('--lr_step_size', type=int, default=100,
+                            help='Step size for step scheduler (default: 100 epochs)')
+    system_args.add_argument('--lr_gamma', type=float, default=0.5,
+                            help='Multiplicative factor for step scheduler (default: 0.5)')
     
     # Logging configuration
     log_args = parser.add_argument_group('logging configuration')
@@ -273,6 +282,8 @@ def main():
                     'seed': args.seed,
                     'max_grad_norm': args.max_grad_norm,
                     'warmup_epochs': args.warmup_epochs,
+                    'weight_decay': args.weight_decay,
+                    'lr_scheduler': args.lr_scheduler,
                     'impute_strategy': args.impute_strategy,
                     'skip_modalities': args.skip_modalities
                 },
@@ -382,8 +393,27 @@ def main():
         use_cross_modal=args.use_cross_modal
     )
     
-    # Create optimizer
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    # Create optimizer with weight decay
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.weight_decay > 0:
+        print(f"Weight decay: {args.weight_decay}")
+    
+    # Create learning rate scheduler
+    # Note: Scheduler steps after warmup completes, so effective_epochs = num_epochs - warmup_epochs
+    scheduler = None
+    effective_epochs = max(1, args.num_epochs - args.warmup_epochs)
+    if args.lr_scheduler == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=effective_epochs, eta_min=args.lr * 0.01
+        )
+        print(f"LR scheduler: Cosine annealing over {effective_epochs} epochs (after {args.warmup_epochs} warmup)")
+    elif args.lr_scheduler == 'step':
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma
+        )
+        print(f"LR scheduler: Step (step_size={args.lr_step_size}, gamma={args.lr_gamma})")
+    else:
+        print("LR scheduler: None (constant learning rate after warmup)")
     
     # Setup device
     device = torch.device(args.device)
@@ -426,6 +456,7 @@ def main():
         keep_last_n_checkpoints=args.keep_last_n_checkpoints,
         max_grad_norm=args.max_grad_norm if args.max_grad_norm > 0 else None,
         warmup_epochs=args.warmup_epochs,
+        scheduler=scheduler,
         verbose=True,
         wandb_run=wandb_run
     )

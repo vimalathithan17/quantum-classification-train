@@ -354,6 +354,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_64dim \
     --device cpu
 ```
@@ -366,6 +369,9 @@ python examples/pretrain_contrastive.py \
 - `--lr 1e-3`: Learning rate for Adam optimizer
 - `--temperature 0.07`: Lower temperature for harder negative mining (more discriminative features)
 - `--use_cross_modal`: **Always enabled** - learns cross-modal relationships between modalities
+- `--warmup_epochs 10`: Gradual LR increase to prevent early gradient explosion
+- `--weight_decay 1e-4`: L2 regularization to prevent late-stage weight explosion
+- `--lr_scheduler cosine`: Cosine annealing decays LR to 1% to prevent late divergence
 - `--checkpoint_interval 10`: Save checkpoint every 10 epochs
 - `--device cpu`: Use CPU (change to `cuda` if GPU available with sufficient VRAM)
 
@@ -445,6 +451,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_256dim \
     --device cpu
 ```
@@ -523,6 +532,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 15 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_128dim \
     --device cpu
 ```
@@ -533,6 +545,9 @@ python examples/pretrain_contrastive.py \
 - `--num_epochs 150`: Slightly more epochs since smaller embedding needs more training
 - `--temperature 0.07`: Lower temperature for more discriminative features
 - `--use_cross_modal`: **Always enabled** - learns cross-modal relationships
+- `--warmup_epochs 15`: Gradual LR warmup (10% of epochs is a good rule)
+- `--weight_decay 1e-4`: L2 regularization prevents late-stage weight explosion
+- `--lr_scheduler cosine`: Decays LR smoothly to prevent divergence in long training
 
 ### Step 2: Extract 128-dim Features
 
@@ -844,6 +859,9 @@ python examples/pretrain_contrastive.py \
     --temperature 0.07 \
     --use_cross_modal \
     --checkpoint_interval 10 \
+    --warmup_epochs 15 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --device cpu
 
 # 2. Extract features
@@ -916,7 +934,8 @@ python examples/pretrain_contrastive.py \
     --output_dir pretrained_encoders_64dim \
     --embed_dim 64 --projection_dim 32 --batch_size 64 --num_epochs 100 \
     --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
-    --seed 42 --max_grad_norm 1.0 \
+    --seed 42 --max_grad_norm 1.0 --warmup_epochs 10 \
+    --weight_decay 1e-4 --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_64dim \
     --device cpu
 
@@ -953,7 +972,8 @@ python examples/pretrain_contrastive.py \
     --output_dir pretrained_encoders_128dim \
     --embed_dim 128 --projection_dim 64 --batch_size 32 --num_epochs 150 \
     --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
-    --seed 42 --max_grad_norm 1.0 \
+    --seed 42 --max_grad_norm 1.0 --warmup_epochs 15 \
+    --weight_decay 1e-4 --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-pretrain --wandb_run_name encoder_128dim \
     --device cpu
 
@@ -990,7 +1010,8 @@ python examples/pretrain_contrastive.py \
     --output_dir pretrained_encoders_128dim \
     --embed_dim 128 --projection_dim 64 --batch_size 32 --num_epochs 150 \
     --temperature 0.07 --use_cross_modal --checkpoint_interval 10 \
-    --seed 42 --max_grad_norm 1.0 \
+    --seed 42 --max_grad_norm 1.0 --warmup_epochs 15 \
+    --weight_decay 1e-4 --lr_scheduler cosine \
     --use_wandb --wandb_project qml_hybrid --wandb_run_name contrastive_encoder \
     --device cpu
 

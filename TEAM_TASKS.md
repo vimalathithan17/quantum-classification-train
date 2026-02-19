@@ -98,7 +98,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --warmup_epochs 20 \
+    --warmup_epochs 250 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member1_mlp_64dim \
     --device cpu
 ```
@@ -141,7 +143,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --warmup_epochs 20 \
+    --warmup_epochs 100 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member2_mlp_256dim \
     --device cpu
 ```
@@ -189,7 +193,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --warmup_epochs 20 \
+    --warmup_epochs 250 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member3_transformer_128dim \
     --device cpu
 ```
@@ -242,7 +248,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --warmup_epochs 20 \
+    --warmup_epochs 250 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp007 \
     --device cuda
 ```
@@ -268,7 +276,9 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --warmup_epochs 20 \
+    --warmup_epochs 250 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp005 \
     --device cuda
 ```

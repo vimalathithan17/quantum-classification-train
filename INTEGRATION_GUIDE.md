@@ -133,7 +133,10 @@ python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_encoders \
     --num_epochs 100 \
-    --batch_size 32
+    --batch_size 32 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # Step 2: Train transformer with pretrained encoders
 python examples/train_transformer_fusion.py \
@@ -242,7 +245,10 @@ Final Classification
 python examples/pretrain_contrastive.py \
     --data_dir all_datasets \
     --output_dir pretrained_encoders \
-    --num_epochs 100
+    --num_epochs 100 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # Step 2: Extract embeddings from pretrained encoders
 python examples/extract_pretrained_features.py \
@@ -351,6 +357,9 @@ python examples/pretrain_contrastive.py \
     --batch_size 64 \
     --temperature 0.07 \  # Lower temperature = harder negative mining
     --use_cross_modal \   # Learn relationships across modalities
+    --warmup_epochs 20 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --augmentation_strength 0.3  # Data augmentation for more diversity
 
 # Step 2: Fine-tune with class balancing
@@ -413,7 +422,10 @@ python examples/pretrain_contrastive.py \
     --num_epochs 200 \
     --batch_size 64 \
     --use_cross_modal \
-    --temperature 0.07
+    --temperature 0.07 \
+    --warmup_epochs 20 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # 2. Extract features from pretrained encoders
 echo "Stage 2: Feature Extraction..."
@@ -516,7 +528,10 @@ python examples/pretrain_contrastive.py \
     --data_dir all_tcga_data \
     --output_dir pretrained_encoders_medium \
     --num_epochs 150 \
-    --batch_size 64
+    --batch_size 64 \
+    --warmup_epochs 15 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # 3. Extract features for your labeled subset
 python examples/extract_pretrained_features.py \
@@ -672,7 +687,9 @@ python examples/pretrain_contrastive.py \
     --batch_size 16 \       # SMALLER batches
     --embed_dim 128 \       # SMALLER embeddings (not 256)
     --temperature 0.5 \     # HIGHER temperature (easier learning)
+    --warmup_epochs 5 \     # Short warmup for short training
     --weight_decay 0.01 \   # STRONG regularization
+    --lr_scheduler cosine \ # Decay LR to prevent late explosion
     --augmentation_strength 0.1  # MINIMAL augmentation
 ```
 
@@ -814,7 +831,10 @@ python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_large \
     --num_epochs 200 \
-    --batch_size 128
+    --batch_size 128 \
+    --warmup_epochs 20 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # Stage 2: Extract pretrained features for QML base learners
 python examples/extract_pretrained_features.py \
@@ -894,7 +914,10 @@ Raw Data → Contrastive Pretraining → Transformer Fusion → QML Meta-learner
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained \
-    --num_epochs 100
+    --num_epochs 100 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
 
 # Stage 2: Train Transformer with pretrained encoders
 python examples/train_transformer_fusion.py \
@@ -965,6 +988,9 @@ python examples/pretrain_contrastive.py \
     --output_dir pretrained_encoders_step1 \
     --num_epochs 100 \
     --batch_size 32 \
+    --warmup_epochs 10 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine
     --embed_dim 256 \
     --device cuda  # or 'cpu' if no GPU
 ```
@@ -1202,6 +1228,9 @@ python examples/pretrain_contrastive.py \
     --batch_size 64 \
     --temperature 0.07 \
     --use_cross_modal \
+    --warmup_epochs 20 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --device cuda
 
 # Stage 2: Extract Features
@@ -1332,6 +1361,9 @@ python examples/pretrain_contrastive.py \
     --batch_size 256 \
     --temperature 0.05 \
     --use_cross_modal \
+    --warmup_epochs 30 \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine \
     --device cuda \
     --num_workers 8
 
@@ -1650,6 +1682,15 @@ python examples/pretrain_contrastive.py \
 ```bash
 python examples/pretrain_contrastive.py \
     --max_grad_norm 1.0  # Always enable
+```
+
+**Solution E: Use Learning Rate Scheduler (for late-stage NaN)**
+
+If training runs fine for hundreds of epochs then suddenly gets all NaN, use cosine LR decay:
+```bash
+python examples/pretrain_contrastive.py \
+    --weight_decay 1e-4 \
+    --lr_scheduler cosine  # Decays LR to prevent late divergence
 ```
 
 **Note:** The code automatically skips batches with NaN gradients, but if most batches fail, restart with the above fixes.

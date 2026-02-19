@@ -163,6 +163,7 @@ def pretrain_contrastive(
     keep_last_n_checkpoints: int = 3,
     max_grad_norm: Optional[float] = 1.0,
     warmup_epochs: int = 10,
+    scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
     verbose: bool = True,
     wandb_run = None
 ) -> Dict[str, List[float]]:
@@ -183,6 +184,7 @@ def pretrain_contrastive(
         keep_last_n_checkpoints: Keep only the last N checkpoints + best (0 = keep all)
         max_grad_norm: Maximum gradient norm for clipping (None or 0 to disable)
         warmup_epochs: Number of epochs to linearly warmup learning rate (default: 10)
+        scheduler: Learning rate scheduler (optional, stepped after warmup completes)
         verbose: Whether to print progress
         wandb_run: Weights & Biases run object for logging (optional)
         
@@ -303,10 +305,16 @@ def pretrain_contrastive(
             for key, vals in epoch_loss_dict.items():
                 print(f"  {key}: {np.mean(vals):.4f}")
         
+        # Step learning rate scheduler (only after warmup completes)
+        if scheduler is not None and epoch >= warmup_epochs:
+            scheduler.step()
+            if verbose and epoch == warmup_epochs:
+                print(f"LR scheduler active. Current LR: {optimizer.param_groups[0]['lr']:.2e}")
+        
         # Log to wandb
         if wandb_run is not None:
             try:
-                log_dict = {'epoch': epoch + 1, 'loss': avg_epoch_loss}
+                log_dict = {'epoch': epoch + 1, 'loss': avg_epoch_loss, 'lr': optimizer.param_groups[0]['lr']}
                 for key, vals in epoch_loss_dict.items():
                     log_dict[key] = np.mean(vals)
                 wandb_run.log(log_dict)
