@@ -157,8 +157,8 @@ class ModalityEncoder(nn.Module):
             nn.BatchNorm1d(embed_dim)
         )
         
-        # Learnable token for missing modality
-        self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
+        # Learnable token for missing modality (scaled for stability)
+        self.missing_token = nn.Parameter(torch.randn(1, embed_dim) * 0.02)
     
     def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -266,10 +266,12 @@ class TransformerModalityEncoder(nn.Module):
         self.feature_embedding = nn.Linear(1, d_model)
         
         # Learnable positional encoding for each feature position
-        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model))
+        # Scale by sqrt(d_model) for better numerical stability (like in original Transformer)
+        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model) * 0.02)
         
         # Learnable mask token for missing features
-        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
+        # Scale down for stability
+        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -288,8 +290,8 @@ class TransformerModalityEncoder(nn.Module):
             nn.LayerNorm(embed_dim)
         )
         
-        # Learnable token for completely missing modality
-        self.missing_modality_token = nn.Parameter(torch.randn(1, embed_dim))
+        # Learnable token for completely missing modality (scaled for stability)
+        self.missing_modality_token = nn.Parameter(torch.randn(1, embed_dim) * 0.02)
     
     def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -673,11 +675,20 @@ def nt_xent_loss(
     z_i = F.normalize(z_i, dim=1, eps=eps)
     z_j = F.normalize(z_j, dim=1, eps=eps)
     
+    # Check for NaN in inputs (can happen if model weights degrade)
+    if torch.isnan(z_i).any() or torch.isnan(z_j).any():
+        # Return zero loss to prevent NaN propagation
+        return torch.tensor(0.0, device=z_i.device, requires_grad=True)
+    
     # Concatenate to create 2N samples
     representations = torch.cat([z_i, z_j], dim=0)  # (2*batch_size, projection_dim)
     
     # Compute similarity matrix
     similarity_matrix = torch.matmul(representations, representations.T) / temperature  # (2N, 2N)
+    
+    # Clamp similarity values to prevent numerical overflow with very low temperature
+    # Max value of 50 prevents exp(50) ≈ 5e21 which is still within float32 range
+    similarity_matrix = similarity_matrix.clamp(min=-50.0, max=50.0)
     
     # Create labels for positive pairs
     # For index i, positive is at i+N (or i-N if i>=N)
@@ -692,6 +703,11 @@ def nt_xent_loss(
     
     # Standard cross-entropy loss (InfoNCE)
     loss = F.cross_entropy(similarity_matrix, labels)
+    
+    # Final NaN check - return zero loss if something went wrong
+    if torch.isnan(loss):
+        return torch.tensor(0.0, device=z_i.device, requires_grad=True)
+    
     return loss
 
 

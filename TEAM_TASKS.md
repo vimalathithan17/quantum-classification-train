@@ -212,7 +212,36 @@ python examples/extract_pretrained_features.py \
 
 **Focus:** Compare different temperature settings with transformer encoder (256-dim for higher capacity)
 
-### Run A: Temperature = 0.05 (Sharper, recommended)
+> **⚠️ Numerical Stability Note:** Very low temperatures (< 0.07) can cause gradient explosion and NaN losses.
+> The code now includes automatic NaN detection and batch skipping, but **temperature=0.07 is recommended** for stability.
+> If you see NaN losses, try increasing temperature or reducing learning rate.
+
+### Run A: Temperature = 0.07 (Stable, recommended)
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --output_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp007 \
+    --encoder_type transformer \
+    --impute_strategy none \
+    --embed_dim 256 \
+    --projection_dim 128 \
+    --transformer_d_model 64 \
+    --transformer_num_heads 4 \
+    --transformer_num_layers 2 \
+    --batch_size 32 \
+    --num_epochs 2500 \
+    --lr 1e-3 \
+    --temperature 0.07 \
+    --use_cross_modal \
+    --skip_modalities SNV \
+    --checkpoint_interval 10 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp007 \
+    --device cuda
+```
+
+### Run B: Temperature = 0.05 (Sharper, may need NaN recovery)
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -226,7 +255,7 @@ python examples/pretrain_contrastive.py \
     --transformer_num_layers 2 \
     --batch_size 32 \
     --num_epochs 2500 \
-    --lr 1e-3 \
+    --lr 5e-4 \
     --temperature 0.05 \
     --use_cross_modal \
     --skip_modalities SNV \
@@ -237,39 +266,14 @@ python examples/pretrain_contrastive.py \
     --device cuda
 ```
 
-### Run B: Temperature = 0.02 (Very sharp)
-```bash
-python examples/pretrain_contrastive.py \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp002 \
-    --encoder_type transformer \
-    --impute_strategy none \
-    --embed_dim 256 \
-    --projection_dim 128 \
-    --transformer_d_model 64 \
-    --transformer_num_heads 4 \
-    --transformer_num_layers 2 \
-    --batch_size 32 \
-    --num_epochs 2500 \
-    --lr 1e-3 \
-    --temperature 0.02 \
-    --use_cross_modal \
-    --skip_modalities SNV \
-    --checkpoint_interval 10 \
-    --seed 42 \
-    --max_grad_norm 1.0 \
-    --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp002 \
-    --device cuda
-```
-
-**Note:** Previous experiments showed lower temperature (0.02-0.07) significantly outperforms higher temperature (0.2-0.5).
+**Note:** Lower learning rate (5e-4 vs 1e-3) helps stability with lower temperature.
 
 **After Training - Extract Features (for best run):**
 ```bash
 python examples/extract_pretrained_features.py \
-    --encoder_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp005/encoders \
+    --encoder_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp007/encoders \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_features_transformer_256dim_temp005 \
+    --output_dir /kaggle/working/pretrained_features_transformer_256dim_temp007 \
     --device cuda
 ```
 
@@ -327,8 +331,8 @@ python dre_standard.py \
 | 1 | MLP | 64 | 32 | 0.07 | 2500 | `pretrained_encoders_mlp_64dim` |
 | 2 | MLP | 256 | 128 | 0.07 | 1000 | `pretrained_encoders_mlp_256dim` |
 | 3 | **Transformer** | 128 | 64 | 0.07 | 2500 | `pretrained_encoders_transformer_128dim` |
-| 4a | **Transformer** | 256 | 128 | 0.05 | 2500 | `pretrained_encoders_transformer_256dim_temp005` |
-| 4b | **Transformer** | 256 | 128 | 0.02 | 2500 | `pretrained_encoders_transformer_256dim_temp002` |
+| 4a | **Transformer** | 256 | 128 | **0.07** | 2500 | `pretrained_encoders_transformer_256dim_temp007` |
+| 4b | **Transformer** | 256 | 128 | 0.05 | 2500 | `pretrained_encoders_transformer_256dim_temp005` |
 
 **Modalities Trained:** GeneExpr, miRNA, Meth, CNV, Prot (SNV skipped)
 
@@ -338,15 +342,14 @@ python dre_standard.py \
 
 | Run | Embed Dim | Temp | Loss | Notes |
 |-----|-----------|------|------|-------|
-| member3_128dim | 128 | 0.07 | **0.594** | ✓ Best overall |
-| member4_256dim_temp005 | 256 | 0.05 | 0.538 | ✓ Best for 256-dim |
-| member4_256dim_temp002 | 256 | 0.02 | 0.554 | Good |
-| member2_256dim | 256 | 0.07 | 0.651 | - |
+| member3_128dim | 128 | 0.07 | **0.594** | ✓ Best overall, stable |
+| member4_256dim_temp005 | 256 | 0.05 | 0.538 | Good but can cause NaN |
+| member2_256dim | 256 | 0.07 | 0.651 | Stable |
 | member1_64dim | 64 | 0.07 | 0.935 | - |
 | member4_128dim_temp02 | 128 | 0.2 | 1.167 | Too high temp |
 | member4_128dim_temp05 | 128 | 0.5 | 2.611 | Too high temp |
 
-**Conclusion:** Lower temperature (0.02-0.07) significantly outperforms higher temperature (0.2-0.5).
+**Conclusion:** Temperature 0.07 is recommended for stability. Lower temperatures (0.02-0.05) can achieve better loss but risk NaN/gradient explosion.
 
 ---
 

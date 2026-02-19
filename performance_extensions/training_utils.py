@@ -201,6 +201,7 @@ def pretrain_contrastive(
     for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0.0
         epoch_loss_dict = {}
+        n_successful_batches = 0  # Track batches that weren't skipped due to NaN
         
         for batch_idx, (data_dict, _) in enumerate(dataloader):
             # Move augmented views to device
@@ -223,9 +224,28 @@ def pretrain_contrastive(
             # Compute contrastive loss (passes valid masks to exclude all-NaN samples)
             loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model, valid_masks)
             
+            # NaN detection - skip batch if loss is NaN to prevent gradient corruption
+            if torch.isnan(loss) or torch.isinf(loss):
+                if verbose:
+                    print(f"Warning: NaN/Inf loss detected at epoch {epoch+1}, batch {batch_idx+1}. Skipping batch.")
+                continue
+            
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
+            
+            # Check for NaN gradients (indicates numerical instability)
+            has_nan_grad = False
+            for name, param in model.named_parameters():
+                if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                    has_nan_grad = True
+                    break
+            
+            if has_nan_grad:
+                if verbose:
+                    print(f"Warning: NaN/Inf gradient detected at epoch {epoch+1}, batch {batch_idx+1}. Skipping update.")
+                optimizer.zero_grad()  # Clear the bad gradients
+                continue
             
             # Gradient clipping
             if max_grad_norm is not None and max_grad_norm > 0:
@@ -236,6 +256,7 @@ def pretrain_contrastive(
             # Track metrics
             batch_loss = loss.item()
             epoch_loss += batch_loss
+            n_successful_batches += 1
             metrics['batch_losses'].append(batch_loss)
             
             # Aggregate loss components
@@ -246,16 +267,17 @@ def pretrain_contrastive(
             
             # Log progress
             if verbose and (batch_idx + 1) % log_interval == 0:
-                avg_loss = epoch_loss / (batch_idx + 1)
+                avg_loss = epoch_loss / n_successful_batches if n_successful_batches > 0 else 0.0
                 print(f"Epoch [{epoch+1}/{num_epochs}] Batch [{batch_idx+1}/{len(dataloader)}] "
                       f"Loss: {batch_loss:.4f} (avg: {avg_loss:.4f})")
         
         # End of epoch
-        avg_epoch_loss = epoch_loss / len(dataloader)
+        avg_epoch_loss = epoch_loss / n_successful_batches if n_successful_batches > 0 else float('nan')
         metrics['epoch_losses'].append(avg_epoch_loss)
         
         if verbose:
-            print(f"Epoch [{epoch+1}/{num_epochs}] Complete. Avg Loss: {avg_epoch_loss:.4f}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] Complete. Avg Loss: {avg_epoch_loss:.4f}"
+                  + (f" ({n_successful_batches}/{len(dataloader)} batches)" if n_successful_batches < len(dataloader) else ""))
             
             # Print component losses
             for key, vals in epoch_loss_dict.items():
