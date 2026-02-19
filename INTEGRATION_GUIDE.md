@@ -1600,7 +1600,63 @@ for i, (batch_data, batch_labels) in enumerate(dataloader):
 
 ---
 
-### Issue 2: Contrastive Pretraining Not Converging
+### Issue 2: NaN Loss or Gradient Explosion During Contrastive Pretraining
+
+**Symptoms:**
+```
+Warning: NaN/Inf gradient detected at epoch 1, batch 1. Skipping batch.
+Warning: NaN/Inf gradient detected at epoch 1, batch 2. Skipping batch.
+...
+Epoch [4/5000] Complete. Avg Loss: nan (0/9 batches)
+```
+
+**Causes:**
+
+**Cause A: Temperature Too Low**
+- Low temperature (< 0.05) causes very sharp similarity distributions
+- Gradient magnitudes become extremely large
+- Especially problematic with transformer encoder
+
+**Cause B: Cross-Modal Projection Head Mismatch**
+- Different modalities use different projection heads
+- Projections may be in incompatible spaces
+- **Fixed in latest code**: Cross-modal loss now uses embeddings directly
+
+**Cause C: Zero-Norm Embeddings**
+- Some samples produce all-zero embeddings
+- Normalization creates NaN
+
+**Solutions:**
+
+**Solution A: Increase Temperature**
+```bash
+python examples/pretrain_contrastive.py \
+    --temperature 0.07  # Recommended, instead of 0.02-0.05
+```
+
+**Solution B: Increase Warmup Epochs**
+```bash
+python examples/pretrain_contrastive.py \
+    --warmup_epochs 20  # Gradually increase LR
+```
+
+**Solution C: Reduce Learning Rate**
+```bash
+python examples/pretrain_contrastive.py \
+    --lr 5e-4  # Instead of 1e-3
+```
+
+**Solution D: Ensure Gradient Clipping**
+```bash
+python examples/pretrain_contrastive.py \
+    --max_grad_norm 1.0  # Always enable
+```
+
+**Note:** The code automatically skips batches with NaN gradients, but if most batches fail, restart with the above fixes.
+
+---
+
+### Issue 3: Contrastive Pretraining Not Converging
 
 **Symptoms:**
 ```
@@ -1611,28 +1667,28 @@ Epoch 50: Loss = 6.234 (not decreasing)
 
 **Cause A: Temperature Too High**
 ```bash
-# Try lower temperature
+# Try moderate temperature (not too high, not too low)
 python examples/pretrain_contrastive.py \
-    --temperature 0.05  # Instead of 0.1
+    --temperature 0.07  # Sweet spot: 0.05-0.1
 ```
 
 **Cause B: Learning Rate Too High/Low**
 ```bash
 # Tune learning rate
 python examples/pretrain_contrastive.py \
-    --learning_rate 1e-4  # Try 1e-5, 1e-4, 1e-3
+    --lr 1e-3  # Try 1e-5, 1e-4, 1e-3
 ```
 
 **Cause C: Batch Size Too Small**
 ```bash
 # Increase batch size for better negative samples
 python examples/pretrain_contrastive.py \
-    --batch_size 128  # Instead of 32
+    --batch_size 64  # Instead of 32
 ```
 
 ---
 
-### Issue 3: Poor Performance on Minority Classes
+### Issue 4: Poor Performance on Minority Classes
 
 **Symptoms:**
 ```
@@ -1687,7 +1743,7 @@ criterion = FocalLoss(gamma=2.0)
 
 ---
 
-### Issue 4: QML Training Too Slow
+### Issue 5: QML Training Too Slow
 
 **Symptoms:**
 - QML training taking > 8 hours for single modality
@@ -1721,7 +1777,7 @@ python dre_standard.py --verbose
 
 ---
 
-### Issue 5: Missing Modality Handling Poor
+### Issue 6: Missing Modality Handling Poor
 
 **Symptoms:**
 - Samples with missing modalities have low accuracy

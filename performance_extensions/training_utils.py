@@ -162,6 +162,7 @@ def pretrain_contrastive(
     checkpoint_interval: int = 10,
     keep_last_n_checkpoints: int = 3,
     max_grad_norm: Optional[float] = 1.0,
+    warmup_epochs: int = 10,
     verbose: bool = True,
     wandb_run = None
 ) -> Dict[str, List[float]]:
@@ -181,6 +182,7 @@ def pretrain_contrastive(
         checkpoint_interval: Save checkpoint every N epochs
         keep_last_n_checkpoints: Keep only the last N checkpoints + best (0 = keep all)
         max_grad_norm: Maximum gradient norm for clipping (None or 0 to disable)
+        warmup_epochs: Number of epochs to linearly warmup learning rate (default: 10)
         verbose: Whether to print progress
         wandb_run: Weights & Biases run object for logging (optional)
         
@@ -194,11 +196,29 @@ def pretrain_contrastive(
     best_loss = float('inf')
     saved_checkpoints = []  # Track checkpoint paths for cleanup
     
+    # Store base learning rate for warmup
+    base_lr = optimizer.param_groups[0]['lr']
+    
     if checkpoint_dir is not None:
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     for epoch in range(start_epoch, num_epochs):
+        # Learning rate warmup
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            warmup_factor = (epoch + 1) / warmup_epochs
+            current_lr = base_lr * warmup_factor
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = current_lr
+            if verbose and epoch == 0:
+                print(f"Learning rate warmup: {warmup_epochs} epochs, starting at {current_lr:.2e}")
+        elif warmup_epochs > 0 and epoch == warmup_epochs:
+            # Restore full learning rate after warmup
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = base_lr
+            if verbose:
+                print(f"Warmup complete. Learning rate: {base_lr:.2e}")
+        
         epoch_loss = 0.0
         epoch_loss_dict = {}
         n_successful_batches = 0  # Track batches that weren't skipped due to NaN

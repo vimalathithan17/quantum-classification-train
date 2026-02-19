@@ -640,18 +640,26 @@ class OmicsAugmentation:
 
 **Idea**: Different modalities from the same patient should have similar representations
 
+**Important**: Cross-modal loss compares embeddings directly in the shared `embed_dim` space, NOT through modality-specific projection heads. Using different projection heads creates incompatible spaces and causes gradient explosion.
+
 ```python
 def cross_modal_contrastive_loss(embedding_gene, embedding_protein, temperature=0.5):
     """
-    Contrastive loss across modalities
-    For same patient: gene expression and protein should be similar
-    For different patients: should be different
-    """
-    # Same logic as NT-Xent but embeddings come from different modalities
-    gene_proj = F.normalize(projection_head_gene(embedding_gene), dim=1)
-    prot_proj = F.normalize(projection_head_prot(embedding_protein), dim=1)
+    Contrastive loss across modalities.
     
-    return nt_xent_loss(gene_proj, prot_proj, temperature)
+    Note: We compare EMBEDDINGS directly (not projections) because each modality
+    has its own projection head, creating incompatible representation spaces.
+    Embeddings are already in the same embed_dim space.
+    """
+    # Normalize embeddings directly - they're in the same embed_dim space
+    gene_emb = F.normalize(embedding_gene, dim=1)
+    prot_emb = F.normalize(embedding_protein, dim=1)
+    
+    # Do NOT use projection heads for cross-modal comparison:
+    # gene_proj = projection_head_gene(embedding_gene)  # BAD: Space A
+    # prot_proj = projection_head_prot(embedding_protein)  # BAD: Space B
+    
+    return nt_xent_loss(gene_emb, prot_emb, temperature)
 ```
 
 #### Combined Pretraining Objective
@@ -661,10 +669,13 @@ def total_contrastive_loss(batch):
     """
     Combine intra-modal and cross-modal contrastive losses.
     Note: encoder returns (embedding, projection, valid_mask) tuple.
+    
+    - Intra-modal: Uses projections (same head for same modality)
+    - Cross-modal: Uses embeddings directly (avoids incompatible projection spaces)
     """
     loss = 0
     
-    # Intra-modal: each modality with its own augmentations
+    # Intra-modal: each modality with its own augmentations (use projections)
     for modality in ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot']:
         if batch[modality] is not None:
             aug1, aug2 = augment(batch[modality], modality)
@@ -674,11 +685,12 @@ def total_contrastive_loss(batch):
             valid_mask = mask1 & mask2
             loss += nt_xent_loss(proj1, proj2, valid_mask=valid_mask)
     
-    # Cross-modal: different modalities from same patient
+    # Cross-modal: different modalities from same patient (use EMBEDDINGS)
     if batch['GeneExpr'] is not None and batch['Prot'] is not None:
-        emb_gene, proj_gene, mask_gene = encoder(batch['GeneExpr'], 'GeneExpr')
-        emb_prot, proj_prot, mask_prot = encoder(batch['Prot'], 'Prot')
-        loss += cross_modal_contrastive_loss(proj_gene, proj_prot, mask_gene, mask_prot)
+        emb_gene, _, mask_gene = encoder(batch['GeneExpr'], 'GeneExpr')
+        emb_prot, _, mask_prot = encoder(batch['Prot'], 'Prot')
+        # Compare embeddings directly, NOT projections
+        loss += cross_modal_contrastive_loss(emb_gene, emb_prot, mask_gene, mask_prot)
     
     # Can add more cross-modal pairs based on biological relevance
     # e.g., Methylation <-> GeneExpr (methylation regulates expression)
@@ -691,23 +703,39 @@ def total_contrastive_loss(batch):
 #### Phase 1: Pretraining (Unlabeled Data)
 
 ```python
-# Training loop
-pretrain_optimizer = torch.optim.Adam(encoder.parameters(), lr=1e-3)
+# Training loop with learning rate warmup
+base_lr = 1e-3
+warmup_epochs = 10
+pretrain_optimizer = torch.optim.Adam(encoder.parameters(), lr=base_lr)
 
 for epoch in range(pretrain_epochs):
+    # Learning rate warmup to prevent early gradient explosion
+    if epoch < warmup_epochs:
+        warmup_factor = (epoch + 1) / warmup_epochs
+        for param_group in pretrain_optimizer.param_groups:
+            param_group['lr'] = base_lr * warmup_factor
+    
     for batch in unlabeled_dataloader:  # Can use ALL available data
         # Generate augmentations
         loss = total_contrastive_loss(batch)
         
-        # Optimize
+        # Skip NaN losses (numerical instability protection)
+        if torch.isnan(loss):
+            continue
+        
+        # Optimize with gradient clipping
         pretrain_optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
         pretrain_optimizer.step()
 ```
 
 **Key Points**:
 - Uses ALL available data (labeled + unlabeled)
 - No need for tumor labels
+- **Learning rate warmup** (10 epochs default) prevents early gradient explosion
+- **Gradient clipping** (`max_norm=1.0`) for additional stability
+- **NaN detection** automatically skips problematic batches
 - Can leverage larger datasets if available
 - Learns general representations
 

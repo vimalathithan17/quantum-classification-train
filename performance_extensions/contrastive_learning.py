@@ -323,7 +323,9 @@ class TransformerModalityEncoder(nn.Module):
         nan_mask = torch.isnan(x)  # (batch, input_dim)
         
         # Replace NaN with 0 for embedding (will be masked in attention)
-        x_filled = torch.where(nan_mask, torch.zeros_like(x), x)
+        # Use nan_to_num instead of torch.where for proper gradient flow
+        # torch.where has issues when input contains NaN even for non-NaN positions
+        x_filled = torch.nan_to_num(x, nan=0.0)
         
         # Embed each feature value: (batch, input_dim) -> (batch, input_dim, d_model)
         x_embedded = self.feature_embedding(x_filled.unsqueeze(-1))  # (batch, input_dim, d_model)
@@ -671,13 +673,24 @@ def nt_xent_loss(
         raise ValueError(f"NT-Xent loss requires batch_size >= 2, got {batch_size}. "
                         "Use drop_last=True in DataLoader to avoid incomplete batches.")
     
-    # Normalize projections
+    # Check for NaN in un-normalized inputs first
+    if torch.isnan(z_i).any() or torch.isnan(z_j).any():
+        # Return zero loss to prevent NaN propagation
+        return torch.tensor(0.0, device=z_i.device, requires_grad=True)
+    
+    # Check for zero-norm rows (would cause NaN after normalization)
+    z_i_norms = torch.norm(z_i, dim=1, keepdim=True)
+    z_j_norms = torch.norm(z_j, dim=1, keepdim=True)
+    if (z_i_norms < eps).any() or (z_j_norms < eps).any():
+        # Return zero loss for degenerate embeddings
+        return torch.tensor(0.0, device=z_i.device, requires_grad=True)
+    
+    # Normalize projections (safe now that we've checked for zero norms)
     z_i = F.normalize(z_i, dim=1, eps=eps)
     z_j = F.normalize(z_j, dim=1, eps=eps)
     
-    # Check for NaN in inputs (can happen if model weights degrade)
+    # Double-check for NaN after normalization (shouldn't happen but be safe)
     if torch.isnan(z_i).any() or torch.isnan(z_j).any():
-        # Return zero loss to prevent NaN propagation
         return torch.tensor(0.0, device=z_i.device, requires_grad=True)
     
     # Concatenate to create 2N samples
@@ -718,7 +731,8 @@ def cross_modal_contrastive_loss(
     projection_head_2: nn.Module,
     temperature: float = 0.5,
     valid_mask_1: Optional[torch.Tensor] = None,
-    valid_mask_2: Optional[torch.Tensor] = None
+    valid_mask_2: Optional[torch.Tensor] = None,
+    use_embeddings_directly: bool = True
 ) -> torch.Tensor:
     """
     Contrastive loss across two different modalities.
@@ -728,18 +742,27 @@ def cross_modal_contrastive_loss(
     Args:
         embedding_1: Embeddings from modality 1, shape (batch, embed_dim)
         embedding_2: Embeddings from modality 2, shape (batch, embed_dim)
-        projection_head_1: Projection head for modality 1
-        projection_head_2: Projection head for modality 2
+        projection_head_1: Projection head for modality 1 (ignored if use_embeddings_directly=True)
+        projection_head_2: Projection head for modality 2 (ignored if use_embeddings_directly=True)
         temperature: Temperature parameter
         valid_mask_1: Optional valid mask for modality 1, shape (batch,)
         valid_mask_2: Optional valid mask for modality 2, shape (batch,)
+        use_embeddings_directly: If True, compare embeddings directly without projection.
+                                This is recommended for cross-modal loss since different
+                                projection heads create incompatible spaces.
         
     Returns:
         Scalar loss value
     """
-    # Project embeddings
-    proj_1 = projection_head_1(embedding_1)
-    proj_2 = projection_head_2(embedding_2)
+    if use_embeddings_directly:
+        # Compare embeddings directly - they're already in the same embed_dim space
+        # This avoids the issue of different projection heads creating incompatible spaces
+        z_1 = embedding_1
+        z_2 = embedding_2
+    else:
+        # Project embeddings through modality-specific heads (not recommended)
+        z_1 = projection_head_1(embedding_1)
+        z_2 = projection_head_2(embedding_2)
     
     # Combine valid masks: sample must be valid in BOTH modalities
     if valid_mask_1 is not None and valid_mask_2 is not None:
@@ -752,7 +775,7 @@ def cross_modal_contrastive_loss(
         combined_mask = None
     
     # Compute NT-Xent loss with valid mask
-    return nt_xent_loss(proj_1, proj_2, temperature, valid_mask=combined_mask)
+    return nt_xent_loss(z_1, z_2, temperature, valid_mask=combined_mask)
 
 
 class ContrastiveLearningLoss(nn.Module):

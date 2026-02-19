@@ -307,6 +307,7 @@ python metalearner.py \
 | `--skip_modalities` | `None` | List of modalities to skip (e.g., `SNV Prot`) |
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
+| `--warmup_epochs` | `10` | Number of epochs for learning rate warmup (prevents gradient explosion) |
 | `--checkpoint_interval` | `10` | Save checkpoint every N epochs |
 | `--keep_last_n_checkpoints` | `3` | Keep only last N checkpoints + best (0 = keep all) |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
@@ -472,6 +473,32 @@ Early stopping: The script automatically saves the best model based on validatio
 6. **GPU recommended**: Training is much faster on GPU, especially for transformer models
 
 ## Troubleshooting
+
+### NaN Loss or Gradient Explosion
+
+If you see `Warning: NaN/Inf gradient detected` or `Avg Loss: nan`:
+
+**Common Causes:**
+1. Temperature too low (< 0.05) with transformer encoder
+2. Learning rate too high for early training
+3. Data contains extreme values
+
+**Solutions:**
+```bash
+# Use recommended temperature (0.07)
+--temperature 0.07
+
+# Increase warmup epochs
+--warmup_epochs 20
+
+# Reduce learning rate
+--lr 5e-4
+
+# Ensure gradient clipping is enabled
+--max_grad_norm 1.0
+```
+
+**Note:** The code automatically skips batches with NaN gradients, but if most batches fail, the model cannot learn effectively.
 
 ### Out of Memory
 

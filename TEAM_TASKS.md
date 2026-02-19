@@ -24,6 +24,7 @@ Each team member will train a different variant of the contrastive encoder to co
 - `--checkpoint_interval 10`
 - `--seed 42` (for reproducibility)
 - `--max_grad_norm 1.0`
+- `--warmup_epochs 20` (prevents early gradient explosion)
 
 ---
 
@@ -45,6 +46,7 @@ Each team member will train a different variant of the contrastive encoder to co
 |----------|-------------|---------|
 | `--encoder_type` | `mlp` or `transformer` | `mlp` |
 | `--impute_strategy` | `median`, `mean`, `zero`, `none`, or auto | auto-selects based on encoder_type |
+| `--warmup_epochs` | LR warmup epochs (prevents gradient explosion) | 10 |
 | `--transformer_d_model` | Transformer hidden dimension | 64 |
 | `--transformer_num_heads` | Number of attention heads | 4 |
 | `--transformer_num_layers` | Number of transformer layers | 2 |
@@ -96,6 +98,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 20 \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member1_mlp_64dim \
     --device cpu
 ```
@@ -138,6 +141,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 20 \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member2_mlp_256dim \
     --device cpu
 ```
@@ -185,6 +189,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 20 \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member3_transformer_128dim \
     --device cpu
 ```
@@ -237,6 +242,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 20 \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp007 \
     --device cuda
 ```
@@ -262,6 +268,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
+    --warmup_epochs 20 \
     --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp005 \
     --device cuda
 ```

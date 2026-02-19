@@ -228,6 +228,8 @@ def main():
                             help='Random seed for reproducibility (default: 42)')
     system_args.add_argument('--max_grad_norm', type=float, default=1.0,
                             help='Max gradient norm for clipping (default: 1.0, set to 0 to disable)')
+    system_args.add_argument('--warmup_epochs', type=int, default=10,
+                            help='Number of epochs for learning rate warmup (default: 10, set to 0 to disable)')
     
     # Logging configuration
     log_args = parser.add_argument_group('logging configuration')
@@ -270,6 +272,7 @@ def main():
                     'device': args.device,
                     'seed': args.seed,
                     'max_grad_norm': args.max_grad_norm,
+                    'warmup_epochs': args.warmup_epochs,
                     'impute_strategy': args.impute_strategy,
                     'skip_modalities': args.skip_modalities
                 },
@@ -422,6 +425,7 @@ def main():
         checkpoint_interval=args.checkpoint_interval,
         keep_last_n_checkpoints=args.keep_last_n_checkpoints,
         max_grad_norm=args.max_grad_norm if args.max_grad_norm > 0 else None,
+        warmup_epochs=args.warmup_epochs,
         verbose=True,
         wandb_run=wandb_run
     )
