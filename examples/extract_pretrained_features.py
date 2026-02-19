@@ -149,7 +149,12 @@ def extract_features(
                 batch = features[i:i + batch_size]
                 batch_tensor = torch.from_numpy(batch).float().to(device)
                 
-                embeddings = encoder(batch_tensor)
+                result = encoder(batch_tensor)
+                # Handle tuple return (embedding, valid_mask) from contrastive_learning encoders
+                if isinstance(result, tuple):
+                    embeddings = result[0]
+                else:
+                    embeddings = result
                 all_embeddings.append(embeddings.cpu().numpy())
         
         # Concatenate all embeddings

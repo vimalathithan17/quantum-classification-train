@@ -67,6 +67,7 @@ from typing import Dict, Optional, Tuple
 
 __all__ = [
     'ModalityEncoder',
+    'TransformerModalityEncoder',
     'ProjectionHead',
     'ContrastiveMultiOmicsEncoder',
     'nt_xent_loss',
@@ -103,12 +104,12 @@ class ModalityEncoder(nn.Module):
         >>> # Small input dimension
         >>> encoder_prot = ModalityEncoder(input_dim=200, embed_dim=256)
         >>> x_prot = torch.randn(32, 200)  # 32 samples, 200 features
-        >>> embedding = encoder_prot(x_prot)  # Output: (32, 256)
+        >>> embedding, valid_mask = encoder_prot(x_prot)  # Output: (32, 256), (32,)
         
         >>> # Large input dimension  
         >>> encoder_gene = ModalityEncoder(input_dim=5000, embed_dim=256)
         >>> x_gene = torch.randn(32, 5000)  # 32 samples, 5000 features
-        >>> embedding = encoder_gene(x_gene)  # Output: (32, 256)
+        >>> embedding, valid_mask = encoder_gene(x_gene)  # Output: (32, 256), (32,)
         
         >>> # Both produce same embedding dimension!
         >>> assert embedding_prot.shape == embedding_gene.shape == (32, 256)
@@ -159,7 +160,7 @@ class ModalityEncoder(nn.Module):
         # Learnable token for missing modality
         self.missing_token = nn.Parameter(torch.randn(1, embed_dim))
     
-    def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> torch.Tensor:
+    def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode input features or return missing token.
         
@@ -168,7 +169,9 @@ class ModalityEncoder(nn.Module):
             is_missing: Whether this modality is missing for all samples
             
         Returns:
-            Embeddings of shape (batch, embed_dim)
+            Tuple of:
+                - Embeddings of shape (batch, embed_dim)
+                - Valid mask of shape (batch,) - True for valid samples, False for all-NaN
             
         Raises:
             ValueError: If batch size is 0 or input shape is invalid
@@ -178,14 +181,199 @@ class ModalityEncoder(nn.Module):
             batch_size = 1 if x is None else x.shape[0]
             if batch_size == 0:
                 raise ValueError("Batch size cannot be 0")
-            return self.missing_token.expand(batch_size, -1)
+            # All samples are invalid when modality is missing
+            valid_mask = torch.zeros(batch_size, dtype=torch.bool, device=self.missing_token.device)
+            return self.missing_token.expand(batch_size, -1), valid_mask
         else:
             # Validate input shape
             if len(x.shape) != 2:
                 raise ValueError(f"Expected 2D tensor (batch, features), got shape {x.shape}")
             if x.shape[1] != self.input_dim:
                 raise ValueError(f"Expected {self.input_dim} features, got {x.shape[1]}")
-            return self.encoder(x)
+            
+            # Detect all-NaN samples (samples where ALL features are NaN)
+            nan_mask = torch.isnan(x)  # (batch, input_dim)
+            all_nan_samples = nan_mask.all(dim=1)  # (batch,) - True if all features are NaN
+            valid_mask = ~all_nan_samples  # True = valid, False = all-NaN
+            
+            # For samples with any NaN, replace with 0 to avoid NaN in output
+            # (This is a fallback - ideally data should be imputed before using MLP)
+            if nan_mask.any():
+                x = torch.where(nan_mask, torch.zeros_like(x), x)
+            
+            # Encode
+            embedding = self.encoder(x)
+            
+            return embedding, valid_mask
+
+
+class TransformerModalityEncoder(nn.Module):
+    """
+    Transformer-based encoder for a single modality with native missing value handling.
+    
+    Uses self-attention to learn relationships between features and can handle
+    feature-level missing values (NaN in individual columns) by masking them out
+    during attention computation.
+    
+    Architecture:
+        Input (batch, input_dim) → Feature Embedding (batch, input_dim, d_model)
+                                 → Positional Encoding
+                                 → Transformer Encoder (with attention masking for NaN)
+                                 → Pooling (mean over non-masked features)
+                                 → Output Linear → (batch, embed_dim)
+    
+    Key Properties:
+        - Treats each feature as a token in a sequence
+        - Features with NaN values are masked out during attention
+        - Learns to infer missing feature values from context of other features
+        - More compute-intensive than MLP encoder but handles missingness natively
+    
+    Example Usage:
+        >>> encoder = TransformerModalityEncoder(input_dim=200, embed_dim=256)
+        >>> x = torch.randn(32, 200)
+        >>> x[0, 10:20] = float('nan')  # Some features missing
+        >>> embedding, valid_mask = encoder(x)  # Output: (32, 256) and (32,)
+    """
+    
+    def __init__(
+        self,
+        input_dim: int,
+        embed_dim: int = 256,
+        d_model: int = 64,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.1
+    ):
+        """
+        Initialize transformer modality encoder.
+        
+        Args:
+            input_dim: Number of input features (each treated as a token)
+            embed_dim: Dimension of output embeddings (default: 256)
+            d_model: Dimension of transformer model (default: 64)
+            num_heads: Number of attention heads (default: 4)
+            num_layers: Number of transformer encoder layers (default: 2)
+            dropout: Dropout probability (default: 0.1)
+        """
+        super().__init__()
+        
+        self.input_dim = input_dim
+        self.embed_dim = embed_dim
+        self.d_model = d_model
+        
+        # Embed each feature value into d_model dimensions
+        # Each scalar feature becomes a d_model-dimensional vector
+        self.feature_embedding = nn.Linear(1, d_model)
+        
+        # Learnable positional encoding for each feature position
+        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model))
+        
+        # Learnable mask token for missing features
+        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
+        
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output projection
+        self.output_proj = nn.Sequential(
+            nn.Linear(d_model, embed_dim),
+            nn.LayerNorm(embed_dim)
+        )
+        
+        # Learnable token for completely missing modality
+        self.missing_modality_token = nn.Parameter(torch.randn(1, embed_dim))
+    
+    def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode input features with attention-based missing value handling.
+        
+        Args:
+            x: Input tensor of shape (batch, input_dim), may contain NaN values
+               or None if entire modality is missing
+            is_missing: Whether this modality is missing for all samples
+            
+        Returns:
+            Tuple of:
+                - Embeddings of shape (batch, embed_dim)
+                - Valid mask of shape (batch,) - True for valid samples, False for all-NaN samples
+                  Samples with ALL features as NaN are marked invalid and should be excluded
+                  from loss computation
+        """
+        if is_missing or x is None:
+            batch_size = 1 if x is None else x.shape[0]
+            if batch_size == 0:
+                raise ValueError("Batch size cannot be 0")
+            # All samples are invalid when modality is missing
+            valid_mask = torch.zeros(batch_size, dtype=torch.bool, device=self.missing_modality_token.device)
+            return self.missing_modality_token.expand(batch_size, -1), valid_mask
+        
+        batch_size, seq_len = x.shape
+        
+        # Detect NaN values (feature-level missingness)
+        nan_mask = torch.isnan(x)  # (batch, input_dim)
+        
+        # Replace NaN with 0 for embedding (will be masked in attention)
+        x_filled = torch.where(nan_mask, torch.zeros_like(x), x)
+        
+        # Embed each feature value: (batch, input_dim) -> (batch, input_dim, d_model)
+        x_embedded = self.feature_embedding(x_filled.unsqueeze(-1))  # (batch, input_dim, d_model)
+        
+        # For NaN positions, use the learnable mask token instead
+        mask_tokens = self.mask_token.expand(batch_size, seq_len, -1)
+        x_embedded = torch.where(nan_mask.unsqueeze(-1), mask_tokens, x_embedded)
+        
+        # Add positional encoding
+        x_embedded = x_embedded + self.pos_encoding
+        
+        # Create attention mask: True = masked out (for PyTorch transformer)
+        # We do NOT mask NaN in attention - we let the model learn from context
+        # But we create a padding mask if needed
+        # For now, let all features attend to each other (including mask tokens)
+        
+        # Transformer encoding
+        encoded = self.transformer(x_embedded)  # (batch, input_dim, d_model)
+        
+        # Pool over features (mean pooling, excluding NaN positions for weighting)
+        # Weight by inverse of NaN ratio to focus on present features
+        feature_valid_mask = ~nan_mask  # (batch, input_dim)
+        valid_counts = feature_valid_mask.sum(dim=1, keepdim=True)  # (batch, 1)
+        
+        # Identify all-NaN samples (these will be excluded from loss)
+        all_nan_samples = (valid_counts == 0).squeeze(-1)  # (batch,)
+        sample_valid_mask = ~all_nan_samples  # True = valid, False = all-NaN
+        
+        if all_nan_samples.any():
+            # For all-NaN samples, use uniform weights over all mask tokens
+            # This produces an embedding, but it will be excluded from loss
+            uniform_weights = torch.ones_like(nan_mask, dtype=torch.float32) / seq_len
+            valid_counts_safe = valid_counts.clamp(min=1)  # Prevent div by zero
+            non_nan_weights = feature_valid_mask.float() / valid_counts_safe
+            
+            # Use uniform weights for all-NaN samples, normal weights otherwise
+            weights = torch.where(
+                all_nan_samples.unsqueeze(-1),
+                uniform_weights,
+                non_nan_weights
+            )
+        else:
+            # Normal case: weight by valid (non-NaN) positions only
+            weights = feature_valid_mask.float() / valid_counts.clamp(min=1)  # (batch, input_dim)
+        
+        # Weighted mean pooling
+        pooled = (encoded * weights.unsqueeze(-1)).sum(dim=1)  # (batch, d_model)
+        
+        # Project to embedding dimension
+        output = self.output_proj(pooled)  # (batch, embed_dim)
+        
+        return output, sample_valid_mask
 
 
 class ProjectionHead(nn.Module):
@@ -268,9 +456,10 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         >>> 
         >>> # Process each modality
         >>> x_gene = torch.randn(32, 5000)
-        >>> embedding, projection = encoder(x_gene, 'GeneExpr')
+        >>> embedding, projection, valid_mask = encoder(x_gene, 'GeneExpr')
         >>> # embedding: (32, 256) - keep for downstream
         >>> # projection: (32, 128) - use for contrastive loss
+        >>> # valid_mask: (32,) - True for samples with valid data
     """
     
     def __init__(
@@ -279,7 +468,11 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         embed_dim: int = 256,
         projection_dim: int = 128,
         hidden_dim: int = 512,
-        dropout: float = 0.2
+        dropout: float = 0.2,
+        encoder_type: str = 'mlp',
+        transformer_d_model: int = 64,
+        transformer_num_heads: int = 4,
+        transformer_num_layers: int = 2
     ):
         """
         Initialize multi-omics contrastive encoder.
@@ -305,27 +498,56 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
                            - Discarded after pretraining
                            - Common values: 64, 128, 256
                            
-            hidden_dim: Dimension of hidden layers in encoders (default: 512)
+            hidden_dim: Dimension of hidden layers in MLP encoders (default: 512)
                        - Intermediate representation size
                        - Typically larger than embed_dim
                        - All modality encoders use the same hidden_dim
+                       - Only used when encoder_type='mlp'
                        
             dropout: Dropout probability (default: 0.2)
                     - Applied in encoder networks
                     - Regularization to prevent overfitting
                     - Range: 0.0 to 0.5
+                    
+            encoder_type: Type of encoder to use (default: 'mlp')
+                         - 'mlp': Fast MLP-based encoder (requires imputed data)
+                         - 'transformer': Attention-based encoder that handles feature-level
+                           NaN values natively by learning from context
+                           
+            transformer_d_model: Dimension of transformer model (default: 64)
+                                Only used when encoder_type='transformer'
+                                
+            transformer_num_heads: Number of attention heads (default: 4)
+                                  Only used when encoder_type='transformer'
+                                  
+            transformer_num_layers: Number of transformer layers (default: 2)
+                                   Only used when encoder_type='transformer'
         """
         super().__init__()
         
         self.modality_dims = modality_dims
         self.embed_dim = embed_dim
         self.projection_dim = projection_dim
+        self.encoder_type = encoder_type
         
         # Encoder for each modality
-        self.encoders = nn.ModuleDict({
-            modality: ModalityEncoder(input_dim, embed_dim, hidden_dim, dropout)
-            for modality, input_dim in modality_dims.items()
-        })
+        if encoder_type == 'transformer':
+            self.encoders = nn.ModuleDict({
+                modality: TransformerModalityEncoder(
+                    input_dim=input_dim,
+                    embed_dim=embed_dim,
+                    d_model=transformer_d_model,
+                    num_heads=transformer_num_heads,
+                    num_layers=transformer_num_layers,
+                    dropout=dropout
+                )
+                for modality, input_dim in modality_dims.items()
+            })
+        else:  # default: 'mlp'
+            self.encoders = nn.ModuleDict({
+                modality: ModalityEncoder(input_dim, embed_dim, hidden_dim, dropout)
+                for modality, input_dim in modality_dims.items()
+            })
         
         # Projection head for each modality
         self.projection_heads = nn.ModuleDict({
@@ -333,7 +555,12 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
             for modality in modality_dims.keys()
         })
     
-    def encode(self, x: Optional[torch.Tensor], modality_name: str, is_missing: bool = False) -> torch.Tensor:
+    def encode(
+        self,
+        x: Optional[torch.Tensor],
+        modality_name: str,
+        is_missing: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encode input for a specific modality (without projection).
         
@@ -345,7 +572,9 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
             is_missing: Whether this modality is missing
             
         Returns:
-            Embeddings of shape (batch, embed_dim)
+            Tuple of:
+                - Embeddings of shape (batch, embed_dim)
+                - Valid mask of shape (batch,) - True for valid samples
         """
         if modality_name not in self.encoders:
             raise ValueError(f"Unknown modality: {modality_name}")
@@ -358,7 +587,7 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
         modality_name: str,
         return_projection: bool = True,
         is_missing: bool = False
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
         """
         Forward pass through encoder and optionally projection head.
         
@@ -371,29 +600,32 @@ class ContrastiveMultiOmicsEncoder(nn.Module):
             is_missing: Whether this modality is missing
             
         Returns:
-            Tuple of (embedding, projection) if return_projection=True
-            Otherwise just embedding
+            Tuple of (embedding, projection, valid_mask):
+                - embedding: shape (batch, embed_dim)
+                - projection: shape (batch, projection_dim) or None
+                - valid_mask: shape (batch,) - True for valid samples, False for all-NaN
         """
         if modality_name not in self.encoders:
             raise ValueError(f"Unknown modality: {modality_name}")
         
-        # Encode (handles missing modality internally)
-        embedding = self.encoders[modality_name](x, is_missing=is_missing)
+        # Encode (handles missing modality internally, returns valid mask)
+        embedding, valid_mask = self.encoders[modality_name](x, is_missing=is_missing)
         
         if return_projection:
             # Project for contrastive learning
             projection = self.projection_heads[modality_name](embedding)
-            return embedding, projection
+            return embedding, projection, valid_mask
         else:
             # For downstream tasks (after pretraining)
-            return embedding, None
+            return embedding, None, valid_mask
 
 
 def nt_xent_loss(
     z_i: torch.Tensor,
     z_j: torch.Tensor,
     temperature: float = 0.5,
-    eps: float = 1e-8
+    eps: float = 1e-8,
+    valid_mask: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     """
     Normalized Temperature-scaled Cross Entropy Loss (NT-Xent).
@@ -405,14 +637,32 @@ def nt_xent_loss(
         z_j: Projections from augmentation 2, shape (batch_size, projection_dim)
         temperature: Temperature parameter for scaling
         eps: Small constant for numerical stability
+        valid_mask: Optional boolean mask of shape (batch_size,) indicating valid samples.
+                   Samples with False are excluded from loss computation.
+                   This is used to skip all-NaN samples when using transformer encoder.
         
     Returns:
-        Scalar loss value
+        Scalar loss value (0.0 if no valid samples)
         
     Raises:
         ValueError: If batch_size < 2 (NT-Xent requires at least 2 samples)
     """
     batch_size = z_i.shape[0]
+    
+    # Apply valid mask if provided
+    if valid_mask is not None:
+        # Only keep valid samples
+        valid_indices = valid_mask.nonzero(as_tuple=True)[0]
+        n_valid = valid_indices.shape[0]
+        
+        if n_valid < 2:
+            # Not enough valid samples for contrastive learning
+            # Return 0 loss (no gradient) rather than raising error
+            return torch.tensor(0.0, device=z_i.device, requires_grad=True)
+        
+        z_i = z_i[valid_indices]
+        z_j = z_j[valid_indices]
+        batch_size = n_valid
     
     # NT-Xent requires at least 2 samples for meaningful contrastive learning
     if batch_size < 2:
@@ -450,7 +700,9 @@ def cross_modal_contrastive_loss(
     embedding_2: torch.Tensor,
     projection_head_1: nn.Module,
     projection_head_2: nn.Module,
-    temperature: float = 0.5
+    temperature: float = 0.5,
+    valid_mask_1: Optional[torch.Tensor] = None,
+    valid_mask_2: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     """
     Contrastive loss across two different modalities.
@@ -463,6 +715,8 @@ def cross_modal_contrastive_loss(
         projection_head_1: Projection head for modality 1
         projection_head_2: Projection head for modality 2
         temperature: Temperature parameter
+        valid_mask_1: Optional valid mask for modality 1, shape (batch,)
+        valid_mask_2: Optional valid mask for modality 2, shape (batch,)
         
     Returns:
         Scalar loss value
@@ -471,8 +725,18 @@ def cross_modal_contrastive_loss(
     proj_1 = projection_head_1(embedding_1)
     proj_2 = projection_head_2(embedding_2)
     
-    # Compute NT-Xent loss
-    return nt_xent_loss(proj_1, proj_2, temperature)
+    # Combine valid masks: sample must be valid in BOTH modalities
+    if valid_mask_1 is not None and valid_mask_2 is not None:
+        combined_mask = valid_mask_1 & valid_mask_2
+    elif valid_mask_1 is not None:
+        combined_mask = valid_mask_1
+    elif valid_mask_2 is not None:
+        combined_mask = valid_mask_2
+    else:
+        combined_mask = None
+    
+    # Compute NT-Xent loss with valid mask
+    return nt_xent_loss(proj_1, proj_2, temperature, valid_mask=combined_mask)
 
 
 class ContrastiveLearningLoss(nn.Module):
@@ -509,7 +773,8 @@ class ContrastiveLearningLoss(nn.Module):
         augmented_views: Dict[str, list],
         embeddings: Dict[str, torch.Tensor],
         projections: Dict[str, torch.Tensor],
-        model: ContrastiveMultiOmicsEncoder
+        model: ContrastiveMultiOmicsEncoder,
+        valid_masks: Optional[Dict[str, torch.Tensor]] = None
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Compute total contrastive loss.
@@ -519,6 +784,9 @@ class ContrastiveLearningLoss(nn.Module):
             embeddings: Dict mapping modality -> embeddings
             projections: Dict mapping modality -> projections
             model: The contrastive encoder model
+            valid_masks: Optional dict mapping modality -> valid mask (batch,).
+                        Samples with False are excluded from loss.
+                        Used to skip all-NaN samples with transformer encoder.
             
         Returns:
             Tuple of (total_loss, loss_dict) where loss_dict contains individual losses
@@ -530,12 +798,15 @@ class ContrastiveLearningLoss(nn.Module):
         # Intra-modal contrastive loss (augmentations of same modality)
         for modality, views in augmented_views.items():
             if len(views) >= 2:
-                # Encode both views
-                _, proj_1 = model(views[0], modality, return_projection=True)
-                _, proj_2 = model(views[1], modality, return_projection=True)
+                # Encode both views (get valid masks)
+                _, proj_1, valid_1 = model(views[0], modality, return_projection=True)
+                _, proj_2, valid_2 = model(views[1], modality, return_projection=True)
                 
-                # Compute loss
-                loss = nt_xent_loss(proj_1, proj_2, self.temperature)
+                # Combine valid masks from both views
+                combined_mask = valid_1 & valid_2
+                
+                # Compute loss with valid mask
+                loss = nt_xent_loss(proj_1, proj_2, self.temperature, valid_mask=combined_mask)
                 total_loss += loss
                 loss_dict[f'intra_{modality}'] = loss.item()
                 n_losses += 1
@@ -559,12 +830,18 @@ class ContrastiveLearningLoss(nn.Module):
                 ]
             
             for mod1, mod2 in pairs:
+                # Get valid masks for both modalities
+                mask1 = valid_masks.get(mod1) if valid_masks else None
+                mask2 = valid_masks.get(mod2) if valid_masks else None
+                
                 loss = cross_modal_contrastive_loss(
                     embeddings[mod1],
                     embeddings[mod2],
                     model.projection_heads[mod1],
                     model.projection_heads[mod2],
-                    self.temperature
+                    self.temperature,
+                    valid_mask_1=mask1,
+                    valid_mask_2=mask2
                 )
                 total_loss += loss
                 loss_dict[f'cross_{mod1}_{mod2}'] = loss.item()

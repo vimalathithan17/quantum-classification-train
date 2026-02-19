@@ -25,7 +25,8 @@ __all__ = [
     'pretrain_contrastive',
     'finetune_supervised',
     'save_pretrained_encoders',
-    'load_pretrained_encoders'
+    'load_pretrained_encoders',
+    'load_single_modality_encoder'
 ]
 
 
@@ -159,6 +160,7 @@ def pretrain_contrastive(
     log_interval: int = 10,
     checkpoint_dir: Optional[Path] = None,
     checkpoint_interval: int = 10,
+    keep_last_n_checkpoints: int = 3,
     max_grad_norm: Optional[float] = 1.0,
     verbose: bool = True,
     wandb_run = None
@@ -177,6 +179,7 @@ def pretrain_contrastive(
         log_interval: How often to log (in batches)
         checkpoint_dir: Directory to save checkpoints
         checkpoint_interval: Save checkpoint every N epochs
+        keep_last_n_checkpoints: Keep only the last N checkpoints + best (0 = keep all)
         max_grad_norm: Maximum gradient norm for clipping (None or 0 to disable)
         verbose: Whether to print progress
         wandb_run: Weights & Biases run object for logging (optional)
@@ -189,6 +192,7 @@ def pretrain_contrastive(
     
     metrics = {'epoch_losses': [], 'batch_losses': []}
     best_loss = float('inf')
+    saved_checkpoints = []  # Track checkpoint paths for cleanup
     
     if checkpoint_dir is not None:
         checkpoint_dir = Path(checkpoint_dir)
@@ -207,15 +211,17 @@ def pretrain_contrastive(
             # Forward pass: encode all views
             embeddings = {}
             projections = {}
+            valid_masks = {}
             
             for modality, views in augmented_views.items():
                 # Encode first view (non-augmented for cross-modal)
-                emb, proj = model(views[0], modality, return_projection=True)
+                emb, proj, valid_mask = model(views[0], modality, return_projection=True)
                 embeddings[modality] = emb
                 projections[modality] = proj
+                valid_masks[modality] = valid_mask
             
-            # Compute contrastive loss
-            loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
+            # Compute contrastive loss (passes valid masks to exclude all-NaN samples)
+            loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model, valid_masks)
             
             # Backward pass
             optimizer.zero_grad()
@@ -265,19 +271,56 @@ def pretrain_contrastive(
             except Exception:
                 pass  # Non-fatal, continue training
         
-        # Save best model
+        # Save best model (based on contrastive loss - lower is better)
+        # Note: Contrastive loss indicates how well the model learns to distinguish samples.
+        # Lower loss = better separation of positive/negative pairs in embedding space.
         if checkpoint_dir is not None and avg_epoch_loss < best_loss:
             best_loss = avg_epoch_loss
+            
+            # Save combined model (for easy loading)
             best_model_path = checkpoint_dir / "best_model.pt"
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_epoch_loss,
+                'modality_dims': model.modality_dims,
+                'embed_dim': model.embed_dim,
+                'projection_dim': model.projection_dim,
+                'encoder_type': model.encoder_type,
             }, best_model_path)
+            
+            # Save each modality encoder separately for flexible downstream use
+            encoders_dir = checkpoint_dir / "encoders"
+            encoders_dir.mkdir(parents=True, exist_ok=True)
+            
+            for modality_name, encoder in model.encoders.items():
+                encoder_path = encoders_dir / f"{modality_name}_encoder.pt"
+                torch.save({
+                    'encoder_state_dict': encoder.state_dict(),
+                    'input_dim': model.modality_dims[modality_name],
+                    'embed_dim': model.embed_dim,
+                    'encoder_type': model.encoder_type,
+                    'epoch': epoch,
+                    'loss': avg_epoch_loss,
+                }, encoder_path)
+            
+            # Also save projection heads separately (useful for continued pretraining)
+            projections_dir = checkpoint_dir / "projections"
+            projections_dir.mkdir(parents=True, exist_ok=True)
+            
+            for modality_name, proj_head in model.projection_heads.items():
+                proj_path = projections_dir / f"{modality_name}_projection.pt"
+                torch.save({
+                    'projection_state_dict': proj_head.state_dict(),
+                    'embed_dim': model.embed_dim,
+                    'projection_dim': model.projection_dim,
+                }, proj_path)
             
             if verbose:
                 print(f"  New best model saved (loss: {best_loss:.4f})")
+                print(f"    - Combined: {best_model_path}")
+                print(f"    - Per-modality encoders: {encoders_dir}/")
         
         # Save periodic checkpoint
         if checkpoint_dir is not None and (epoch + 1) % checkpoint_interval == 0:
@@ -291,6 +334,25 @@ def pretrain_contrastive(
             
             if verbose:
                 print(f"Saved checkpoint: {checkpoint_path}")
+            
+            # Track saved checkpoints for cleanup
+            saved_checkpoints.append(checkpoint_path)
+            
+            # Cleanup old checkpoints, keeping only last N + best
+            if keep_last_n_checkpoints > 0 and len(saved_checkpoints) > keep_last_n_checkpoints:
+                # Remove oldest checkpoint(s) beyond the limit
+                checkpoints_to_remove = saved_checkpoints[:-keep_last_n_checkpoints]
+                for old_checkpoint in checkpoints_to_remove:
+                    try:
+                        if old_checkpoint.exists():
+                            old_checkpoint.unlink()
+                            if verbose:
+                                print(f"  Removed old checkpoint: {old_checkpoint.name}")
+                    except Exception as e:
+                        if verbose:
+                            print(f"  Warning: Could not remove {old_checkpoint}: {e}")
+                # Update list to only keep the recent ones
+                saved_checkpoints = saved_checkpoints[-keep_last_n_checkpoints:]
     
     # Add best_loss to metrics
     metrics['best_loss'] = best_loss
@@ -363,7 +425,12 @@ def finetune_supervised(
             features = []
             for modality, data in data_dict.items():
                 if modality in encoders:
-                    feat = encoders[modality](data)
+                    result = encoders[modality](data)
+                    # Handle tuple return (embedding, valid_mask) from contrastive_learning encoders
+                    if isinstance(result, tuple):
+                        feat = result[0]
+                    else:
+                        feat = result
                     features.append(feat)
             
             # Concatenate features
@@ -462,16 +529,95 @@ def save_pretrained_encoders(
     print(f"Saved pretrained encoders to {save_dir}")
 
 
+def load_single_modality_encoder(
+    encoder_path: Path,
+    device: Optional[torch.device] = None
+) -> Tuple[nn.Module, dict]:
+    """
+    Load a single pretrained modality encoder.
+    
+    This loads encoders saved by pretrain_contrastive() in the per-modality format.
+    
+    Args:
+        encoder_path: Path to the encoder .pt file (e.g., encoders/mRNA_encoder.pt)
+        device: Device to load to
+        
+    Returns:
+        Tuple of (encoder, metadata) where metadata contains:
+            - input_dim: Input feature dimension
+            - embed_dim: Output embedding dimension
+            - encoder_type: 'mlp' or 'transformer'
+            - epoch: Training epoch when saved
+            - loss: Contrastive loss when saved
+    """
+    from .contrastive_learning import ModalityEncoder, TransformerModalityEncoder
+    
+    encoder_path = Path(encoder_path)
+    
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if not encoder_path.exists():
+        raise FileNotFoundError(f"Encoder file not found: {encoder_path}")
+    
+    # Load checkpoint
+    checkpoint = torch.load(encoder_path, map_location=device)
+    
+    # Extract metadata
+    input_dim = checkpoint['input_dim']
+    embed_dim = checkpoint['embed_dim']
+    encoder_type = checkpoint.get('encoder_type', 'mlp')  # Default to MLP for older saves
+    
+    # Create encoder based on type
+    if encoder_type == 'transformer':
+        # Transformer encoder may have additional params
+        d_model = checkpoint.get('d_model', 64)
+        num_heads = checkpoint.get('num_heads', 4)
+        num_layers = checkpoint.get('num_layers', 2)
+        encoder = TransformerModalityEncoder(
+            input_dim=input_dim,
+            embed_dim=embed_dim,
+            d_model=d_model,
+            num_heads=num_heads,
+            num_layers=num_layers
+        )
+    else:
+        hidden_dim = checkpoint.get('hidden_dim', 512)
+        encoder = ModalityEncoder(input_dim, embed_dim, hidden_dim=hidden_dim)
+    
+    # Load weights
+    encoder.load_state_dict(checkpoint['encoder_state_dict'])
+    encoder.to(device)
+    encoder.eval()
+    
+    metadata = {
+        'input_dim': input_dim,
+        'embed_dim': embed_dim,
+        'encoder_type': encoder_type,
+        'epoch': checkpoint.get('epoch'),
+        'loss': checkpoint.get('loss'),
+    }
+    
+    return encoder, metadata
+
+
 def load_pretrained_encoders(
     load_dir: Path,
-    device: Optional[torch.device] = None
+    device: Optional[torch.device] = None,
+    modalities: Optional[List[str]] = None
 ) -> Tuple[nn.ModuleDict, dict]:
     """
     Load pretrained encoders.
     
+    Supports two formats:
+    1. New format: encoders/ subdirectory with {modality}_encoder.pt files
+    2. Legacy format: encoder_{modality}.pt files with metadata.json
+    
     Args:
         load_dir: Directory containing saved encoders
         device: Device to load to
+        modalities: Optional list of specific modalities to load.
+                   If None, loads all available modalities.
         
     Returns:
         Tuple of (encoders, metadata)
@@ -480,15 +626,50 @@ def load_pretrained_encoders(
         FileNotFoundError: If required files don't exist
         ValueError: If metadata is malformed
     """
+    from .contrastive_learning import ModalityEncoder, TransformerModalityEncoder
+    
     load_dir = Path(load_dir)
     
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load and validate metadata
+    # Check for new format (encoders/ subdirectory)
+    encoders_dir = load_dir / "encoders"
+    if encoders_dir.exists():
+        # New format: load from encoders/ subdirectory
+        encoders = nn.ModuleDict()
+        metadata = {'modality_names': [], 'modality_dims': {}, 'encoder_type': None}
+        
+        # Find all encoder files
+        encoder_files = list(encoders_dir.glob("*_encoder.pt"))
+        
+        if not encoder_files:
+            raise FileNotFoundError(f"No encoder files found in {encoders_dir}")
+        
+        for encoder_path in encoder_files:
+            # Extract modality name from filename
+            modality = encoder_path.stem.replace('_encoder', '')
+            
+            # Skip if specific modalities requested and this isn't one
+            if modalities is not None and modality not in modalities:
+                continue
+            
+            encoder, enc_meta = load_single_modality_encoder(encoder_path, device)
+            encoders[modality] = encoder
+            
+            metadata['modality_names'].append(modality)
+            metadata['modality_dims'][modality] = enc_meta['input_dim']
+            metadata['embed_dim'] = enc_meta['embed_dim']
+            metadata['encoder_type'] = enc_meta['encoder_type']
+        
+        print(f"Loaded {len(encoders)} pretrained encoders from {encoders_dir}")
+        return encoders, metadata
+    
+    # Legacy format: metadata.json + encoder_{modality}.pt files
     metadata_path = load_dir / "metadata.json"
     if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}. "
+                              f"Also checked for new format in {encoders_dir}")
     
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
@@ -507,7 +688,12 @@ def load_pretrained_encoders(
     
     # Reconstruct encoders with type checking
     encoders = nn.ModuleDict()
-    for modality in metadata['modality_names']:
+    modalities_to_load = modalities if modalities else metadata['modality_names']
+    
+    for modality in modalities_to_load:
+        if modality not in metadata['modality_names']:
+            raise ValueError(f"Requested modality '{modality}' not in saved modalities: {metadata['modality_names']}")
+        
         encoder_path = load_dir / f"encoder_{modality}.pt"
         
         if not encoder_path.exists():
@@ -535,6 +721,8 @@ def load_pretrained_encoders(
         except Exception as e:
             raise RuntimeError(f"Failed to load encoder weights for {modality}: {e}")
         
+        encoder.to(device)
+        encoder.eval()
         encoders[modality] = encoder
     
     print(f"Loaded {len(encoders)} pretrained encoders from {load_dir}")

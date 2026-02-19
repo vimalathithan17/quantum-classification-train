@@ -1030,7 +1030,12 @@ def extract_features(encoder_dir, data_dir, output_dir):
         encoder.eval()
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X)
-            embeddings = encoder(X_tensor).numpy()
+            result = encoder(X_tensor)
+            # Handle tuple return (embedding, valid_mask) from contrastive_learning encoders
+            if isinstance(result, tuple):
+                embeddings = result[0].numpy()
+            else:
+                embeddings = result.numpy()
         
         # Save
         output_file = output_dir / f"{modality}_embeddings.npy"

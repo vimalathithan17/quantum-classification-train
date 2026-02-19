@@ -103,11 +103,32 @@ python examples/pretrain_contrastive.py \
     --device cuda
 ```
 
-**Output:**
-- Pretrained encoders saved to `pretrained_models/contrastive/encoders/`
-- Training metrics saved to `pretrained_models/contrastive/training_metrics.json`
-  - Includes loss statistics: min/max/mean/std, best epoch, improvement ratio
-- Loss curve plot saved to `pretrained_models/contrastive/loss_curve.png`
+**Output Structure:**
+```
+pretrained_models/contrastive/
+├── best_model.pt                    # Combined model (all modalities)
+├── contrastive_epoch_*.pt           # Periodic checkpoints
+├── encoders/                        # Per-modality encoders
+│   ├── mRNA_encoder.pt             
+│   ├── miRNA_encoder.pt
+│   └── ...
+├── projections/                     # Projection heads
+│   └── ...
+├── training_metrics.json            # Loss statistics
+└── loss_curve.png                   # Training visualization
+```
+
+**Best Model Selection:** Based on **contrastive loss** (lower = better). Lower loss indicates better separation between positive/negative pairs in embedding space.
+
+**Per-Modality Encoder Files Contain:**
+- `encoder_state_dict`: Model weights
+- `input_dim`: Input feature dimension
+- `embed_dim`: Output embedding dimension
+- `encoder_type`: 'mlp' or 'transformer'
+- `epoch`: Training epoch when saved
+- `loss`: Contrastive loss when saved
+
+**Note:** Training behavior is unchanged. Checkpoint saving is enhanced to support loading individual modality encoders.
 
 ### 2. Transformer Fusion Training (Option 1)
 
@@ -270,28 +291,54 @@ python metalearner.py \
 |----------|---------|-------------|
 | `--data_dir` | `final_processed_datasets` | Directory with parquet data files |
 | `--output_dir` | `pretrained_models/contrastive` | Output directory |
+| `--encoder_type` | `mlp` | Encoder type: `mlp` (fast) or `transformer` (handles NaN natively) |
 | `--embed_dim` | `256` | Embedding dimension |
 | `--projection_dim` | `128` | Projection dimension for contrastive loss |
-| `--batch_size` | `32` | Batch size |
+| `--transformer_d_model` | `64` | Transformer model dimension (only for `--encoder_type transformer`) |
+| `--transformer_num_heads` | `4` | Transformer attention heads (only for `--encoder_type transformer`) |
+| `--transformer_num_layers` | `2` | Transformer encoder layers (only for `--encoder_type transformer`) |
+| `--batch_size` | `32` | Batch size (-1 for full batch) |
+| `--full_batch` | `False` | Use full batch gradient descent (entire dataset per update) |
 | `--num_epochs` | `100` | Number of epochs |
 | `--lr` | `1e-3` | Learning rate |
 | `--temperature` | `0.5` | Temperature for NT-Xent loss |
 | `--use_cross_modal` | `False` | Use cross-modal contrastive loss |
-| `--impute_strategy` | `median` | Strategy for handling NaN values: `median`, `mean`, `zero`, or `drop` |
+| `--impute_strategy` | auto | Strategy for handling NaN values: `none`, `median`, `mean`, `zero`, or `drop`. **Auto-selects**: `none` for transformer, `median` for MLP |
 | `--skip_modalities` | `None` | List of modalities to skip (e.g., `SNV Prot`) |
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
+| `--checkpoint_interval` | `10` | Save checkpoint every N epochs |
+| `--keep_last_n_checkpoints` | `3` | Keep only last N checkpoints + best (0 = keep all) |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
 
 **Ignored Columns:** The encoder automatically excludes metadata columns: `class`, `case_id`
 
-**Example - Skip modalities and use mean imputation:**
+**Example - Transformer encoder with native NaN handling:**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
+    --encoder_type transformer \
+    --impute_strategy none \
+    --num_epochs 100
+```
+
+**Example - Full batch gradient descent:**
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --full_batch \
+    --num_epochs 500 \
+    --lr 0.01
+```
+
+**Example - Skip modalities and use median imputation (for MLP encoder):**
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir final_processed_datasets \
+    --encoder_type mlp \
     --skip_modalities SNV Prot \
-    --impute_strategy mean
+    --impute_strategy median
 ```
 
 ### train_transformer_fusion.py

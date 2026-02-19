@@ -391,7 +391,12 @@ class MultimodalFusionClassifier(nn.Module):
                     import inspect
                     sig = inspect.signature(encoder.forward)
                     if 'is_missing' in sig.parameters:
-                        encoded = encoder(None, is_missing=True)
+                        result = encoder(None, is_missing=True)
+                        # Handle tuple return (embedding, valid_mask) from contrastive_learning encoders
+                        if isinstance(result, tuple):
+                            encoded = result[0]
+                        else:
+                            encoded = result
                         if encoded.shape[0] == 1:
                             encoded = encoded.expand(batch_size, -1)
                     else:
@@ -415,7 +420,12 @@ class MultimodalFusionClassifier(nn.Module):
                     encoded = encoder(data, is_missing=False)
                 else:
                     # Standard encoder (e.g., from contrastive learning)
-                    encoded = encoder(data)
+                    # May return (embedding, valid_mask) tuple
+                    result = encoder(data)
+                    if isinstance(result, tuple):
+                        encoded = result[0]
+                    else:
+                        encoded = result
                 missing_mask.append(False)
             
             # Verify encoded output shape
@@ -489,7 +499,12 @@ class MultimodalFusionClassifier(nn.Module):
                     import inspect
                     sig = inspect.signature(encoder.forward)
                     if 'is_missing' in sig.parameters:
-                        encoded = encoder(None, is_missing=True)
+                        result = encoder(None, is_missing=True)
+                        # Handle tuple return (embedding, valid_mask) from contrastive_learning encoders
+                        if isinstance(result, tuple):
+                            encoded = result[0]
+                        else:
+                            encoded = result
                         if encoded.shape[0] == 1:
                             encoded = encoded.expand(batch_size, -1)
                     else:
@@ -506,7 +521,12 @@ class MultimodalFusionClassifier(nn.Module):
                 if isinstance(encoder, ModalityFeatureEncoder):
                     encoded = encoder(data, is_missing=False)
                 else:
-                    encoded = encoder(data)
+                    # May return (embedding, valid_mask) tuple
+                    result = encoder(data)
+                    if isinstance(result, tuple):
+                        encoded = result[0]
+                    else:
+                        encoded = result
                 missing_mask.append(False)
             
             encoded_features.append(encoded)

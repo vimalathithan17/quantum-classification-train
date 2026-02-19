@@ -46,22 +46,23 @@ from performance_extensions.training_utils import (
 )
 
 
-def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median'):
+def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='none'):
     """
-    Load multi-omics data from parquet files with NaN handling.
+    Load multi-omics data from parquet files with optional NaN handling.
     
     Args:
         data_dir: Directory containing data files
         skip_modalities: List of modality names to skip (e.g., ['SNV', 'Prot'])
         impute_strategy: How to handle NaN values:
-            - 'median': Replace NaN with column median (default)
+            - 'none': Keep NaN values (default, for models that handle missing data)
+            - 'median': Replace NaN with column median
             - 'mean': Replace NaN with column mean
             - 'zero': Replace NaN with 0
             - 'drop': Drop samples with any NaN (may reduce dataset size)
         
     Returns:
         Tuple of (data_dict, modality_dims, nan_stats)
-        - data_dict: Dict mapping modality names to numpy arrays (NaN-free)
+        - data_dict: Dict mapping modality names to numpy arrays
         - modality_dims: Dict mapping modality names to feature dimensions
         - nan_stats: Dict with NaN statistics per modality
     """
@@ -112,8 +113,13 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median
             if nan_count > 0:
                 print(f"  Found {nan_count} NaN values ({nan_stats[modality]['nan_percentage']:.2f}%) in {nan_samples} samples")
                 
-                # Handle NaN values
-                if impute_strategy == 'median':
+                # Handle NaN values based on strategy
+                if impute_strategy == 'none':
+                    # Keep NaN values in the data - let the model handle them
+                    # TransformerModalityEncoder handles NaN natively via masking
+                    # MLP encoder will receive NaN as-is (caller should use impute_strategy='median' for MLP)
+                    print(f"  Keeping NaN values (use --encoder_type transformer for native NaN handling)")
+                elif impute_strategy == 'median':
                     col_medians = np.nanmedian(features, axis=0)
                     nan_indices = np.where(nan_mask)
                     features[nan_indices] = col_medians[nan_indices[1]]
@@ -131,7 +137,7 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='median
                     features = features[valid_rows]
                     print(f"  Dropped {nan_samples} samples with NaN, {features.shape[0]} remaining")
                 else:
-                    raise ValueError(f"Unknown impute_strategy: {impute_strategy}")
+                    raise ValueError(f"Unknown impute_strategy: {impute_strategy}. Use 'none', 'median', 'mean', 'zero', or 'drop'.")
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
@@ -169,21 +175,32 @@ def main():
                           help='Output directory for pretrained encoders (default: pretrained_models/contrastive)')
     data_args.add_argument('--skip_modalities', nargs='+', type=str, default=None,
                           help='Modalities to skip (e.g., --skip_modalities SNV Prot)')
-    data_args.add_argument('--impute_strategy', type=str, default='median',
-                          choices=['median', 'mean', 'zero', 'drop'],
-                          help='How to handle NaN values: median, mean, zero, or drop (default: median)')
+    data_args.add_argument('--impute_strategy', type=str, default=None,
+                          choices=['none', 'median', 'mean', 'zero', 'drop'],
+                          help='How to handle NaN values. Default: "none" for transformer encoder, "median" for MLP encoder')
     
     # Model architecture
     model_args = parser.add_argument_group('model architecture')
+    model_args.add_argument('--encoder_type', type=str, default='mlp',
+                           choices=['mlp', 'transformer'],
+                           help='Encoder type: mlp (fast, requires imputed data) or transformer (handles NaN natively) (default: mlp)')
     model_args.add_argument('--embed_dim', type=int, default=256,
                            help='Embedding dimension for all modalities (default: 256)')
     model_args.add_argument('--projection_dim', type=int, default=128,
                            help='Projection head dimension for contrastive loss (default: 128)')
+    model_args.add_argument('--transformer_d_model', type=int, default=64,
+                           help='Transformer model dimension (only for --encoder_type transformer) (default: 64)')
+    model_args.add_argument('--transformer_num_heads', type=int, default=4,
+                           help='Transformer attention heads (only for --encoder_type transformer) (default: 4)')
+    model_args.add_argument('--transformer_num_layers', type=int, default=2,
+                           help='Transformer encoder layers (only for --encoder_type transformer) (default: 2)')
     
     # Training configuration
     train_args = parser.add_argument_group('training configuration')
     train_args.add_argument('--batch_size', type=int, default=32,
-                           help='Training batch size (default: 32, use 64-128 for GPU)')
+                           help='Training batch size (default: 32, use 64-128 for GPU, -1 for full batch)')
+    train_args.add_argument('--full_batch', action='store_true',
+                           help='Use full batch gradient descent (entire dataset per update)')
     train_args.add_argument('--num_epochs', type=int, default=100,
                            help='Number of pretraining epochs (default: 100)')
     train_args.add_argument('--lr', type=float, default=1e-3,
@@ -203,6 +220,8 @@ def main():
                             help='Device: cuda or cpu (default: cuda if available)')
     system_args.add_argument('--checkpoint_interval', type=int, default=10,
                             help='Save checkpoint every N epochs (default: 10)')
+    system_args.add_argument('--keep_last_n_checkpoints', type=int, default=3,
+                            help='Keep only the last N checkpoints + best (default: 3, set to 0 to keep all)')
     system_args.add_argument('--resume', type=str, default=None,
                             help='Path to checkpoint file to resume training from')
     system_args.add_argument('--seed', type=int, default=42,
@@ -220,6 +239,14 @@ def main():
                          help='W&B run name')
     
     args = parser.parse_args()
+    
+    # Set default impute_strategy based on encoder_type if not explicitly provided
+    if args.impute_strategy is None:
+        if args.encoder_type == 'transformer':
+            args.impute_strategy = 'none'  # Transformer handles NaN natively
+        else:
+            args.impute_strategy = 'median'  # MLP needs imputed data
+        print(f"Auto-selected impute_strategy='{args.impute_strategy}' for encoder_type='{args.encoder_type}'")
     
     # Set random seed for reproducibility
     set_seed(args.seed)
@@ -296,13 +323,20 @@ def main():
         num_augmented_views=2
     )
     
+    # Determine batch size (full batch if requested)
+    if args.full_batch or args.batch_size == -1:
+        actual_batch_size = len(dataset)
+        print(f"Using FULL BATCH gradient descent (batch_size={actual_batch_size})")
+    else:
+        actual_batch_size = args.batch_size
+    
     # Create dataloader with custom collate function for augmented data
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=actual_batch_size,
         shuffle=True,
         num_workers=0,  # Set to 0 to avoid pickling issues
-        drop_last=True,  # Drop last incomplete batch
+        drop_last=False if args.full_batch else True,  # Don't drop for full batch
         collate_fn=collate_augmented_multiomics  # Required for augmented views
     )
     
@@ -310,12 +344,28 @@ def main():
     print(f"Number of batches: {len(dataloader)}")
     
     # Create model
-    print(f"\nInitializing contrastive encoder (embed_dim={args.embed_dim})...")
-    model = ContrastiveMultiOmicsEncoder(
-        modality_dims=modality_dims,
-        embed_dim=args.embed_dim,
-        projection_dim=args.projection_dim
-    )
+    print(f"\nInitializing contrastive encoder (type={args.encoder_type}, embed_dim={args.embed_dim})...")
+    
+    if args.encoder_type == 'transformer':
+        print(f"  Using TransformerModalityEncoder (handles NaN natively)")
+        print(f"  d_model={args.transformer_d_model}, heads={args.transformer_num_heads}, layers={args.transformer_num_layers}")
+        model = ContrastiveMultiOmicsEncoder(
+            modality_dims=modality_dims,
+            embed_dim=args.embed_dim,
+            projection_dim=args.projection_dim,
+            encoder_type='transformer',
+            transformer_d_model=args.transformer_d_model,
+            transformer_num_heads=args.transformer_num_heads,
+            transformer_num_layers=args.transformer_num_layers
+        )
+    else:
+        print(f"  Using MLP encoder (requires imputed data)")
+        model = ContrastiveMultiOmicsEncoder(
+            modality_dims=modality_dims,
+            embed_dim=args.embed_dim,
+            projection_dim=args.projection_dim,
+            encoder_type='mlp'
+        )
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -370,6 +420,7 @@ def main():
         log_interval=10,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=args.checkpoint_interval,
+        keep_last_n_checkpoints=args.keep_last_n_checkpoints,
         max_grad_norm=args.max_grad_norm if args.max_grad_norm > 0 else None,
         verbose=True,
         wandb_run=wandb_run
@@ -385,8 +436,12 @@ def main():
         model=model,
         save_dir=output_dir,
         metadata={
+            'encoder_type': args.encoder_type,
             'embed_dim': args.embed_dim,
             'projection_dim': args.projection_dim,
+            'transformer_d_model': args.transformer_d_model if args.encoder_type == 'transformer' else None,
+            'transformer_num_heads': args.transformer_num_heads if args.encoder_type == 'transformer' else None,
+            'transformer_num_layers': args.transformer_num_layers if args.encoder_type == 'transformer' else None,
             'num_epochs': args.num_epochs,
             'batch_size': args.batch_size,
             'lr': args.lr,

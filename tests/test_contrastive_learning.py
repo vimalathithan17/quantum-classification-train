@@ -24,28 +24,33 @@ class TestModalityEncoder:
         encoder = ModalityEncoder(input_dim=100, embed_dim=256)
         x = torch.randn(8, 100)
         
-        output = encoder(x)
+        output, valid_mask = encoder(x)
         
         assert output.shape == (8, 256)
+        assert valid_mask.shape == (8,)
+        assert valid_mask.all()  # All valid with clean data
     
     def test_encoder_forward_pass(self):
         """Test encoder forward pass runs without errors."""
         encoder = ModalityEncoder(input_dim=50, embed_dim=128)
         x = torch.randn(4, 50)
         
-        output = encoder(x)
+        output, valid_mask = encoder(x)
         
         assert output is not None
         assert not torch.isnan(output).any()
+        assert valid_mask.all()
     
     def test_encoder_missing_modality_is_missing_flag(self):
         """Test encoder returns missing token when is_missing=True."""
         encoder = ModalityEncoder(input_dim=100, embed_dim=256)
         x = torch.randn(8, 100)
         
-        output = encoder(x, is_missing=True)
+        output, valid_mask = encoder(x, is_missing=True)
         
         assert output.shape == (8, 256)
+        assert valid_mask.shape == (8,)
+        assert not valid_mask.any()  # All invalid when missing
         # All rows should be the same (expanded missing token)
         assert torch.allclose(output[0], output[1])
     
@@ -53,9 +58,11 @@ class TestModalityEncoder:
         """Test encoder returns missing token when x=None."""
         encoder = ModalityEncoder(input_dim=100, embed_dim=256)
         
-        output = encoder(None, is_missing=True)
+        output, valid_mask = encoder(None, is_missing=True)
         
         assert output.shape == (1, 256)
+        assert valid_mask.shape == (1,)
+        assert not valid_mask.any()
     
     def test_encoder_has_missing_token(self):
         """Test encoder has learnable missing_token parameter."""
@@ -86,6 +93,19 @@ class TestModalityEncoder:
         x_3d = torch.randn(8, 10, 100)  # 3D instead of 2D
         with pytest.raises(ValueError, match="Expected 2D tensor"):
             encoder(x_3d)
+    
+    def test_encoder_all_nan_sample_invalid(self):
+        """Test encoder marks all-NaN samples as invalid."""
+        encoder = ModalityEncoder(input_dim=100, embed_dim=256)
+        x = torch.randn(8, 100)
+        x[3, :] = float('nan')  # All NaN for sample 3
+        
+        output, valid_mask = encoder(x)
+        
+        assert output.shape == (8, 256)
+        assert not valid_mask[3]  # Sample 3 should be invalid
+        assert valid_mask[0]  # Other samples should be valid
+        assert not torch.isnan(output).any()  # NaN replaced with 0
 
 
 class TestProjectionHead:
@@ -136,9 +156,11 @@ class TestContrastiveMultiOmicsEncoder:
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
         
         x = torch.randn(8, 100)
-        output = encoder.encode(x, 'GeneExpr')
+        output, valid_mask = encoder.encode(x, 'GeneExpr')
         
         assert output.shape == (8, 256)
+        assert valid_mask.shape == (8,)
+        assert valid_mask.all()
     
     def test_forward_with_projection(self):
         """Test forward pass with projection."""
@@ -150,10 +172,12 @@ class TestContrastiveMultiOmicsEncoder:
         )
         
         x = torch.randn(8, 80)
-        embedding, projection = encoder(x, 'Prot', return_projection=True)
+        embedding, projection, valid_mask = encoder(x, 'Prot', return_projection=True)
         
         assert embedding.shape == (8, 256)
         assert projection.shape == (8, 128)
+        assert valid_mask.shape == (8,)
+        assert valid_mask.all()
     
     def test_forward_without_projection(self):
         """Test forward pass without projection."""
@@ -161,10 +185,11 @@ class TestContrastiveMultiOmicsEncoder:
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
         
         x = torch.randn(8, 120)
-        embedding, projection = encoder(x, 'Meth', return_projection=False)
+        embedding, projection, valid_mask = encoder(x, 'Meth', return_projection=False)
         
         assert embedding.shape == (8, 256)
         assert projection is None
+        assert valid_mask.shape == (8,)
     
     def test_unknown_modality_error(self):
         """Test that unknown modality raises error."""
@@ -182,9 +207,11 @@ class TestContrastiveMultiOmicsEncoder:
         encoder = ContrastiveMultiOmicsEncoder(modality_dims, embed_dim=256)
         
         x = torch.randn(8, 100)
-        output = encoder.encode(x, 'GeneExpr', is_missing=True)
+        output, valid_mask = encoder.encode(x, 'GeneExpr', is_missing=True)
         
         assert output.shape == (8, 256)
+        assert valid_mask.shape == (8,)
+        assert not valid_mask.any()  # All invalid when missing
         # All rows should be the same (expanded missing token)
         assert torch.allclose(output[0], output[1])
     
@@ -198,10 +225,12 @@ class TestContrastiveMultiOmicsEncoder:
         )
         
         x = torch.randn(8, 80)
-        embedding, projection = encoder(x, 'Prot', return_projection=True, is_missing=True)
+        embedding, projection, valid_mask = encoder(x, 'Prot', return_projection=True, is_missing=True)
         
         assert embedding.shape == (8, 256)
         assert projection.shape == (8, 128)
+        assert valid_mask.shape == (8,)
+        assert not valid_mask.any()  # All invalid when missing
         # Embedding should be missing token (all rows same)
         assert torch.allclose(embedding[0], embedding[1])
 
@@ -299,15 +328,17 @@ class TestContrastiveLearningLoss:
             'Prot': [torch.randn(8, 80), torch.randn(8, 80)]
         }
         
-        # Create embeddings and projections
+        # Create embeddings, projections, and valid_masks
         embeddings = {}
         projections = {}
+        valid_masks = {}
         for modality, views in augmented_views.items():
-            emb, proj = model(views[0], modality, return_projection=True)
+            emb, proj, mask = model(views[0], modality, return_projection=True)
             embeddings[modality] = emb
             projections[modality] = proj
+            valid_masks[modality] = mask
         
-        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
+        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model, valid_masks=valid_masks)
         
         assert total_loss.item() >= 0
         assert 'intra_GeneExpr' in loss_dict
@@ -328,15 +359,17 @@ class TestContrastiveLearningLoss:
             'Prot': [torch.randn(8, 80), torch.randn(8, 80)]
         }
         
-        # Create embeddings and projections
+        # Create embeddings, projections, and valid_masks
         embeddings = {}
         projections = {}
+        valid_masks = {}
         for modality, views in augmented_views.items():
-            emb, proj = model(views[0], modality, return_projection=True)
+            emb, proj, mask = model(views[0], modality, return_projection=True)
             embeddings[modality] = emb
             projections[modality] = proj
+            valid_masks[modality] = mask
         
-        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
+        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model, valid_masks=valid_masks)
         
         assert total_loss.item() >= 0
         # Should have both intra and cross-modal losses
@@ -363,15 +396,17 @@ class TestContrastiveLearningLoss:
             'Meth': [torch.randn(8, 120), torch.randn(8, 120)]
         }
         
-        # Create embeddings and projections
+        # Create embeddings, projections, and valid_masks
         embeddings = {}
         projections = {}
+        valid_masks = {}
         for modality, views in augmented_views.items():
-            emb, proj = model(views[0], modality, return_projection=True)
+            emb, proj, mask = model(views[0], modality, return_projection=True)
             embeddings[modality] = emb
             projections[modality] = proj
+            valid_masks[modality] = mask
         
-        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model)
+        total_loss, loss_dict = loss_fn(augmented_views, embeddings, projections, model, valid_masks=valid_masks)
         
         assert total_loss.item() >= 0
         # Should have cross_GeneExpr_Prot but not other cross-modal pairs

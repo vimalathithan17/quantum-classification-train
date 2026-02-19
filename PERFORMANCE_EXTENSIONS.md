@@ -659,7 +659,8 @@ def cross_modal_contrastive_loss(embedding_gene, embedding_protein, temperature=
 ```python
 def total_contrastive_loss(batch):
     """
-    Combine intra-modal and cross-modal contrastive losses
+    Combine intra-modal and cross-modal contrastive losses.
+    Note: encoder returns (embedding, projection, valid_mask) tuple.
     """
     loss = 0
     
@@ -667,15 +668,17 @@ def total_contrastive_loss(batch):
     for modality in ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot']:
         if batch[modality] is not None:
             aug1, aug2 = augment(batch[modality], modality)
-            _, proj1 = encoder(aug1, modality)
-            _, proj2 = encoder(aug2, modality)
-            loss += nt_xent_loss(proj1, proj2)
+            _, proj1, mask1 = encoder(aug1, modality)
+            _, proj2, mask2 = encoder(aug2, modality)
+            # Combine masks - only include samples valid in both views
+            valid_mask = mask1 & mask2
+            loss += nt_xent_loss(proj1, proj2, valid_mask=valid_mask)
     
     # Cross-modal: different modalities from same patient
     if batch['GeneExpr'] is not None and batch['Prot'] is not None:
-        emb_gene, proj_gene = encoder(batch['GeneExpr'], 'GeneExpr')
-        emb_prot, proj_prot = encoder(batch['Prot'], 'Prot')
-        loss += cross_modal_contrastive_loss(proj_gene, proj_prot)
+        emb_gene, proj_gene, mask_gene = encoder(batch['GeneExpr'], 'GeneExpr')
+        emb_prot, proj_prot, mask_prot = encoder(batch['Prot'], 'Prot')
+        loss += cross_modal_contrastive_loss(proj_gene, proj_prot, mask_gene, mask_prot)
     
     # Can add more cross-modal pairs based on biological relevance
     # e.g., Methylation <-> GeneExpr (methylation regulates expression)

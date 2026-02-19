@@ -159,7 +159,12 @@ def test_supervised_finetuning_compatibility():
         # Extract features
         features = []
         for modality, data in modality_data.items():
-            encoded = encoders[modality](data)
+            result = encoders[modality](data)
+            # Handle tuple return (embedding, valid_mask)
+            if isinstance(result, tuple):
+                encoded = result[0]
+            else:
+                encoded = result
             features.append(encoded)
         
         # Concatenate features
@@ -297,7 +302,7 @@ def test_encoder_checkpoint_persistence():
             reference_outputs = {}
             for modality, data in test_data.items():
                 with torch.no_grad():
-                    output, _ = model(data, modality)
+                    output, _, _ = model(data, modality)
                     reference_outputs[modality] = output.clone()
             
             # Save encoders
@@ -320,7 +325,12 @@ def test_encoder_checkpoint_persistence():
             # Verify loaded encoders produce same output
             for modality, data in test_data.items():
                 with torch.no_grad():
-                    output = loaded_encoders[modality](data)
+                    result = loaded_encoders[modality](data)
+                    # Handle tuple return (embedding, valid_mask)
+                    if isinstance(result, tuple):
+                        output = result[0]
+                    else:
+                        output = result
                 # Outputs should be very similar (not identical due to random init)
                 assert output.shape == reference_outputs[modality].shape
             

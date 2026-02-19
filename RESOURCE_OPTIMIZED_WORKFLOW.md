@@ -175,14 +175,20 @@ class ModalityEncoder(nn.Module):
     
     def forward(self, x, is_missing=False):
         if is_missing or x is None:
-            # Return learnable missing token
-            return self.missing_token.expand(batch_size, -1)
-        return self.encoder(x)
+            # Return learnable missing token and invalid mask
+            embedding = self.missing_token.expand(batch_size, -1)
+            valid_mask = torch.zeros(batch_size, dtype=torch.bool)
+            return embedding, valid_mask
+        embedding = self.encoder(x)
+        # Detect all-NaN samples
+        valid_mask = ~torch.isnan(x).all(dim=1)
+        return embedding, valid_mask
 ```
 
 **How it works:**
 - When a modality is missing for a sample, the encoder returns a **learnable token** instead of encoded features
 - The missing token is learned during training to represent "no data available"
+- A `valid_mask` is returned to identify samples with valid data (used to exclude all-NaN samples from loss)
 - This is the same approach used by Transformer Fusion (`ModalityFeatureEncoder`)
 
 **Use cases:**
@@ -753,8 +759,75 @@ python metalearner.py \
 |--------|---------------------|
 | `dre_*.py`, `cfe_*.py` | `--checkpoint_frequency 50 --keep_last_n 3 --checkpoint_fallback_dir <dir> --resume <best/latest/auto>` |
 | `metalearner.py` | `--checkpoint_frequency 50 --keep_last_n 3 --resume <best/latest/auto>` |
-| `pretrain_contrastive.py` | `--checkpoint_interval 10 --resume <path>` |
+| `pretrain_contrastive.py` | `--checkpoint_interval 10 --keep_last_n_checkpoints 3 --resume <path>` |
 | `train_transformer_fusion.py` | `--checkpoint_interval 10 --keep_last_n 3 --resume <path>` |
+
+### Contrastive Pretraining Checkpoint Structure
+
+The contrastive pretraining saves models in a structured format for flexible downstream use:
+
+```
+pretrained_models/contrastive/
+├── best_model.pt                    # Combined model (all modalities)
+├── contrastive_epoch_100.pt         # Periodic checkpoint
+├── contrastive_epoch_200.pt         # Periodic checkpoint
+├── encoders/                        # Per-modality encoders (for downstream use)
+│   ├── mRNA_encoder.pt
+│   ├── miRNA_encoder.pt
+│   ├── DNA_Meth_encoder.pt
+│   └── CNV_encoder.pt
+└── projections/                     # Projection heads (for continued pretraining)
+    ├── mRNA_projection.pt
+    └── ...
+```
+
+**What's saved:**
+
+| File | Contents | Use Case |
+|------|----------|----------|
+| `best_model.pt` | Full model state, optimizer, config | Resume training, full inference |
+| `encoders/{modality}_encoder.pt` | Single encoder weights + metadata | Load specific modalities |
+| `projections/{modality}_projection.pt` | Projection head weights | Continued pretraining |
+
+**Best model selection metric:** **Contrastive Loss (lower = better)**
+- Lower loss = better separation of positive/negative pairs
+- Indicates embeddings form meaningful clusters
+- For downstream performance, evaluate with classification F1 after fine-tuning
+
+**Loading individual modality encoders:**
+
+```python
+from performance_extensions.training_utils import load_single_modality_encoder
+
+# Load just the mRNA encoder
+encoder, metadata = load_single_modality_encoder(
+    "pretrained_models/contrastive/encoders/mRNA_encoder.pt"
+)
+
+# metadata contains:
+# - input_dim: 5000
+# - embed_dim: 256
+# - encoder_type: 'transformer' or 'mlp'
+# - epoch: 150
+# - loss: 0.594
+```
+
+**Loading multiple modalities:**
+
+```python
+from performance_extensions.training_utils import load_pretrained_encoders
+
+# Load specific modalities only
+encoders, metadata = load_pretrained_encoders(
+    "pretrained_models/contrastive",
+    modalities=['mRNA', 'miRNA']  # Only load these two
+)
+
+# Load all modalities
+encoders, metadata = load_pretrained_encoders("pretrained_models/contrastive")
+```
+
+**Note:** Training behavior is unchanged. Only checkpoint saving is enhanced to support per-modality loading.
 
 ### Example: Full Pipeline with W&B and Checkpointing
 

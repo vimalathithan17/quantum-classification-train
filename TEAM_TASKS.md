@@ -27,18 +27,68 @@ Each team member will train a different variant of the contrastive encoder to co
 
 ---
 
-## Team Member 1: Approach A (Memory-Optimized, embed_dim=64)
+## Encoder Types
 
-**Focus:** Smallest embedding dimension for resource-constrained environments
+### MLP Encoder (Default)
+- Standard 3-layer MLP encoder
+- Requires imputation for NaN values (`--impute_strategy median`)
+- Faster training, lower memory usage
+
+### Transformer Encoder (New)
+- Treats each feature as a token with self-attention
+- Native NaN handling via [MASK] tokens (`--impute_strategy none`)
+- Learns to infer missing values from context
+- Better for data with missing features
+
+**Key Arguments:**
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--encoder_type` | `mlp` or `transformer` | `mlp` |
+| `--impute_strategy` | `median`, `mean`, `zero`, `none`, or auto | auto-selects based on encoder_type |
+| `--transformer_d_model` | Transformer hidden dimension | 64 |
+| `--transformer_num_heads` | Number of attention heads | 4 |
+| `--transformer_num_layers` | Number of transformer layers | 2 |
+
+---
+
+## Updated Output Structure
+
+After training, models are saved **per-modality**:
+
+```
+pretrained_encoders_*/
+├── metadata.json              # Training config and modality info
+├── encoders/
+│   ├── GeneExpr_encoder.pt    # Per-modality encoder weights + metadata
+│   ├── Prot_encoder.pt
+│   ├── miRNA_encoder.pt
+│   ├── Meth_encoder.pt
+│   └── CNV_encoder.pt
+├── projections/
+│   ├── GeneExpr_projection.pt # Per-modality projection heads
+│   ├── Prot_projection.pt
+│   └── ...
+└── checkpoints/
+    ├── best_model.pt          # Full model checkpoint
+    └── epoch_*.pt             # Periodic checkpoints
+```
+
+---
+
+## Team Member 1: MLP Encoder (embed_dim=64, Memory-Optimized)
+
+**Focus:** Smallest embedding dimension with MLP encoder for resource-constrained environments
 
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_encoders_64dim \
+    --output_dir /kaggle/working/pretrained_encoders_mlp_64dim \
+    --encoder_type mlp \
+    --impute_strategy median \
     --embed_dim 64 \
     --projection_dim 32 \
     --batch_size 64 \
-    --num_epochs 100 \
+    --num_epochs 2500 \
     --lr 1e-3 \
     --temperature 0.07 \
     --use_cross_modal \
@@ -46,39 +96,41 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --use_wandb --wandb_project contrastive-team --wandb_run_name member1_64dim \
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member1_mlp_64dim \
     --device cpu
 ```
 
 **After Training - Extract Features:**
 ```bash
 python examples/extract_pretrained_features.py \
-    --encoder_dir /kaggle/working/pretrained_encoders_64dim/encoders \
+    --encoder_dir /kaggle/working/pretrained_encoders_mlp_64dim/encoders \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_features_64dim \
+    --output_dir /kaggle/working/pretrained_features_mlp_64dim \
     --device cpu
 ```
 
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_64dim/encoders/` - Trained encoder weights
-- `/kaggle/working/pretrained_encoders_64dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_64dim/training_metrics.json` - Training metrics
-- `/kaggle/working/pretrained_features_64dim/` - Extracted 64-dim features per modality
+- `/kaggle/working/pretrained_encoders_mlp_64dim/encoders/` - Per-modality encoder weights
+- `/kaggle/working/pretrained_encoders_mlp_64dim/checkpoints/best_model.pt` - Best model checkpoint
+- `/kaggle/working/pretrained_encoders_mlp_64dim/metadata.json` - Training metadata
+- `/kaggle/working/pretrained_features_mlp_64dim/` - Extracted 64-dim features per modality
 
 ---
 
-## Team Member 2: Approach B (Standard, embed_dim=256)
+## Team Member 2: MLP Encoder (embed_dim=256, High Capacity)
 
-**Focus:** Largest embedding dimension for maximum expressiveness
+**Focus:** Largest embedding dimension with MLP encoder for maximum expressiveness
 
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_encoders_256dim \
+    --output_dir /kaggle/working/pretrained_encoders_mlp_256dim \
+    --encoder_type mlp \
+    --impute_strategy median \
     --embed_dim 256 \
     --projection_dim 128 \
     --batch_size 16 \
-    --num_epochs 100 \
+    --num_epochs 1000 \
     --lr 1e-3 \
     --temperature 0.07 \
     --use_cross_modal \
@@ -86,7 +138,7 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --use_wandb --wandb_project contrastive-team --wandb_run_name member2_256dim \
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member2_mlp_256dim \
     --device cpu
 ```
 
@@ -95,32 +147,37 @@ python examples/pretrain_contrastive.py \
 **After Training - Extract Features:**
 ```bash
 python examples/extract_pretrained_features.py \
-    --encoder_dir /kaggle/working/pretrained_encoders_256dim/encoders \
+    --encoder_dir /kaggle/working/pretrained_encoders_mlp_256dim/encoders \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_features_256dim \
+    --output_dir /kaggle/working/pretrained_features_mlp_256dim \
     --device cpu
 ```
 
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_256dim/encoders/` - Trained encoder weights
-- `/kaggle/working/pretrained_encoders_256dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_256dim/training_metrics.json` - Training metrics
-- `/kaggle/working/pretrained_features_256dim/` - Extracted 256-dim features per modality
+- `/kaggle/working/pretrained_encoders_mlp_256dim/encoders/` - Per-modality encoder weights
+- `/kaggle/working/pretrained_encoders_mlp_256dim/checkpoints/best_model.pt` - Best model checkpoint
+- `/kaggle/working/pretrained_encoders_mlp_256dim/metadata.json` - Training metadata
+- `/kaggle/working/pretrained_features_mlp_256dim/` - Extracted 256-dim features per modality
 
 ---
 
-## Team Member 3: Approach C (Recommended, embed_dim=128)
+## Team Member 3: Transformer Encoder (embed_dim=128, Recommended)
 
-**Focus:** Balanced configuration - recommended starting point
+**Focus:** Transformer-based encoder with native NaN handling - recommended configuration
 
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_encoders_128dim \
+    --output_dir /kaggle/working/pretrained_encoders_transformer_128dim \
+    --encoder_type transformer \
+    --impute_strategy none \
     --embed_dim 128 \
     --projection_dim 64 \
+    --transformer_d_model 64 \
+    --transformer_num_heads 4 \
+    --transformer_num_layers 2 \
     --batch_size 32 \
-    --num_epochs 150 \
+    --num_epochs 2500 \
     --lr 1e-3 \
     --temperature 0.07 \
     --use_cross_modal \
@@ -128,64 +185,99 @@ python examples/pretrain_contrastive.py \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --use_wandb --wandb_project contrastive-team --wandb_run_name member3_128dim \
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member3_transformer_128dim \
     --device cpu
 ```
+
+**Key advantage:** No imputation needed! The transformer treats NaN values as [MASK] tokens and learns to infer them from context.
 
 **After Training - Extract Features:**
 ```bash
 python examples/extract_pretrained_features.py \
-    --encoder_dir /kaggle/working/pretrained_encoders_128dim/encoders \
+    --encoder_dir /kaggle/working/pretrained_encoders_transformer_128dim/encoders \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_features_128dim \
+    --output_dir /kaggle/working/pretrained_features_transformer_128dim \
     --device cpu
 ```
 
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_128dim/encoders/` - Trained encoder weights
-- `/kaggle/working/pretrained_encoders_128dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_128dim/training_metrics.json` - Training metrics
-- `/kaggle/working/pretrained_features_128dim/` - Extracted 128-dim features per modality
+- `/kaggle/working/pretrained_encoders_transformer_128dim/encoders/` - Per-modality encoder weights
+- `/kaggle/working/pretrained_encoders_transformer_128dim/checkpoints/best_model.pt` - Best model checkpoint
+- `/kaggle/working/pretrained_encoders_transformer_128dim/metadata.json` - Training metadata
+- `/kaggle/working/pretrained_features_transformer_128dim/` - Extracted 128-dim features per modality
 
 ---
 
-## Team Member 4: Temperature Ablation (embed_dim=128, temperature=0.5)
+## Team Member 4: Transformer Encoder Temperature Ablation (embed_dim=256)
 
-**Focus:** Compare different temperature settings (softer negative mining)
+**Focus:** Compare different temperature settings with transformer encoder (256-dim for higher capacity)
 
+### Run A: Temperature = 0.05 (Sharper, recommended)
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_encoders_128dim_temp05 \
-    --embed_dim 128 \
-    --projection_dim 64 \
+    --output_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp005 \
+    --encoder_type transformer \
+    --impute_strategy none \
+    --embed_dim 256 \
+    --projection_dim 128 \
+    --transformer_d_model 64 \
+    --transformer_num_heads 4 \
+    --transformer_num_layers 2 \
     --batch_size 32 \
-    --num_epochs 150 \
+    --num_epochs 2500 \
     --lr 1e-3 \
-    --temperature 0.5 \
+    --temperature 0.05 \
     --use_cross_modal \
     --skip_modalities SNV \
     --checkpoint_interval 10 \
     --seed 42 \
     --max_grad_norm 1.0 \
-    --use_wandb --wandb_project contrastive-team --wandb_run_name member4_128dim_temp05 \
-    --device cpu
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp005 \
+    --device cuda
 ```
 
-**After Training - Extract Features:**
+### Run B: Temperature = 0.02 (Very sharp)
+```bash
+python examples/pretrain_contrastive.py \
+    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --output_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp002 \
+    --encoder_type transformer \
+    --impute_strategy none \
+    --embed_dim 256 \
+    --projection_dim 128 \
+    --transformer_d_model 64 \
+    --transformer_num_heads 4 \
+    --transformer_num_layers 2 \
+    --batch_size 32 \
+    --num_epochs 2500 \
+    --lr 1e-3 \
+    --temperature 0.02 \
+    --use_cross_modal \
+    --skip_modalities SNV \
+    --checkpoint_interval 10 \
+    --seed 42 \
+    --max_grad_norm 1.0 \
+    --use_wandb --wandb_project contrastive-team --wandb_run_name member4_transformer_256dim_temp002 \
+    --device cuda
+```
+
+**Note:** Previous experiments showed lower temperature (0.02-0.07) significantly outperforms higher temperature (0.2-0.5).
+
+**After Training - Extract Features (for best run):**
 ```bash
 python examples/extract_pretrained_features.py \
-    --encoder_dir /kaggle/working/pretrained_encoders_128dim_temp05/encoders \
+    --encoder_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp005/encoders \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
-    --output_dir /kaggle/working/pretrained_features_128dim_temp05 \
-    --device cpu
+    --output_dir /kaggle/working/pretrained_features_transformer_256dim_temp005 \
+    --device cuda
 ```
 
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_128dim_temp05/encoders/` - Trained encoder weights
-- `/kaggle/working/pretrained_encoders_128dim_temp05/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_128dim_temp05/training_metrics.json` - Training metrics
-- `/kaggle/working/pretrained_features_128dim_temp05/` - Extracted 128-dim features per modality
+- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/encoders/` - Per-modality encoder weights
+- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/checkpoints/best_model.pt` - Best model checkpoint
+- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/metadata.json` - Training metadata
+- `/kaggle/working/pretrained_features_transformer_256dim_temp*/` - Extracted 256-dim features per modality
 
 ---
 
@@ -197,29 +289,32 @@ python examples/extract_pretrained_features.py \
 # View final loss for each variant (run from /kaggle/working)
 for dir in /kaggle/working/pretrained_encoders_*; do
     echo "=== $dir ==="
-    cat "$dir/training_metrics.json" | python -c "import json,sys; d=json.load(sys.stdin); print(f'Final Loss: {d[\"epoch_losses\"][-1]:.4f}, Best Loss: {d.get(\"best_loss\", \"N/A\")}')"
+    if [ -f "$dir/metadata.json" ]; then
+        cat "$dir/metadata.json" | python -c "import json,sys; d=json.load(sys.stdin); print(f'Encoder: {d.get(\"encoder_type\", \"mlp\")}, Embed: {d.get(\"embed_dim\", \"N/A\")}')"
+    fi
 done
 ```
 
 ### Method 2: Compare on W&B Dashboard
 
 All runs are logged to the same W&B project (`contrastive-team`), so you can compare:
-- Training loss curves
+- Training loss curves (intra-modal and cross-modal components)
 - Final loss values
 - Training time
+- Encoder type (MLP vs Transformer)
 
 ### Method 3: Downstream QML Evaluation
 
 After all team members complete training, evaluate each encoder on QML classification:
 
 ```bash
-# Example: Evaluate Member 3's encoder (128-dim) on GeneExpr
+# Example: Evaluate Member 3's transformer encoder (128-dim) on GeneExpr
 python dre_standard.py \
     --datatypes GeneExpr \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/working/pretrained_features_128dim \
+    --pretrained_features_dir /kaggle/working/pretrained_features_transformer_128dim \
     --n_qbits 14 --n_layers 4 --steps 200 \
-    --use_wandb --wandb_project qml-comparison --wandb_run_name geneexpr_128dim \
+    --use_wandb --wandb_project qml-comparison --wandb_run_name geneexpr_transformer_128dim \
     --verbose
 ```
 
@@ -227,14 +322,31 @@ python dre_standard.py \
 
 ## Summary Table
 
-| Member | Variant | embed_dim | temperature | batch_size | epochs | Output Dir |
-|--------|---------|-----------|-------------|------------|--------|------------|
-| 1 | Memory-Optimized | 64 | 0.07 | 64 | 100 | `/kaggle/working/pretrained_encoders_64dim` |
-| 2 | Standard | 256 | 0.07 | 16 | 100 | `/kaggle/working/pretrained_encoders_256dim` |
-| 3 | Recommended | 128 | 0.07 | 32 | 150 | `/kaggle/working/pretrained_encoders_128dim` |
-| 4 | Temperature Ablation | 128 | 0.5 | 32 | 150 | `/kaggle/working/pretrained_encoders_128dim_temp05` |
+| Member | Encoder | embed_dim | projection_dim | temperature | epochs | Output Dir |
+|--------|---------|-----------|----------------|-------------|--------|------------|
+| 1 | MLP | 64 | 32 | 0.07 | 2500 | `pretrained_encoders_mlp_64dim` |
+| 2 | MLP | 256 | 128 | 0.07 | 1000 | `pretrained_encoders_mlp_256dim` |
+| 3 | **Transformer** | 128 | 64 | 0.07 | 2500 | `pretrained_encoders_transformer_128dim` |
+| 4a | **Transformer** | 256 | 128 | 0.05 | 2500 | `pretrained_encoders_transformer_256dim_temp005` |
+| 4b | **Transformer** | 256 | 128 | 0.02 | 2500 | `pretrained_encoders_transformer_256dim_temp002` |
 
 **Modalities Trained:** GeneExpr, miRNA, Meth, CNV, Prot (SNV skipped)
+
+---
+
+## Key Findings from Previous Experiments
+
+| Run | Embed Dim | Temp | Loss | Notes |
+|-----|-----------|------|------|-------|
+| member3_128dim | 128 | 0.07 | **0.594** | ✓ Best overall |
+| member4_256dim_temp005 | 256 | 0.05 | 0.538 | ✓ Best for 256-dim |
+| member4_256dim_temp002 | 256 | 0.02 | 0.554 | Good |
+| member2_256dim | 256 | 0.07 | 0.651 | - |
+| member1_64dim | 64 | 0.07 | 0.935 | - |
+| member4_128dim_temp02 | 128 | 0.2 | 1.167 | Too high temp |
+| member4_128dim_temp05 | 128 | 0.5 | 2.611 | Too high temp |
+
+**Conclusion:** Lower temperature (0.02-0.07) significantly outperforms higher temperature (0.2-0.5).
 
 ---
 
@@ -245,6 +357,7 @@ python dre_standard.py \
    - Training loss (lower is better)
    - Downstream QML accuracy
    - Memory/time constraints
+   - **MLP vs Transformer**: Transformer handles missing data natively, MLP requires imputation
 3. **Proceed to full pipeline** with selected encoder:
    - Train QML base learners for all modalities (GeneExpr, miRNA, Meth, CNV, Prot)
    - Train meta-learner
@@ -254,9 +367,45 @@ See [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md) for the com
 
 ---
 
+## Loading Pretrained Encoders
+
+### Load a Single Modality Encoder
+
+```python
+from performance_extensions.training_utils import load_single_modality_encoder
+
+# Load GeneExpr encoder from per-modality checkpoint
+encoder, metadata = load_single_modality_encoder(
+    encoder_path="pretrained_encoders_transformer_128dim/encoders/GeneExpr_encoder.pt",
+    device="cpu"
+)
+
+# Use the encoder
+x = torch.randn(32, 5000)  # (batch, features)
+embedding, valid_mask = encoder(x)  # Returns (batch, 128), (batch,)
+```
+
+### Load All Encoders for Downstream Tasks
+
+```python
+from performance_extensions.training_utils import load_pretrained_encoders
+
+encoders, metadata = load_pretrained_encoders(
+    checkpoint_dir="pretrained_encoders_transformer_128dim",
+    device="cpu"
+)
+
+# encoders is a dict: {'GeneExpr': encoder1, 'Prot': encoder2, ...}
+for modality, encoder in encoders.items():
+    embedding, valid_mask = encoder(data[modality])
+```
+
+---
+
 ## Kaggle Tips
 
 1. **Save outputs frequently** - Kaggle has a 12-hour runtime limit
 2. **Use GPU if available** - Change `--device cpu` to `--device cuda`
 3. **Download trained models** - From `/kaggle/working/` before session ends
 4. **Commit notebook** - To save outputs permanently as a Kaggle dataset
+5. **Transformer encoder** - More compute-intensive but handles NaN natively
