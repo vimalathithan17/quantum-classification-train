@@ -195,7 +195,15 @@ python examples/tune_transformer_fusion.py \
     --verbose
 ```
 
-**Note:** Since embeddings are already 264-dim, the model will use smaller `embed_dim` values more efficiently.
+**Note:** Since embeddings are already 264-dim, the tuning script automatically limits `embed_dim` to [64, 128, 256] to avoid wasteful over-parameterization.
+
+**Tuned Hyperparameters:**
+- `embed_dim`: [64, 128, 256] *(auto-limited for 264-dim input)*
+- `num_heads`: [4, 8]
+- `num_layers`: 2-6
+- `lr`: 1e-5 to 1e-2 (log scale)
+- `batch_size`: [16, 32, 64]
+- `dropout`: 0.1-0.5
 
 #### Step 2: Train with Best Hyperparameters
 

@@ -301,7 +301,15 @@ def objective(trial, args, data, labels, modality_dims, n_classes, device):
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # Hyperparameters to tune
-    embed_dim = trial.suggest_categorical('embed_dim', [64, 128, 256, 512])
+    # For pretrained embeddings (typically 264-dim), use smaller embed_dim values
+    # to avoid inefficient projection (264 -> 512 -> 512)
+    max_input_dim = max(modality_dims.values())
+    if max_input_dim <= 300:  # Pretrained embeddings (e.g., 264-dim)
+        embed_dim_choices = [64, 128, 256]  # Skip 512 - wasteful for small inputs
+    else:
+        embed_dim_choices = [64, 128, 256, 512]
+    
+    embed_dim = trial.suggest_categorical('embed_dim', embed_dim_choices)
     num_heads = trial.suggest_categorical('num_heads', [4, 8])
     num_layers = trial.suggest_int('num_layers', 2, 6)
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)

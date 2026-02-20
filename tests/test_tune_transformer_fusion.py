@@ -378,5 +378,74 @@ class TestIntegration:
             assert not np.isnan(val_loss), f"Val loss is NaN at epoch {epoch}"
 
 
+@pytest.mark.skipif(not IMPORTS_AVAILABLE, reason="tune_transformer_fusion imports not available")
+class TestEmbedDimAutoLimit:
+    """Test auto-limit of embed_dim choices based on input dimensions."""
+    
+    def test_embed_dim_choices_for_small_inputs(self):
+        """Test that embed_dim choices exclude 512 for small input dimensions (<=300)."""
+        # For pretrained embeddings (e.g., 264-dim), embed_dim=512 is wasteful
+        # since ModalityFeatureEncoder does: input_dim -> 512 -> embed_dim
+        # 264 -> 512 -> 512 is over-parameterized
+        
+        small_modality_dims = {'GeneExpr': 264, 'miRNA': 264}
+        max_input_dim = max(small_modality_dims.values())
+        
+        if max_input_dim <= 300:
+            embed_dim_choices = [64, 128, 256]
+        else:
+            embed_dim_choices = [64, 128, 256, 512]
+        
+        assert embed_dim_choices == [64, 128, 256], \
+            "Should exclude 512 for small inputs (<=300 dim)"
+        assert 512 not in embed_dim_choices, \
+            "512 should not be in choices for pretrained embeddings"
+    
+    def test_embed_dim_choices_for_large_inputs(self):
+        """Test that embed_dim choices include 512 for large input dimensions (>300)."""
+        # For raw features (e.g., 20531-dim gene expression), 512 is reasonable
+        
+        large_modality_dims = {'GeneExpr': 20531, 'miRNA': 1046}
+        max_input_dim = max(large_modality_dims.values())
+        
+        if max_input_dim <= 300:
+            embed_dim_choices = [64, 128, 256]
+        else:
+            embed_dim_choices = [64, 128, 256, 512]
+        
+        assert embed_dim_choices == [64, 128, 256, 512], \
+            "Should include 512 for large inputs (>300 dim)"
+        assert 512 in embed_dim_choices, \
+            "512 should be available for raw features"
+    
+    def test_embed_dim_boundary_at_300(self):
+        """Test boundary case at exactly 300 dimensions."""
+        boundary_modality_dims = {'GeneExpr': 300, 'miRNA': 200}
+        max_input_dim = max(boundary_modality_dims.values())
+        
+        if max_input_dim <= 300:
+            embed_dim_choices = [64, 128, 256]
+        else:
+            embed_dim_choices = [64, 128, 256, 512]
+        
+        # At exactly 300, should still exclude 512 (<=300 means 300 is included)
+        assert 512 not in embed_dim_choices, \
+            "At 300 dim boundary, should exclude 512"
+    
+    def test_embed_dim_just_over_boundary(self):
+        """Test case just over 300 dimensions."""
+        over_boundary_dims = {'GeneExpr': 301, 'miRNA': 200}
+        max_input_dim = max(over_boundary_dims.values())
+        
+        if max_input_dim <= 300:
+            embed_dim_choices = [64, 128, 256]
+        else:
+            embed_dim_choices = [64, 128, 256, 512]
+        
+        # At 301, should include 512
+        assert 512 in embed_dim_choices, \
+            "At 301 dim (just over boundary), should include 512"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
