@@ -32,6 +32,48 @@ This guide explains **how to integrate** the QML pipeline with performance exten
 2. **Standalone Performance Extensions** - Use transformer/contrastive learning without quantum components
 3. **Hybrid QML + Extensions** - Combine quantum and deep learning approaches
 
+### Quick Start: Pre-extracted Features (Skip Encoder Training)
+
+Pre-extracted embeddings from contrastive pretraining are available on Kaggle:
+
+**Kaggle Dataset:** [qml-tcga-pretrained-encoder-extracted-features](https://www.kaggle.com/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features)
+
+**Directory:** `pretrained_features_mlp_264dim`
+
+**Contents:**
+| File | Description |
+|------|-------------|
+| `GeneExpr_embeddings.npy` | 264-dim gene expression embeddings |
+| `miRNA_embeddings.npy` | 264-dim miRNA embeddings |
+| `Meth_embeddings.npy` | 264-dim DNA methylation embeddings |
+| `CNV_embeddings.npy` | 264-dim copy number variation embeddings |
+| `Prot_embeddings.npy` | 264-dim proteomics embeddings |
+| `case_ids.npy` | Sample identifiers |
+| `labels.npy` | Class labels |
+| `extraction_metadata.json` | Encoder configuration |
+
+**Quick Start Commands:**
+
+```bash
+# 1. Hyperparameter tuning with pretrained features
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --verbose
+
+# 2. Train QML classifier with pretrained features
+python dre_standard.py --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 --verbose
+
+# 3. Train reuploading QML with pretrained features
+python dre_relupload.py --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 --verbose
+```
+
 ---
 
 ## Architecture Decision Tree

@@ -6,6 +6,36 @@
 
 ---
 
+## Pre-Extracted Features (Quick Start Option)
+
+**Skip encoder training entirely!** Pre-extracted features are available on Kaggle:
+
+**Kaggle Dataset:** [qml-tcga-pretrained-encoder-extracted-features](https://www.kaggle.com/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features)
+
+**Directory:** `pretrained_features_mlp_264dim`
+
+**Contents:**
+```
+pretrained_features_mlp_264dim/
+├── CNV_embeddings.npy        # 264-dim embeddings
+├── GeneExpr_embeddings.npy   # 264-dim embeddings
+├── Meth_embeddings.npy       # 264-dim embeddings
+├── Prot_embeddings.npy       # 264-dim embeddings
+├── miRNA_embeddings.npy      # 264-dim embeddings
+├── case_ids.npy              # Sample identifiers
+├── labels.npy                # Class labels
+└── extraction_metadata.json  # Encoder config info
+```
+
+**Kaggle Input Path:**
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+To use these features, jump directly to the **Hyperparameter Tuning** and **Training** sections in each team member's flow below.
+
+---
+
 ## Overview
 
 Each team member will train a different variant of the contrastive encoder to compare performance. All experiments use the same dataset but different configurations.
@@ -81,6 +111,11 @@ pretrained_encoders_*/
 
 **Focus:** Smallest embedding dimension with MLP encoder for resource-constrained environments
 
+### Complete Flow
+
+#### Step 1: Train Encoder (or use pre-extracted features)
+
+**Option A - Train your own encoder:**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -105,7 +140,8 @@ python examples/pretrain_contrastive.py \
     --device cpu
 ```
 
-**After Training - Extract Features:**
+#### Step 2: Extract Features
+
 ```bash
 python examples/extract_pretrained_features.py \
     --encoder_dir /kaggle/working/pretrained_encoders_mlp_64dim/encoders \
@@ -114,11 +150,65 @@ python examples/extract_pretrained_features.py \
     --device cpu
 ```
 
+**Option B - Use pre-extracted features from Kaggle:**
+Skip Steps 1-2 and use features from the Kaggle dataset directly:
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+#### Step 3: Hyperparameter Tuning (Per Modality)
+
+Run Optuna hyperparameter search using pretrained features:
+
+```bash
+# GeneExpr - Standard QML
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member1_geneexpr_tune \
+    --verbose
+
+# GeneExpr - Reuploading QML (alternative)
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model reuploading \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member1_geneexpr_reup_tune \
+    --verbose
+
+# Repeat for other modalities: miRNA, Meth, CNV, Prot
+```
+
+#### Step 4: Train with Best Hyperparameters
+
+Use the best parameters from tuning to train final models:
+
+```bash
+# Standard QML (example with typical best params)
+python dre_standard.py \
+    --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member1_geneexpr_standard \
+    --verbose
+
+# Reuploading QML
+python dre_relupload.py \
+    --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member1_geneexpr_reup \
+    --verbose
+```
+
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_mlp_64dim/encoders/` - Per-modality encoder weights
-- `/kaggle/working/pretrained_encoders_mlp_64dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_mlp_64dim/metadata.json` - Training metadata
-- `/kaggle/working/pretrained_features_mlp_64dim/` - Extracted 64-dim features per modality
+- `/kaggle/working/pretrained_encoders_mlp_64dim/` - Encoder weights and metadata
+- `/kaggle/working/pretrained_features_mlp_64dim/` - Extracted 64-dim features
+- Optuna study results in SQLite database
+- W&B logs with training metrics
 
 ---
 
@@ -126,6 +216,11 @@ python examples/extract_pretrained_features.py \
 
 **Focus:** Largest embedding dimension with MLP encoder for maximum expressiveness
 
+### Complete Flow
+
+#### Step 1: Train Encoder (or use pre-extracted features)
+
+**Option A - Train your own encoder:**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -152,7 +247,8 @@ python examples/pretrain_contrastive.py \
 
 **Note:** Use `--batch_size 16` to avoid OOM errors with larger embedding dimension.
 
-**After Training - Extract Features:**
+#### Step 2: Extract Features
+
 ```bash
 python examples/extract_pretrained_features.py \
     --encoder_dir /kaggle/working/pretrained_encoders_mlp_256dim/encoders \
@@ -161,11 +257,60 @@ python examples/extract_pretrained_features.py \
     --device cpu
 ```
 
+**Option B - Use pre-extracted features from Kaggle:**
+Skip Steps 1-2 and use features from the Kaggle dataset directly:
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+#### Step 3: Hyperparameter Tuning (Per Modality)
+
+```bash
+# GeneExpr - Standard QML
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member2_geneexpr_tune \
+    --verbose
+
+# miRNA - Standard QML
+python tune_models.py --datatype miRNA --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member2_mirna_tune \
+    --verbose
+
+# Repeat for: Meth, CNV, Prot
+```
+
+#### Step 4: Train with Best Hyperparameters
+
+```bash
+# Standard QML
+python dre_standard.py \
+    --datatypes GeneExpr miRNA \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member2_multi_standard \
+    --verbose
+
+# Reuploading QML
+python dre_relupload.py \
+    --datatypes GeneExpr miRNA \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member2_multi_reup \
+    --verbose
+```
+
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_mlp_256dim/encoders/` - Per-modality encoder weights
-- `/kaggle/working/pretrained_encoders_mlp_256dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_mlp_256dim/metadata.json` - Training metadata
-- `/kaggle/working/pretrained_features_mlp_256dim/` - Extracted 256-dim features per modality
+- `/kaggle/working/pretrained_encoders_mlp_256dim/` - Encoder weights and metadata
+- `/kaggle/working/pretrained_features_mlp_256dim/` - Extracted 256-dim features
+- Optuna study results and W&B logs
 
 ---
 
@@ -173,6 +318,11 @@ python examples/extract_pretrained_features.py \
 
 **Focus:** Transformer-based encoder with native NaN handling - recommended configuration
 
+### Complete Flow
+
+#### Step 1: Train Encoder (or use pre-extracted features)
+
+**Option A - Train your own encoder:**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -202,7 +352,8 @@ python examples/pretrain_contrastive.py \
 
 **Key advantage:** No imputation needed! The transformer treats NaN values as [MASK] tokens and learns to infer them from context.
 
-**After Training - Extract Features:**
+#### Step 2: Extract Features
+
 ```bash
 python examples/extract_pretrained_features.py \
     --encoder_dir /kaggle/working/pretrained_encoders_transformer_128dim/encoders \
@@ -211,11 +362,60 @@ python examples/extract_pretrained_features.py \
     --device cpu
 ```
 
+**Option B - Use pre-extracted features from Kaggle:**
+Skip Steps 1-2 and use features from the Kaggle dataset directly:
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+#### Step 3: Hyperparameter Tuning (Per Modality)
+
+```bash
+# Meth - Standard QML
+python tune_models.py --datatype Meth --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member3_meth_tune \
+    --verbose
+
+# Meth - Reuploading QML
+python tune_models.py --datatype Meth --approach 1 --qml_model reuploading \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member3_meth_reup_tune \
+    --verbose
+
+# Repeat for: CNV, Prot
+```
+
+#### Step 4: Train with Best Hyperparameters
+
+```bash
+# Standard QML
+python dre_standard.py \
+    --datatypes Meth CNV Prot \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member3_meth_cnv_prot_standard \
+    --verbose
+
+# Reuploading QML
+python dre_relupload.py \
+    --datatypes Meth CNV Prot \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member3_meth_cnv_prot_reup \
+    --verbose
+```
+
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_transformer_128dim/encoders/` - Per-modality encoder weights
-- `/kaggle/working/pretrained_encoders_transformer_128dim/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_transformer_128dim/metadata.json` - Training metadata
-- `/kaggle/working/pretrained_features_transformer_128dim/` - Extracted 128-dim features per modality
+- `/kaggle/working/pretrained_encoders_transformer_128dim/` - Encoder weights and metadata
+- `/kaggle/working/pretrained_features_transformer_128dim/` - Extracted 128-dim features
+- Optuna study results and W&B logs
 
 ---
 
@@ -227,7 +427,11 @@ python examples/extract_pretrained_features.py \
 > The code now includes automatic NaN detection and batch skipping, but **temperature=0.07 is recommended** for stability.
 > If you see NaN losses, try increasing temperature or reducing learning rate.
 
-### Run A: Temperature = 0.07 (Stable, recommended)
+### Complete Flow
+
+#### Step 1: Train Encoder (Temperature Comparison)
+
+**Run A: Temperature = 0.07 (Stable, recommended)**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -255,7 +459,7 @@ python examples/pretrain_contrastive.py \
     --device cuda
 ```
 
-### Run B: Temperature = 0.05 (Sharper, may need NaN recovery)
+**Run B: Temperature = 0.05 (Sharper, may need NaN recovery)**
 ```bash
 python examples/pretrain_contrastive.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
@@ -285,7 +489,8 @@ python examples/pretrain_contrastive.py \
 
 **Note:** Lower learning rate (5e-4 vs 1e-3) helps stability with lower temperature.
 
-**After Training - Extract Features (for best run):**
+#### Step 2: Extract Features (for best run)
+
 ```bash
 python examples/extract_pretrained_features.py \
     --encoder_dir /kaggle/working/pretrained_encoders_transformer_256dim_temp007/encoders \
@@ -294,11 +499,60 @@ python examples/extract_pretrained_features.py \
     --device cuda
 ```
 
+**Option B - Use pre-extracted features from Kaggle:**
+Skip Steps 1-2 and use features from the Kaggle dataset directly:
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+#### Step 3: Hyperparameter Tuning (All Modalities)
+
+```bash
+# All modalities with Standard QML
+for datatype in GeneExpr miRNA Meth CNV Prot; do
+    python tune_models.py --datatype $datatype --approach 1 --qml_model standard \
+        --use_pretrained_features \
+        --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+        --n_trials 30 --n_jobs 1 \
+        --use_wandb --wandb_project qml-tuning --wandb_run_name member4_${datatype}_tune \
+        --verbose
+done
+
+# Or individually with Reuploading QML
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model reuploading \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --n_jobs 1 \
+    --use_wandb --wandb_project qml-tuning --wandb_run_name member4_geneexpr_reup_tune \
+    --verbose
+```
+
+#### Step 4: Train All Modalities with Best Hyperparameters
+
+```bash
+# Standard QML - All modalities in one run
+python dre_standard.py \
+    --datatypes GeneExpr miRNA Meth CNV Prot \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member4_all_modalities_standard \
+    --verbose
+
+# Reuploading QML - All modalities
+python dre_relupload.py \
+    --datatypes GeneExpr miRNA Meth CNV Prot \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 \
+    --use_wandb --wandb_project qml-classification --wandb_run_name member4_all_modalities_reup \
+    --verbose
+```
+
 **Expected Output:**
-- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/encoders/` - Per-modality encoder weights
-- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/checkpoints/best_model.pt` - Best model checkpoint
-- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/metadata.json` - Training metadata
-- `/kaggle/working/pretrained_features_transformer_256dim_temp*/` - Extracted 256-dim features per modality
+- `/kaggle/working/pretrained_encoders_transformer_256dim_temp*/` - Encoder weights and metadata
+- `/kaggle/working/pretrained_features_transformer_256dim_temp*/` - Extracted 256-dim features
+- Optuna study results and W&B logs
 
 ---
 

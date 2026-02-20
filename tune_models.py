@@ -310,7 +310,7 @@ def get_scaler(scaler_name):
         return RobustScaler()
     return MinMaxScaler()
 
-def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options):
+def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options, use_pretrained=False):
     """Defines one trial with Stratified K-Fold for a given pipeline configuration."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
@@ -347,6 +347,7 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
                     'datatype': args.datatype,
                     'qml_model': args.qml_model,
                     'dim_reducer': args.dim_reducer if args.approach == 1 else None,
+                    'use_pretrained': use_pretrained,
                     'n_qubits': params['n_qubits'],
                     'n_layers': params['n_layers'],
                     'scaler': params.get('scaler', None),
@@ -381,9 +382,13 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
     if args.approach == 1:
         steps_list = []
         # Common steps for Approach 1
-        steps_list.append(('imputer', MaskedTransformer(SimpleImputer(strategy='median'), fallback='raise')))
+        # Skip imputer for pretrained features (already clean)
+        if not use_pretrained:
+            steps_list.append(('imputer', MaskedTransformer(SimpleImputer(strategy='median'), fallback='raise')))
         steps_list.append(('scaler', MaskedTransformer(scaler, fallback='raise')))
 
+        # Dimensionality reduction: always apply if embed_dim > n_qubits
+        # For pretrained features, this reduces from embed_dim to n_qubits
         if args.dim_reducer == 'pca':
             steps_list.append(('dim_reducer', MaskedTransformer(PCA(n_components=n_qubits), fallback='raise')))
         else:
@@ -670,6 +675,13 @@ def main():
     model_args.add_argument('--dim_reducer', type=str, default='umap', choices=['pca', 'umap'],
                            help='Dimensionality reducer for Approach 1/DRE (default: umap)')
     
+    # Pretrained features configuration
+    feature_args = parser.add_argument_group('pretrained features (optional)')
+    feature_args.add_argument('--use_pretrained_features', action='store_true',
+                             help='Use pretrained contrastive embeddings instead of raw features')
+    feature_args.add_argument('--pretrained_features_dir', type=str, default=None,
+                             help='Directory containing pretrained feature .npy files')
+    
     # Tuning configuration
     tuning_args = parser.add_argument_group('tuning parameters')
     tuning_args.add_argument('--n_trials', type=int, default=9,
@@ -723,21 +735,67 @@ def main():
         return
     log.info(f"Using scalers: {scaler_options}")
 
-    df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
-    if df is None: 
-        log.error("Failed to load data, exiting.")
-        return
+    # Check for pretrained features mode
+    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
+    
+    if use_pretrained:
+        # Approach 2 (CFE) requires raw features with NaN for conditional encoding
+        # Pretrained features don't have NaN (encoder handles missingness), so not compatible
+        if args.approach == 2:
+            log.error("Pretrained features are not compatible with Approach 2 (CFE/Conditional).")
+            log.error("Approach 2 requires raw features with NaN values for missingness-aware encoding.")
+            log.error("Use --approach 1 with pretrained features instead.")
+            return
+        
+        # Load pretrained embeddings from numpy files
+        pretrained_file = os.path.join(args.pretrained_features_dir, f'{args.datatype}_embeddings.npy')
+        labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
+        case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
+        
+        if not os.path.exists(pretrained_file):
+            log.error(f"Pretrained features not found: {pretrained_file}")
+            return
+        if not os.path.exists(labels_file):
+            log.error(f"Labels file not found: {labels_file}")
+            return
+        if not os.path.exists(case_ids_file):
+            log.error(f"Case IDs file not found: {case_ids_file}")
+            return
+        
+        log.info(f"Loading pretrained features from: {args.pretrained_features_dir}")
+        X_np = np.load(pretrained_file)
+        y_np = np.load(labels_file)
+        case_ids = np.load(case_ids_file)
+        
+        # Convert to DataFrame/Series for compatibility with existing pipeline
+        X = pd.DataFrame(X_np, index=case_ids)
+        y_categorical = pd.Series(y_np, index=case_ids)
+        
+        # Labels are already encoded in pretrained features
+        le = LabelEncoder()
+        le.fit(y_categorical)
+        y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+        n_classes = len(le.classes_)
+        
+        log.info(f"Loaded pretrained features: X shape = {X.shape}, embed_dim = {X.shape[1]}")
+        log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+    else:
+        # Original flow: load from parquet
+        df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
+        if df is None: 
+            log.error("Failed to load data, exiting.")
+            return
 
-    # CRITICAL: Sort by case_id for consistent ordering across all scripts
-    df = df.sort_values('case_id').set_index('case_id')
-    X = df.drop(columns=['class'])
-    y_categorical = df['class']
+        # CRITICAL: Sort by case_id for consistent ordering across all scripts
+        df = df.sort_values('case_id').set_index('case_id')
+        X = df.drop(columns=['class'])
+        y_categorical = df['class']
 
-    # Perform label encoding for the multiclass target
-    le = LabelEncoder()
-    y = pd.Series(le.fit_transform(y_categorical), index=y_categorical.index)
-    n_classes = len(le.classes_)
-    log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+        # Perform label encoding for the multiclass target
+        le = LabelEncoder()
+        y = pd.Series(le.fit_transform(y_categorical), index=y_categorical.index)
+        n_classes = len(le.classes_)
+        log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
 
     # Determine qubit search range
     min_qbits = args.min_qbits if args.min_qbits is not None else n_classes
@@ -753,7 +811,8 @@ def main():
         study_name = args.study_name
         log.info(f"Using custom study name: {study_name}")
     else:
-        study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}'
+        pretrained_suffix = '_pretrained' if use_pretrained else ''
+        study_name = f'multiclass_qml_tuning_{args.datatype}_app{args.approach}_{args.dim_reducer}_{args.qml_model}{pretrained_suffix}'
         log.info(f"Using auto-generated study name: {study_name}")
     
     # Ensure database is writable
@@ -803,7 +862,7 @@ def main():
         
         try:
             study.optimize(
-                lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits, scaler_options),
+                lambda t: objective(t, args, X, y, n_classes, min_qbits, max_qbits, scaler_options, use_pretrained),
                 n_trials=n_trials_to_run,
                 callbacks=[interruption_callback]
             )

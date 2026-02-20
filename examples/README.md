@@ -32,6 +32,40 @@ These can be used independently, with QML, or combined for maximum performance i
 | 500+ samples, missing modalities | Transformer Fusion | Examples below |
 | 1000+ samples, GPU available | Full Hybrid (Contrastive → QML + Transformer → Meta-QML) | [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md) |
 
+### Pre-extracted Features (Skip Encoder Training)
+
+Pre-extracted embeddings from contrastive pretraining are available on Kaggle:
+
+**Kaggle Dataset:** [qml-tcga-pretrained-encoder-extracted-features](https://www.kaggle.com/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features)
+
+**Directory:** `pretrained_features_mlp_264dim`
+
+**Contents:**
+- `CNV_embeddings.npy`, `GeneExpr_embeddings.npy`, `Meth_embeddings.npy`, `Prot_embeddings.npy`, `miRNA_embeddings.npy` (264-dim embeddings)
+- `case_ids.npy` (sample identifiers)
+- `labels.npy` (class labels)
+- `extraction_metadata.json` (encoder config)
+
+**Kaggle Input Path:**
+```
+/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+```
+
+**Use with tuning and training:**
+```bash
+# Hyperparameter tuning
+python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_trials 30 --verbose
+
+# Training
+python dre_standard.py --datatypes GeneExpr \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --n_qbits 14 --n_layers 4 --steps 200 --verbose
+```
+
 ### Understanding Embedding Dimensions
 
 **Key Concept**: The encoders transform variable-dimensional input data into fixed-dimensional embeddings.
