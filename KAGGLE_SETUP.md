@@ -24,11 +24,11 @@ This guide covers setting up the quantum-classification-train project in a Kaggl
 1. Click **"+ Add Input"** in the right sidebar
 2. Search for: `gbm_lgg_balanced_xgb_reduced`
 3. Select the dataset by `vimalathithan22i272`
-4. The dataset will be mounted at: `/kaggle/input/gbm-lgg-balanced-xgb-reduced/`
+4. The dataset will be mounted at: `/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/`
 
 **Dataset Structure:**
 ```
-/kaggle/input/gbm-lgg-balanced-xgb-reduced/
+/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/
 └── final_processed_datasets_xgb_balanced/
     ├── data_CNV_.parquet
     ├── data_GeneExpr_.parquet
@@ -70,7 +70,7 @@ Run this in the first cell of your notebook:
 import os
 
 # Set the data directory to the Kaggle input path
-os.environ['SOURCE_DIR'] = '/kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced'
+os.environ['SOURCE_DIR'] = '/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced'
 
 # Set output directories (must be in /kaggle/working for persistence)
 os.environ['OUTPUT_DIR'] = '/kaggle/working/outputs'
@@ -107,7 +107,7 @@ os.environ['ENCODER_DIR'] = '/kaggle/working/master_label_encoder'
 
 ```python
 # Verify dataset is accessible
-!ls -la /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced/
+!ls -la /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced/
 
 # Verify repo is cloned
 !ls -la /kaggle/working/quantum-classification-train/
@@ -122,7 +122,7 @@ os.environ['ENCODER_DIR'] = '/kaggle/working/master_label_encoder'
 
 | Purpose | Path |
 |---------|------|
-| **Input Dataset** | `/kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced` |
+| **Input Dataset** | `/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced` |
 | **Working Directory** | `/kaggle/working/quantum-classification-train` |
 | **Outputs** | `/kaggle/working/outputs` |
 | **Pretrained Encoders** | `/kaggle/working/pretrained_encoders_*` |
@@ -149,7 +149,7 @@ if not os.path.exists('/kaggle/working/quantum-classification-train'):
 !pip install -q -r requirements.txt
 
 # Set environment variables
-os.environ['SOURCE_DIR'] = '/kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced'
+os.environ['SOURCE_DIR'] = '/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced'
 os.environ['OUTPUT_DIR'] = '/kaggle/working/outputs'
 os.environ['TUNING_RESULTS_DIR'] = '/kaggle/working/tuning_results'
 os.environ['ENCODER_DIR'] = '/kaggle/working/master_label_encoder'
@@ -165,7 +165,7 @@ if not os.path.exists('/kaggle/working/master_label_encoder/label_encoder.joblib
     !python create_master_label_encoder.py
 
 # Verify
-!ls /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced/
+!ls /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced/
 print("\n✅ Setup complete!")
 ```
 

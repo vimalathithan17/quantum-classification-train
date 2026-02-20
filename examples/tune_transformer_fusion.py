@@ -119,6 +119,12 @@ def load_pretrained_embeddings(embeddings_dir, modalities=None):
             ...
             labels.npy
             case_ids.npy (optional)
+    
+    Returns:
+        data: Dict of numpy arrays {modality: embeddings}
+        labels: numpy array of encoded labels
+        modality_dims: Dict {modality: embed_dim}
+        case_ids: numpy array of case IDs (or None if not found)
     """
     embeddings_dir = Path(embeddings_dir)
     
@@ -143,7 +149,7 @@ def load_pretrained_embeddings(embeddings_dir, modalities=None):
     # Load labels
     labels_path = embeddings_dir / "labels.npy"
     if labels_path.exists():
-        labels = np.load(labels_path)
+        labels = np.load(labels_path, allow_pickle=True)  # String labels need allow_pickle
         # If labels are strings, encode them
         if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
             from sklearn.preprocessing import LabelEncoder
@@ -152,9 +158,18 @@ def load_pretrained_embeddings(embeddings_dir, modalities=None):
         labels = labels.astype(np.int64)
     else:
         log.error(f"Labels file not found: {labels_path}")
-        return None, None, None
+        return None, None, None, None
     
-    return data, labels, modality_dims
+    # Load case_ids (optional, for debugging/tracing)
+    case_ids_path = embeddings_dir / "case_ids.npy"
+    if case_ids_path.exists():
+        case_ids = np.load(case_ids_path, allow_pickle=True)
+        log.info(f"Loaded {len(case_ids)} case IDs")
+    else:
+        case_ids = None
+        log.info("No case_ids.npy found (optional)")
+    
+    return data, labels, modality_dims, case_ids
 
 
 def load_multiomics_data(data_dir, modalities=None):
@@ -484,12 +499,13 @@ def main():
             log.error("--pretrained_features_dir is required when using --use_pretrained_embeddings")
             return
         log.info(f"Loading pretrained embeddings from: {args.pretrained_features_dir}")
-        data, labels, modality_dims = load_pretrained_embeddings(args.pretrained_features_dir, args.modalities)
+        data, labels, modality_dims, case_ids = load_pretrained_embeddings(args.pretrained_features_dir, args.modalities)
         data_source = "pretrained_embeddings"
     else:
         data_dir = args.data_dir or SOURCE_DIR
         log.info(f"Loading raw data from: {data_dir}")
         data, labels, modality_dims = load_multiomics_data(data_dir, args.modalities)
+        case_ids = None  # Raw data loader doesn't return case_ids
         data_source = "raw_features"
     
     if not data or labels is None:

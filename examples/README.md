@@ -48,7 +48,7 @@ Pre-extracted embeddings from contrastive pretraining are available on Kaggle:
 
 **Kaggle Input Path:**
 ```
-/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+/kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
 ```
 
 **Use with tuning and training:**
@@ -56,13 +56,13 @@ Pre-extracted embeddings from contrastive pretraining are available on Kaggle:
 # Hyperparameter tuning
 python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_trials 30 --verbose
 
 # Training
 python dre_standard.py --datatypes GeneExpr \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits 14 --n_layers 4 --steps 200 --verbose
 ```
 

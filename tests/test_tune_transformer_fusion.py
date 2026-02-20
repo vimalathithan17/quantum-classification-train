@@ -115,7 +115,7 @@ class TestPretrainedEmbeddings:
             np.save(os.path.join(tmpdir, 'labels.npy'), 
                    np.array(['A', 'B'] * 25))  # String labels
             
-            data, labels, modality_dims = load_pretrained_embeddings(
+            data, labels, modality_dims, case_ids = load_pretrained_embeddings(
                 tmpdir, modalities=['GeneExpr', 'miRNA'])
             
             assert data is not None
@@ -125,6 +125,7 @@ class TestPretrainedEmbeddings:
             assert data['miRNA'].shape == (n_samples, embed_dim)
             assert len(labels) == n_samples
             assert modality_dims == {'GeneExpr': embed_dim, 'miRNA': embed_dim}
+            assert case_ids is None  # No case_ids.npy file
     
     def test_load_pretrained_embeddings_numeric_labels(self):
         """Test loading embeddings with numeric labels."""
@@ -137,7 +138,7 @@ class TestPretrainedEmbeddings:
             np.save(os.path.join(tmpdir, 'labels.npy'), 
                    np.array([0, 1, 2] * 10))  # Numeric labels
             
-            data, labels, modality_dims = load_pretrained_embeddings(
+            data, labels, modality_dims, case_ids = load_pretrained_embeddings(
                 tmpdir, modalities=['GeneExpr'])
             
             assert data is not None
@@ -151,11 +152,14 @@ class TestPretrainedEmbeddings:
                    np.random.randn(10, 32).astype(np.float32))
             # No labels.npy file
             
-            data, labels, modality_dims = load_pretrained_embeddings(
+            data, labels, modality_dims, case_ids = load_pretrained_embeddings(
                 tmpdir, modalities=['GeneExpr'])
             
-            # Should return None for labels since labels.npy is missing
+            # Should return None since labels.npy is missing
+            assert data is None
             assert labels is None
+            assert modality_dims is None
+            assert case_ids is None
     
     def test_load_pretrained_embeddings_missing_modality(self):
         """Test loading with missing modality files."""
@@ -165,12 +169,31 @@ class TestPretrainedEmbeddings:
             np.save(os.path.join(tmpdir, 'labels.npy'), np.array([0, 1] * 10))
             # No miRNA_embeddings.npy file
             
-            data, labels, modality_dims = load_pretrained_embeddings(
+            data, labels, modality_dims, case_ids = load_pretrained_embeddings(
                 tmpdir, modalities=['GeneExpr', 'miRNA'])
             
             assert 'GeneExpr' in data
             assert 'miRNA' not in data  # Missing modality skipped
             assert modality_dims == {'GeneExpr': 64}
+    
+    def test_load_pretrained_embeddings_with_case_ids(self):
+        """Test loading embeddings with case_ids file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            n_samples = 20
+            embed_dim = 64
+            
+            np.save(os.path.join(tmpdir, 'GeneExpr_embeddings.npy'), 
+                   np.random.randn(n_samples, embed_dim).astype(np.float32))
+            np.save(os.path.join(tmpdir, 'labels.npy'), np.array([0, 1] * 10))
+            np.save(os.path.join(tmpdir, 'case_ids.npy'), 
+                   np.array([f'TCGA-{i:02d}' for i in range(n_samples)]))
+            
+            data, labels, modality_dims, case_ids = load_pretrained_embeddings(
+                tmpdir, modalities=['GeneExpr'])
+            
+            assert case_ids is not None
+            assert len(case_ids) == n_samples
+            assert case_ids[0] == 'TCGA-00'
 
 
 @pytest.mark.skipif(not IMPORTS_AVAILABLE, reason="tune_transformer_fusion imports not available")

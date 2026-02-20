@@ -764,8 +764,8 @@ def main():
         
         log.info(f"Loading pretrained features from: {args.pretrained_features_dir}")
         X_np = np.load(pretrained_file)
-        y_np = np.load(labels_file)
-        case_ids = np.load(case_ids_file)
+        y_np = np.load(labels_file, allow_pickle=True)  # String labels need allow_pickle
+        case_ids = np.load(case_ids_file, allow_pickle=True)  # String case IDs need allow_pickle
         
         # Convert to DataFrame/Series for compatibility with existing pipeline
         X = pd.DataFrame(X_np, index=case_ids)

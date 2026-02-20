@@ -29,7 +29,7 @@ pretrained_features_mlp_264dim/
 
 **Kaggle Input Path:**
 ```
-/kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
+/kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
 ```
 
 To use these features, jump directly to the **Hyperparameter Tuning** and **Training** sections in each team member's flow below.
@@ -44,11 +44,11 @@ Each team member will train a different variant of the contrastive encoder to co
 
 **Kaggle Input Path:**
 ```
-/kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced
+/kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced
 ```
 
 **Shared Settings:**
-- `--data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced`
+- `--data_dir /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced`
 - `--skip_modalities SNV` (skipping SNV for initial training)
 - `--use_cross_modal` (always enabled for multi-omics)
 - `--checkpoint_interval 10`
@@ -117,7 +117,7 @@ pretrained_encoders_*/
 
 ```bash
 python examples/tune_transformer_fusion.py \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --data_dir /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
     --modalities GeneExpr miRNA Meth CNV Prot \
     --n_trials 50 \
     --num_epochs 75 \
@@ -142,7 +142,7 @@ After tuning completes, train final model with best config:
 ```bash
 # Check best params in transformer_tuning_results/member1_raw_features_best_config.json
 python examples/train_transformer_fusion.py \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --data_dir /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
     --output_dir /kaggle/working/transformer_models_member1 \
     --embed_dim <best_embed_dim> \
     --num_heads <best_num_heads> \
@@ -159,7 +159,7 @@ python examples/train_transformer_fusion.py \
 ```bash
 python examples/extract_transformer_features.py \
     --model_dir /kaggle/working/transformer_models_member1 \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --data_dir /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
     --output_dir /kaggle/working/transformer_predictions_member1 \
     --output_format csv
 ```
@@ -185,7 +185,7 @@ This approach uses the 264-dim embeddings from pretrained contrastive encoders a
 ```bash
 python examples/tune_transformer_fusion.py \
     --use_pretrained_embeddings \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --modalities GeneExpr miRNA Meth CNV Prot \
     --n_trials 50 \
     --num_epochs 75 \
@@ -211,7 +211,7 @@ python examples/tune_transformer_fusion.py \
 # Check best params in transformer_tuning_results/member2_pretrained_embeddings_best_config.json
 python examples/train_transformer_fusion.py \
     --use_pretrained_embeddings \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_models_member2 \
     --embed_dim <best_embed_dim> \
     --num_heads <best_num_heads> \
@@ -229,7 +229,7 @@ python examples/train_transformer_fusion.py \
 python examples/extract_transformer_features.py \
     --model_dir /kaggle/working/transformer_models_member2 \
     --use_pretrained_embeddings \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_predictions_member2 \
     --output_format csv
 ```
@@ -258,7 +258,7 @@ Run Optuna hyperparameter search using pretrained features:
 # GeneExpr - Standard QML
 python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -269,7 +269,7 @@ python tune_models.py --datatype GeneExpr --approach 1 --qml_model standard \
 # miRNA - Standard QML
 python tune_models.py --datatype miRNA --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -280,7 +280,7 @@ python tune_models.py --datatype miRNA --approach 1 --qml_model standard \
 # Meth - Standard QML
 python tune_models.py --datatype Meth --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -291,7 +291,7 @@ python tune_models.py --datatype Meth --approach 1 --qml_model standard \
 # CNV - Standard QML
 python tune_models.py --datatype CNV --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -302,7 +302,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard \
 # Prot - Standard QML
 python tune_models.py --datatype Prot --approach 1 --qml_model standard \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -327,7 +327,7 @@ Use the best parameters from tuning to train final models:
 python dre_standard.py \
     --datatypes GeneExpr miRNA Meth CNV Prot \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits <best_qbits> --n_layers <best_layers> --steps 200 \
     --use_wandb --wandb_project qml-classification --wandb_run_name member3_all_standard \
     --verbose
@@ -354,7 +354,7 @@ Run Optuna hyperparameter search using pretrained features:
 # GeneExpr - Reuploading QML
 python tune_models.py --datatype GeneExpr --approach 1 --qml_model reuploading \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -365,7 +365,7 @@ python tune_models.py --datatype GeneExpr --approach 1 --qml_model reuploading \
 # miRNA - Reuploading QML
 python tune_models.py --datatype miRNA --approach 1 --qml_model reuploading \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -376,7 +376,7 @@ python tune_models.py --datatype miRNA --approach 1 --qml_model reuploading \
 # Meth - Reuploading QML
 python tune_models.py --datatype Meth --approach 1 --qml_model reuploading \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -387,7 +387,7 @@ python tune_models.py --datatype Meth --approach 1 --qml_model reuploading \
 # CNV - Reuploading QML
 python tune_models.py --datatype CNV --approach 1 --qml_model reuploading \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -398,7 +398,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model reuploading \
 # Prot - Reuploading QML
 python tune_models.py --datatype Prot --approach 1 --qml_model reuploading \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --min_qbits 8 --max_qbits 14 \
     --min_layers 2 --max_layers 6 \
     --steps 75 \
@@ -421,7 +421,7 @@ Use the best parameters from tuning to train final models:
 python dre_relupload.py \
     --datatypes GeneExpr miRNA Meth CNV Prot \
     --use_pretrained_features \
-    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits <best_qbits> --n_layers <best_layers> --steps 200 \
     --use_wandb --wandb_project qml-classification --wandb_run_name member4_all_reup \
     --verbose
