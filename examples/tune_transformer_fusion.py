@@ -109,8 +109,56 @@ def ensure_writable_db(db_path):
     return ":memory:"
 
 
+def load_pretrained_embeddings(embeddings_dir, modalities=None):
+    """Load pretrained encoder embeddings from numpy files.
+    
+    Expected structure:
+        embeddings_dir/
+            GeneExpr_embeddings.npy
+            miRNA_embeddings.npy
+            ...
+            labels.npy
+            case_ids.npy (optional)
+    """
+    embeddings_dir = Path(embeddings_dir)
+    
+    if modalities is None:
+        modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot']
+    
+    data = {}
+    modality_dims = {}
+    
+    for modality in modalities:
+        emb_path = embeddings_dir / f"{modality}_embeddings.npy"
+        
+        if emb_path.exists():
+            log.info(f"Loading pretrained embeddings for {modality} from {emb_path}")
+            embeddings = np.load(emb_path).astype(np.float32)
+            data[modality] = embeddings
+            modality_dims[modality] = embeddings.shape[1]
+            log.info(f"  Loaded {embeddings.shape[0]} samples with {embeddings.shape[1]}-dim embeddings")
+        else:
+            log.warning(f"Embeddings file not found: {emb_path}")
+    
+    # Load labels
+    labels_path = embeddings_dir / "labels.npy"
+    if labels_path.exists():
+        labels = np.load(labels_path)
+        # If labels are strings, encode them
+        if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            labels = le.fit_transform(labels)
+        labels = labels.astype(np.int64)
+    else:
+        log.error(f"Labels file not found: {labels_path}")
+        return None, None, None
+    
+    return data, labels, modality_dims
+
+
 def load_multiomics_data(data_dir, modalities=None):
-    """Load multi-omics data from parquet files."""
+    """Load multi-omics data from parquet files (raw features)."""
     data_dir = Path(data_dir)
     
     if modalities is None:
@@ -357,8 +405,12 @@ def main():
         description="Hyperparameter tuning for Transformer Fusion model using Optuna",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Basic tuning with CUDA
+  # Basic tuning with CUDA on raw data
   python examples/tune_transformer_fusion.py --device cuda --n_trials 50
+  
+  # Use pretrained encoder embeddings (recommended)
+  python examples/tune_transformer_fusion.py --use_pretrained_embeddings \\
+      --pretrained_features_dir pretrained_features_mlp_264dim --n_trials 50
   
   # Custom epochs per trial
   python examples/tune_transformer_fusion.py --num_epochs 75 --n_trials 100
@@ -371,6 +423,10 @@ def main():
     data_args = parser.add_argument_group('data configuration')
     data_args.add_argument('--data_dir', type=str, default=None,
                           help='Directory with parquet files (default: from SOURCE_DIR env)')
+    data_args.add_argument('--use_pretrained_embeddings', action='store_true',
+                          help='Use pretrained encoder embeddings instead of raw features')
+    data_args.add_argument('--pretrained_features_dir', type=str, default=None,
+                          help='Directory with pretrained embeddings (required if --use_pretrained_embeddings)')
     data_args.add_argument('--modalities', type=str, nargs='+', 
                           default=['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot'],
                           help='Modalities to use (default: GeneExpr miRNA Meth CNV Prot)')
@@ -414,10 +470,19 @@ def main():
     device = torch.device(args.device)
     log.info(f"Using device: {device}")
     
-    # Load data
-    data_dir = args.data_dir or SOURCE_DIR
-    log.info(f"Loading data from: {data_dir}")
-    data, labels, modality_dims = load_multiomics_data(data_dir, args.modalities)
+    # Load data - either pretrained embeddings or raw features
+    if args.use_pretrained_embeddings:
+        if not args.pretrained_features_dir:
+            log.error("--pretrained_features_dir is required when using --use_pretrained_embeddings")
+            return
+        log.info(f"Loading pretrained embeddings from: {args.pretrained_features_dir}")
+        data, labels, modality_dims = load_pretrained_embeddings(args.pretrained_features_dir, args.modalities)
+        data_source = "pretrained_embeddings"
+    else:
+        data_dir = args.data_dir or SOURCE_DIR
+        log.info(f"Loading raw data from: {data_dir}")
+        data, labels, modality_dims = load_multiomics_data(data_dir, args.modalities)
+        data_source = "raw_features"
     
     if not data or labels is None:
         log.error("Failed to load data!")
@@ -425,9 +490,10 @@ def main():
     
     n_classes = len(np.unique(labels))
     log.info(f"Loaded {len(data)} modalities, {len(labels)} samples, {n_classes} classes")
+    log.info(f"Modality dimensions: {modality_dims}")
     
-    # Study name
-    study_name = args.study_name or f'transformer_fusion_tuning_{args.num_epochs}ep'
+    # Study name - include data source type
+    study_name = args.study_name or f'transformer_fusion_{data_source}_{args.num_epochs}ep'
     log.info(f"Study name: {study_name}")
     
     # Database
@@ -501,6 +567,9 @@ def main():
             
             best_config = {
                 'study_name': study_name,
+                'data_source': data_source,
+                'pretrained_features_dir': args.pretrained_features_dir,
+                'modality_dims': modality_dims,
                 'best_trial': best_trial.number,
                 'best_f1': best_trial.value,
                 'best_params': best_trial.params,

@@ -25,7 +25,9 @@ try:
         MultiOmicsDataset,
         create_dataloader,
         train_epoch,
-        evaluate
+        evaluate,
+        load_pretrained_embeddings,
+        load_multiomics_data
     )
     IMPORTS_AVAILABLE = True
 except ImportError as e:
@@ -93,6 +95,82 @@ class TestDatabaseUtilities:
             
             # Restore permissions for cleanup
             os.chmod(db_path, 0o644)
+
+
+@pytest.mark.skipif(not IMPORTS_AVAILABLE, reason="tune_transformer_fusion imports not available")
+class TestPretrainedEmbeddings:
+    """Test pretrained embeddings loading."""
+    
+    def test_load_pretrained_embeddings(self):
+        """Test loading embeddings from numpy files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create mock embedding files
+            n_samples = 50
+            embed_dim = 64
+            
+            np.save(os.path.join(tmpdir, 'GeneExpr_embeddings.npy'), 
+                   np.random.randn(n_samples, embed_dim).astype(np.float32))
+            np.save(os.path.join(tmpdir, 'miRNA_embeddings.npy'), 
+                   np.random.randn(n_samples, embed_dim).astype(np.float32))
+            np.save(os.path.join(tmpdir, 'labels.npy'), 
+                   np.array(['A', 'B'] * 25))  # String labels
+            
+            data, labels, modality_dims = load_pretrained_embeddings(
+                tmpdir, modalities=['GeneExpr', 'miRNA'])
+            
+            assert data is not None
+            assert 'GeneExpr' in data
+            assert 'miRNA' in data
+            assert data['GeneExpr'].shape == (n_samples, embed_dim)
+            assert data['miRNA'].shape == (n_samples, embed_dim)
+            assert len(labels) == n_samples
+            assert modality_dims == {'GeneExpr': embed_dim, 'miRNA': embed_dim}
+    
+    def test_load_pretrained_embeddings_numeric_labels(self):
+        """Test loading embeddings with numeric labels."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            n_samples = 30
+            embed_dim = 32
+            
+            np.save(os.path.join(tmpdir, 'GeneExpr_embeddings.npy'), 
+                   np.random.randn(n_samples, embed_dim).astype(np.float32))
+            np.save(os.path.join(tmpdir, 'labels.npy'), 
+                   np.array([0, 1, 2] * 10))  # Numeric labels
+            
+            data, labels, modality_dims = load_pretrained_embeddings(
+                tmpdir, modalities=['GeneExpr'])
+            
+            assert data is not None
+            assert len(labels) == n_samples
+            assert set(labels) == {0, 1, 2}
+    
+    def test_load_pretrained_embeddings_missing_labels(self):
+        """Test that missing labels file returns None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            np.save(os.path.join(tmpdir, 'GeneExpr_embeddings.npy'), 
+                   np.random.randn(10, 32).astype(np.float32))
+            # No labels.npy file
+            
+            data, labels, modality_dims = load_pretrained_embeddings(
+                tmpdir, modalities=['GeneExpr'])
+            
+            # Should return None for labels since labels.npy is missing
+            assert labels is None
+    
+    def test_load_pretrained_embeddings_missing_modality(self):
+        """Test loading with missing modality files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            np.save(os.path.join(tmpdir, 'GeneExpr_embeddings.npy'), 
+                   np.random.randn(20, 64).astype(np.float32))
+            np.save(os.path.join(tmpdir, 'labels.npy'), np.array([0, 1] * 10))
+            # No miRNA_embeddings.npy file
+            
+            data, labels, modality_dims = load_pretrained_embeddings(
+                tmpdir, modalities=['GeneExpr', 'miRNA'])
+            
+            assert 'GeneExpr' in data
+            assert 'miRNA' not in data  # Missing modality skipped
+            assert modality_dims == {'GeneExpr': 64}
 
 
 @pytest.mark.skipif(not IMPORTS_AVAILABLE, reason="tune_transformer_fusion imports not available")

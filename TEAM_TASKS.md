@@ -107,9 +107,9 @@ pretrained_encoders_*/
 
 ---
 
-## Team Member 1: Transformer Fusion Tuning (Small Configuration)
+## Team Member 1: Transformer Fusion on Raw Features
 
-**Focus:** Tune transformer fusion model with smaller embed_dim for efficient GPU training
+**Focus:** Tune transformer fusion model on raw multi-omics features (end-to-end learning)
 
 ### Complete Flow
 
@@ -121,9 +121,9 @@ python examples/tune_transformer_fusion.py \
     --modalities GeneExpr miRNA Meth CNV Prot \
     --n_trials 50 \
     --num_epochs 75 \
-    --study_name member1_transformer_small \
+    --study_name member1_raw_features \
     --device cuda \
-    --use_wandb --wandb_project transformer-tuning --wandb_run_name member1_small_config \
+    --use_wandb --wandb_project transformer-tuning --wandb_run_name member1_raw_features \
     --verbose
 ```
 
@@ -140,8 +140,7 @@ python examples/tune_transformer_fusion.py \
 After tuning completes, train final model with best config:
 
 ```bash
-# Check best params in transformer_tuning_results/member1_transformer_small_best_config.json
-# Then train with those params:
+# Check best params in transformer_tuning_results/member1_raw_features_best_config.json
 python examples/train_transformer_fusion.py \
     --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
     --output_dir /kaggle/working/transformer_models_member1 \
@@ -166,48 +165,52 @@ python examples/extract_transformer_features.py \
 ```
 
 **Expected Output:**
-- `transformer_tuning_results/member1_transformer_small_best_config.json` - Best hyperparameters
+- `transformer_tuning_results/member1_raw_features_best_config.json` - Best hyperparameters
 - `/kaggle/working/transformer_models_member1/` - Trained model
 - `/kaggle/working/transformer_predictions_member1/` - Predictions for meta-learner
 - W&B logs with tuning and training metrics
 
 ---
 
-## Team Member 2: Transformer Fusion Tuning (Large Configuration)
+## Team Member 2: Transformer Fusion on Pretrained Embeddings
 
-**Focus:** Tune transformer fusion model with larger capacity configuration
+**Focus:** Tune transformer fusion model using pretrained contrastive encoder embeddings (transfer learning)
+
+This approach uses the 264-dim embeddings from pretrained contrastive encoders as input, leveraging learned representations instead of raw features.
 
 ### Complete Flow
 
-#### Step 1: Tune Transformer Fusion Hyperparameters
+#### Step 1: Tune Transformer Fusion on Pretrained Embeddings
 
 ```bash
 python examples/tune_transformer_fusion.py \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --use_pretrained_embeddings \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --modalities GeneExpr miRNA Meth CNV Prot \
-    --n_trials 75 \
+    --n_trials 50 \
     --num_epochs 75 \
-    --study_name member2_transformer_large \
+    --study_name member2_pretrained_embeddings \
     --device cuda \
-    --use_wandb --wandb_project transformer-tuning --wandb_run_name member2_large_config \
+    --use_wandb --wandb_project transformer-tuning --wandb_run_name member2_pretrained_emb \
     --verbose
 ```
 
-**Note:** More trials (75) to explore larger configurations thoroughly.
+**Note:** Since embeddings are already 264-dim, the model will use smaller `embed_dim` values more efficiently.
 
 #### Step 2: Train with Best Hyperparameters
 
 ```bash
-# Check best params in transformer_tuning_results/member2_transformer_large_best_config.json
+# Check best params in transformer_tuning_results/member2_pretrained_embeddings_best_config.json
 python examples/train_transformer_fusion.py \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --use_pretrained_embeddings \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_models_member2 \
     --embed_dim <best_embed_dim> \
     --num_heads <best_num_heads> \
     --num_layers <best_num_layers> \
     --lr <best_lr> \
     --batch_size <best_batch_size> \
-    --num_epochs 150 \
+    --num_epochs 100 \
     --device cuda \
     --use_wandb --wandb_project transformer-fusion --wandb_run_name member2_final_model
 ```
@@ -217,16 +220,19 @@ python examples/train_transformer_fusion.py \
 ```bash
 python examples/extract_transformer_features.py \
     --model_dir /kaggle/working/transformer_models_member2 \
-    --data_dir /kaggle/input/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
+    --use_pretrained_embeddings \
+    --pretrained_features_dir /kaggle/input/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_predictions_member2 \
     --output_format csv
 ```
 
 **Expected Output:**
-- `transformer_tuning_results/member2_transformer_large_best_config.json` - Best hyperparameters
-- `/kaggle/working/transformer_models_member2/` - Trained model
+- `transformer_tuning_results/member2_pretrained_embeddings_best_config.json` - Best hyperparameters
+- `/kaggle/working/transformer_models_member2/` - Trained model using pretrained embeddings
 - `/kaggle/working/transformer_predictions_member2/` - Predictions for meta-learner
 - W&B logs with tuning and training metrics
+
+**Key Difference from Member 1:** Uses pretrained 264-dim embeddings from contrastive encoders instead of raw features (thousands of dimensions). This tests whether transfer learning from contrastive pretraining improves transformer fusion performance.
 
 ---
 
@@ -422,12 +428,16 @@ python dre_relupload.py \
 
 ## Team Member Assignments Summary
 
-| Member | Task | Model | Device | Trials | Key Focus |
-|--------|------|-------|--------|--------|-----------|
-| 1 | Transformer Fusion Tuning | TransformerFusion | CUDA | 50 | Small config exploration |
-| 2 | Transformer Fusion Tuning | TransformerFusion | CUDA | 75 | Large config exploration |
-| 3 | Standard QML Tuning | DRE Standard | CPU | 50×5 | All modalities, standard circuit |
-| 4 | Reuploading QML Tuning | DRE Reuploading | CPU | 50×5 | All modalities, data reuploading |
+| Member | Task | Input Data | Model | Device | Trials | Key Focus |
+|--------|------|------------|-------|--------|--------|-----------|
+| 1 | Transformer Fusion | Raw features | TransformerFusion | CUDA | 50 | End-to-end learning from raw data |
+| 2 | Transformer Fusion | Pretrained embeddings (264-dim) | TransformerFusion | CUDA | 50 | Transfer learning with encoder |
+| 3 | Standard QML Tuning | Pretrained embeddings | DRE Standard | CPU | 50×5 | All modalities, standard circuit |
+| 4 | Reuploading QML Tuning | Pretrained embeddings | DRE Reuploading | CPU | 50×5 | All modalities, data reuploading |
+
+**Key Comparison (Members 1 vs 2):**
+- Member 1 tests transformer's ability to learn from high-dimensional raw features
+- Member 2 tests whether pretrained contrastive embeddings improve fusion performance
 
 **Common Settings for QML Tuning (Members 3 & 4):**
 - `--min_qbits 8 --max_qbits 14`
