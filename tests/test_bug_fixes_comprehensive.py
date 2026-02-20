@@ -77,6 +77,29 @@ class TestXValScaledFix:
         assert model._shape_validated == True
 
 
+# Module-level class for pickling support
+class TupleValidatingMetaLearner:
+    """Meta-learner that validates it receives a tuple input."""
+    def __init__(self):
+        self.received_tuple = False
+        
+    def predict(self, X):
+        if isinstance(X, tuple) and len(X) == 2:
+            self.received_tuple = True
+            X_base, X_mask = X
+            assert X_base.shape == X_mask.shape, "Mask shape must match base shape"
+        else:
+            raise TypeError(f"Expected tuple (X_base, X_mask), got {type(X)}")
+        return np.array([1])
+
+
+# Module-level dummy QML model for pickling support
+class DummyQMLModel:
+    """Simple QML model mock that returns fixed predictions."""
+    def predict_proba(self, inp):
+        return np.array([[0.3, 0.7]])
+
+
 class TestInferenceTupleInput:
     """Test that inference.py correctly passes tuple to gated meta-learner."""
     
@@ -84,20 +107,6 @@ class TestInferenceTupleInput:
         """Verify the meta-learner predict receives (X_base, X_mask) tuple."""
         import joblib
         from sklearn.preprocessing import LabelEncoder
-        
-        # Create a mock meta-learner that validates it receives a tuple
-        class TupleValidatingMetaLearner:
-            def __init__(self):
-                self.received_tuple = False
-                
-            def predict(self, X):
-                if isinstance(X, tuple) and len(X) == 2:
-                    self.received_tuple = True
-                    X_base, X_mask = X
-                    assert X_base.shape == X_mask.shape, "Mask shape must match base shape"
-                else:
-                    raise TypeError(f"Expected tuple (X_base, X_mask), got {type(X)}")
-                return np.array([1])
         
         # Setup model directory
         model_dir = tmp_path / "model_dir"
@@ -108,7 +117,7 @@ class TestInferenceTupleInput:
         le.fit(["A", "B"])
         joblib.dump(le, model_dir / 'label_encoder.joblib')
         
-        # Create and save the validating meta-learner
+        # Create and save the validating meta-learner (module-level class for pickle)
         meta = TupleValidatingMetaLearner()
         joblib.dump(meta, model_dir / 'meta_learner_final.joblib')
         
@@ -124,11 +133,7 @@ class TestInferenceTupleInput:
         with open(model_dir / 'meta_learner_columns.json', 'w') as fh:
             json.dump(meta_cols, fh)
         
-        # Create dummy base learner for CNV
-        class DummyQMLModel:
-            def predict_proba(self, inp):
-                return np.array([[0.3, 0.7]])
-        
+        # Use module-level DummyQMLModel for pickle support
         joblib.dump(['f1', 'f2'], model_dir / 'selected_features_CNV.joblib')
         joblib.dump(None, model_dir / 'scaler_CNV.joblib')
         joblib.dump(DummyQMLModel(), model_dir / 'qml_model_CNV.joblib')
@@ -182,13 +187,15 @@ class TestMaskBuilding:
         spec.loader.exec_module(metalearner)
         
         # Create test data
+        # Note: _build_mask_from_indicators expects PRE-INVERTED indicator values
+        # where 1.0 = present and 0.0 = missing (already inverted by assemble_meta_data)
         df = pd.DataFrame({
             'pred_GeneExpr_A': [0.8, 0.2, 0.5],
             'pred_GeneExpr_B': [0.2, 0.8, 0.5],
             'pred_miRNA_A': [0.6, 0.4, 0.3],
             'pred_miRNA_B': [0.4, 0.6, 0.7],
-            'is_missing_GeneExpr_': [0.0, 0.0, 1.0],  # Third sample missing GeneExpr
-            'is_missing_miRNA_': [0.0, 1.0, 0.0],  # Second sample missing miRNA
+            'is_missing_GeneExpr_': [1.0, 1.0, 0.0],  # Third sample missing GeneExpr (0.0=missing)
+            'is_missing_miRNA_': [1.0, 0.0, 1.0],  # Second sample missing miRNA (0.0=missing)
         }, index=['case1', 'case2', 'case3'])
         
         base_cols = ['pred_GeneExpr_A', 'pred_GeneExpr_B', 'pred_miRNA_A', 'pred_miRNA_B']
@@ -221,9 +228,11 @@ class TestMaskBuilding:
             sys.path.insert(0, repo_root)
         spec.loader.exec_module(metalearner)
         
+        # Note: _build_mask_from_indicators expects PRE-INVERTED indicator values
+        # where 1.0 = present and 0.0 = missing (already inverted by assemble_meta_data)
         df = pd.DataFrame({
             'pred_CNV_A': [0.5],
-            'is_missing_CNV_': [1.0],  # Missing
+            'is_missing_CNV_': [0.0],  # Missing (0.0 = missing in pre-inverted format)
         }, index=['case1'])
         
         base_cols = ['pred_CNV_A']
@@ -231,7 +240,7 @@ class TestMaskBuilding:
         
         mask = metalearner._build_mask_from_indicators(df, base_cols, indicator_cols)
         
-        # is_missing=1 should result in mask=0
+        # Pre-inverted indicator 0.0 (missing) should result in mask=0.0
         assert mask[0, 0] == 0.0, "Missing data should have mask=0"
 
 
