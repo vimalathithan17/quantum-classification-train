@@ -120,13 +120,17 @@ class TestTransformerModalityEncoder:
         assert encoder.embed_dim == 256
         assert encoder.d_model == 64
         
-        # Check components exist
+        # Check core components exist
         assert hasattr(encoder, 'feature_embedding')
         assert hasattr(encoder, 'pos_encoding')
         assert hasattr(encoder, 'mask_token')
         assert hasattr(encoder, 'transformer')
         assert hasattr(encoder, 'output_proj')
         assert hasattr(encoder, 'missing_modality_token')
+        
+        # Check stability layers exist (Pre-LN architecture)
+        assert hasattr(encoder, 'embedding_norm'), "Should have embedding LayerNorm"
+        assert hasattr(encoder, 'pre_transformer_norm'), "Should have pre-transformer LayerNorm"
         
         # Check shapes
         assert encoder.pos_encoding.shape == (1, 100, 64)
@@ -512,6 +516,44 @@ class TestEdgeCases:
         assert out.shape == (4, 128)
         assert not valid_mask.any(), "All samples should be invalid"
         assert not torch.isnan(out).any(), "Output should still be valid tensors"
+    
+    def test_numerical_stability_training_simulation(self):
+        """Simulate training iterations to detect NaN accumulation."""
+        encoder = TransformerModalityEncoder(input_dim=50, embed_dim=128, dropout=0.1)
+        encoder.train()
+        
+        optimizer = torch.optim.AdamW(encoder.parameters(), lr=1e-3)
+        
+        # Simulate 50 training iterations
+        for i in range(50):
+            # Random batch with some NaN
+            x = torch.randn(16, 50)
+            x[::3, ::4] = float('nan')  # Sparse NaN pattern
+            
+            # Forward
+            out, valid_mask = encoder(x)
+            
+            # Must not have NaN in output
+            assert not torch.isnan(out).any(), f"NaN detected in output at iteration {i}"
+            assert not torch.isinf(out).any(), f"Inf detected in output at iteration {i}"
+            
+            # Simple loss (simulate contrastive loss downstream)
+            loss = out.mean()
+            
+            # Backward
+            optimizer.zero_grad()
+            loss.backward()
+            
+            # Gradients must not be NaN
+            for name, param in encoder.named_parameters():
+                if param.grad is not None:
+                    assert not torch.isnan(param.grad).any(), f"NaN grad in {name} at iter {i}"
+            
+            optimizer.step()
+            
+            # Weights must not be NaN after update
+            for name, param in encoder.named_parameters():
+                assert not torch.isnan(param).any(), f"NaN weight in {name} at iter {i}"
 
 
 if __name__ == '__main__':

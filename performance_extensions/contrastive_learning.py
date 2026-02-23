@@ -265,33 +265,70 @@ class TransformerModalityEncoder(nn.Module):
         # Each scalar feature becomes a d_model-dimensional vector
         self.feature_embedding = nn.Linear(1, d_model)
         
+        # LayerNorm AFTER feature embedding - critical for stability
+        self.embedding_norm = nn.LayerNorm(d_model)
+        
         # Learnable positional encoding for each feature position
-        # Scale by sqrt(d_model) for better numerical stability (like in original Transformer)
-        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model) * 0.02)
+        # Use smaller scale for better numerical stability
+        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model) * (0.02 / (d_model ** 0.5)))
         
         # Learnable mask token for missing features
-        # Scale down for stability
-        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        # Initialize near zero for stability
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
         
-        # Transformer encoder
+        # Pre-transformer LayerNorm for additional stability
+        self.pre_transformer_norm = nn.LayerNorm(d_model)
+        
+        # Transformer encoder with Pre-LN (norm_first=True) for stability
+        # Pre-LN is critical - Post-LN (default) causes gradient instability
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=num_heads,
             dim_feedforward=d_model * 4,
             dropout=dropout,
             activation='gelu',
-            batch_first=True
+            batch_first=True,
+            norm_first=True  # CRITICAL: Pre-LN for gradient stability
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=num_layers,
+            norm=nn.LayerNorm(d_model),  # Final LayerNorm after all layers
+            enable_nested_tensor=False  # Disable nested tensor (not compatible with norm_first)
+        )
         
-        # Output projection
+        # Output projection with intermediate activation for better gradients
         self.output_proj = nn.Sequential(
             nn.Linear(d_model, embed_dim),
-            nn.LayerNorm(embed_dim)
+            nn.GELU(),
+            nn.LayerNorm(embed_dim),
+            nn.Dropout(dropout)
         )
         
-        # Learnable token for completely missing modality (scaled for stability)
-        self.missing_modality_token = nn.Parameter(torch.randn(1, embed_dim) * 0.02)
+        # Learnable token for completely missing modality
+        self.missing_modality_token = nn.Parameter(torch.zeros(1, embed_dim))
+        
+        # Initialize weights properly
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with careful scaling for training stability."""
+        # Xavier uniform for linear layers (better for tanh/sigmoid-like activations)
+        nn.init.xavier_uniform_(self.feature_embedding.weight)
+        nn.init.zeros_(self.feature_embedding.bias)
+        
+        # Initialize output projection linear layers
+        for module in self.output_proj:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+        
+        # Initialize mask token with small values (will be learned)
+        nn.init.normal_(self.mask_token, mean=0.0, std=0.02)
+        
+        # Initialize missing modality token
+        nn.init.normal_(self.missing_modality_token, mean=0.0, std=0.02)
     
     def forward(self, x: Optional[torch.Tensor], is_missing: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -323,42 +360,50 @@ class TransformerModalityEncoder(nn.Module):
         nan_mask = torch.isnan(x)  # (batch, input_dim)
         
         # Replace NaN with 0 for embedding (will be masked in attention)
-        # Use nan_to_num instead of torch.where for proper gradient flow
-        # torch.where has issues when input contains NaN even for non-NaN positions
+        # Also clamp to prevent extreme values from causing numerical issues
         x_filled = torch.nan_to_num(x, nan=0.0)
+        x_filled = x_filled.clamp(-10.0, 10.0)  # Prevent extreme input values
         
         # Embed each feature value: (batch, input_dim) -> (batch, input_dim, d_model)
         x_embedded = self.feature_embedding(x_filled.unsqueeze(-1))  # (batch, input_dim, d_model)
+        
+        # Apply LayerNorm AFTER embedding - critical for stability
+        x_embedded = self.embedding_norm(x_embedded)
         
         # For NaN positions, use the learnable mask token instead
         mask_tokens = self.mask_token.expand(batch_size, seq_len, -1)
         x_embedded = torch.where(nan_mask.unsqueeze(-1), mask_tokens, x_embedded)
         
-        # Add positional encoding
+        # Add positional encoding (already scaled in __init__)
         x_embedded = x_embedded + self.pos_encoding
         
-        # Create attention mask: True = masked out (for PyTorch transformer)
-        # We do NOT mask NaN in attention - we let the model learn from context
-        # But we create a padding mask if needed
-        # For now, let all features attend to each other (including mask tokens)
+        # Apply pre-transformer normalization for additional stability
+        x_embedded = self.pre_transformer_norm(x_embedded)
         
-        # Transformer encoding
+        # Transformer encoding (Pre-LN architecture handles internal normalization)
         encoded = self.transformer(x_embedded)  # (batch, input_dim, d_model)
+        
+        # Check for NaN in transformer output (should not happen with Pre-LN but be safe)
+        if torch.isnan(encoded).any():
+            # Fallback: return missing token for all samples
+            valid_mask = torch.zeros(batch_size, dtype=torch.bool, device=x.device)
+            return self.missing_modality_token.expand(batch_size, -1), valid_mask
         
         # Pool over features (mean pooling, excluding NaN positions for weighting)
         # Weight by inverse of NaN ratio to focus on present features
         feature_valid_mask = ~nan_mask  # (batch, input_dim)
-        valid_counts = feature_valid_mask.sum(dim=1, keepdim=True)  # (batch, 1)
+        valid_counts = feature_valid_mask.sum(dim=1, keepdim=True).float()  # (batch, 1)
         
         # Identify all-NaN samples (these will be excluded from loss)
         all_nan_samples = (valid_counts == 0).squeeze(-1)  # (batch,)
         sample_valid_mask = ~all_nan_samples  # True = valid, False = all-NaN
         
+        # Compute weights for pooling with numerical stability
+        valid_counts_safe = valid_counts.clamp(min=1.0)  # Prevent div by zero
+        
         if all_nan_samples.any():
             # For all-NaN samples, use uniform weights over all mask tokens
-            # This produces an embedding, but it will be excluded from loss
-            uniform_weights = torch.ones_like(nan_mask, dtype=torch.float32) / seq_len
-            valid_counts_safe = valid_counts.clamp(min=1)  # Prevent div by zero
+            uniform_weights = torch.ones_like(nan_mask, dtype=encoded.dtype) / seq_len
             non_nan_weights = feature_valid_mask.float() / valid_counts_safe
             
             # Use uniform weights for all-NaN samples, normal weights otherwise
@@ -369,13 +414,19 @@ class TransformerModalityEncoder(nn.Module):
             )
         else:
             # Normal case: weight by valid (non-NaN) positions only
-            weights = feature_valid_mask.float() / valid_counts.clamp(min=1)  # (batch, input_dim)
+            weights = feature_valid_mask.float() / valid_counts_safe  # (batch, input_dim)
         
         # Weighted mean pooling
         pooled = (encoded * weights.unsqueeze(-1)).sum(dim=1)  # (batch, d_model)
         
+        # Clamp pooled output to prevent extreme values before projection
+        pooled = pooled.clamp(-100.0, 100.0)
+        
         # Project to embedding dimension
         output = self.output_proj(pooled)  # (batch, embed_dim)
+        
+        # Final safety check - clamp output embeddings
+        output = output.clamp(-100.0, 100.0)
         
         return output, sample_valid_mask
 
