@@ -1605,16 +1605,82 @@ Question: What data do I have?
 ║                                                                              ║
 ╚═════════════════════════════════════════════════════════════════════════════╝
 ```
-║  │ Output: (batch, 256) final embeddings                                  │║
-║  │                                                                         │║
-║  │ ALSO RETURNS: valid_mask (batch,)                                      │║
-║  │   - False for samples where ALL features are NaN                       │║
-║  │   - Used to exclude invalid samples from loss computation              │║
-║  │                                                                         │║
-║  └─────────────────────────────────────────────────────────────────────────┘║
-║                                                                              ║
-╚═════════════════════════════════════════════════════════════════════════════╝
+
+**How Missing Value Handling Works (Conceptual)**
+
+Unlike traditional imputation methods that replace NaN with a **fixed value** (0, mean, median), 
+the TransformerModalityEncoder uses a **learnable mask token** combined with **attention-based inference**.
+
+**The Key Insight: Features as Tokens**
+
 ```
+Traditional View:  Input vector → [0.5, NaN, 0.3, NaN, 0.8] → Single entity
+Transformer View:  Input vector → [tok1, tok2, tok3, tok4, tok5] → Sequence of tokens
+```
+
+Each feature becomes a separate "token" in a sequence, similar to words in a sentence.
+
+**Step-by-Step Missing Value Handling:**
+
+| Step | Traditional Imputation | Transformer Approach |
+|------|------------------------|----------------------|
+| 1. Detect NaN | ✓ Same | ✓ Same |
+| 2. Replace NaN | Fixed value (0, median) | **Learnable `[MASK]` token** |
+| 3. Information source | None (blind guess) | **Context from ALL present features via attention** |
+| 4. Per-sample? | No (global statistic) | **Yes (attention is sample-specific)** |
+
+**Visual Example:**
+
+```
+Input: [gene1=0.5, gene2=NaN, gene3=0.3, gene4=NaN, gene5=0.8]
+                      ↓
+Embedding: [emb(0.5), [MASK], emb(0.3), [MASK], emb(0.8)]
+                      ↓
+          ┌─────────────────────────────────────┐
+          │      Self-Attention Matrix          │
+          │                                      │
+          │        gene1  gene2  gene3  gene4  gene5
+          │ gene1    ✓      ✓      ✓      ✓      ✓
+          │ gene2    ✓      ✓      ✓      ✓      ✓  ← Learns from 1,3,5
+          │ gene3    ✓      ✓      ✓      ✓      ✓
+          │ gene4    ✓      ✓      ✓      ✓      ✓  ← Learns from 1,3,5
+          │ gene5    ✓      ✓      ✓      ✓      ✓
+          └─────────────────────────────────────┘
+                      ↓
+Output: Contextualized representations where [MASK] positions
+        have "learned" from the present features
+```
+
+**Analogy: Fill-in-the-Blank**
+
+```
+Sentence: "The ___ is red and sweet"
+
+Traditional: Replace ___ with "thing"      → Generic, loses meaning
+Transformer: Use context (red, sweet) → Infer "apple" or "strawberry"
+```
+
+The transformer uses the **context of present features** to make intelligent inferences 
+about missing ones, rather than filling in blind default values.
+
+**Why This Works Better:**
+
+1. **Context-Aware**: Missing gene2 can be inferred from correlated genes
+2. **Learnable**: The mask token learns what "missing" means for this data distribution
+3. **No Fixed Assumption**: Model learns the best representation, not a human-chosen default
+4. **Per-Sample Adaptation**: Different samples infer different "values" for missing features
+
+**Comparison Table:**
+
+| Method | Information Used | Handles Correlations? | Per-Sample? |
+|--------|------------------|----------------------|-------------|
+| Zero imputation | None | No | No |
+| Mean imputation | Global mean | No | No |
+| Median imputation | Global median | No | No |
+| **Transformer** | **All present features** | **Yes (attention)** | **Yes** |
+
+**Recommendation:** Use `--impute_strategy none` with transformer encoder - it handles 
+missingness natively and performs better than pre-imputation.
 
 ---
 

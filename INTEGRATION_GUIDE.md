@@ -281,6 +281,54 @@ Final Classification
 - ✅ Learned features often better than PCA/UMAP
 - ✅ Still benefits from quantum classifiers
 
+**Encoder Type Choice:**
+
+The contrastive encoder supports two architectures:
+
+| Encoder | Speed | Missing Values | Use When |
+|---------|-------|----------------|----------|
+| `mlp` (default) | Fast | Requires imputation | Clean data, fast iteration |
+| `transformer` | Slower | Native handling | Missing values common |
+
+**MLP Encoder** - Simple feedforward network:
+```
+Feature Vector → Linear(512) → BatchNorm → ReLU → Linear(256) → BatchNorm → Embedding
+```
+- Requires pre-imputation (median/mean/zero) for NaN values
+- Faster training, simpler architecture
+- Best for mostly-complete data
+
+**Transformer Encoder** - Attention-based architecture:
+```
+Each feature treated as a "token" → Self-attention learns feature correlations
+Missing features get learnable [MASK] token → Model infers from present features
+```
+- Handles NaN natively without pre-imputation
+- Slower but more powerful for missing data
+- Uses context of ALL present features to understand missing ones
+
+**How Transformer Handles Missing Values:**
+```
+Input:  [gene1=0.5, gene2=NaN, gene3=0.3, gene4=NaN, gene5=0.8]
+            ↓
+Embed:  [emb(0.5), [MASK], emb(0.3), [MASK], emb(0.8)]
+            ↓
+Attention: Each token can attend to all other tokens
+           → gene2 (MASK) learns from genes 1,3,5
+           → gene4 (MASK) learns from genes 1,3,5
+            ↓
+Pool:   Weighted mean over NON-MASK positions only
+            ↓
+Output: 256-dim embedding that captures all available information
+```
+
+This is superior to fixed imputation because the model:
+1. **Learns correlations** between features (gene1↔gene2)
+2. **Uses context** per-sample (different samples may infer different values)
+3. **Adapts** what "missing" means based on surrounding features
+
+Add `--encoder_type transformer --impute_strategy none` to use this approach.
+
 **Implementation:**
 ```bash
 # Step 1: Pretrain on ALL data (labeled + unlabeled)

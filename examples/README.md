@@ -362,6 +362,23 @@ python examples/pretrain_contrastive.py \
     --num_epochs 100
 ```
 
+> **How Transformer NaN Handling Works:**
+> 
+> Unlike MLP which requires pre-imputation (replacing NaN with 0/mean/median), the transformer 
+> encoder treats each feature as a "token" in a sequence:
+> 
+> 1. **NaN positions get a learnable `[MASK]` token** (similar to BERT)
+> 2. **Self-attention allows present features to "inform" missing ones** - the model learns 
+>    correlations between features
+> 3. **Per-sample inference** - different samples can infer different values for the same 
+>    missing feature based on their context
+> 
+> This is more powerful than fixed imputation because it uses the **context of all present 
+> features** rather than a blind global statistic.
+> 
+> See [ARCHITECTURE_DEEP_DIVE.md](../ARCHITECTURE_DEEP_DIVE.md#b22-transformermodalityencoder-attention-based) 
+> for detailed explanation.
+
 **Example - Full batch gradient descent:**
 ```bash
 python examples/pretrain_contrastive.py \

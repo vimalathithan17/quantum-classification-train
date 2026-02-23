@@ -390,6 +390,74 @@ for batch in dataloader:
 
 **The Technology**: Contrastive learning trains models to distinguish between similar and dissimilar samples without needing labels. It learns representations where similar samples are close together and different samples are far apart in the embedding space.
 
+### Encoder Architecture Choices
+
+The contrastive framework supports two encoder types for different use cases:
+
+#### MLP Encoder (Default, Fast)
+
+```
+Input (input_dim) → Linear(512) → BatchNorm → ReLU → Dropout
+                  → Linear(256) → BatchNorm → ReLU → Dropout
+                  → Linear(embed_dim) → BatchNorm → Embedding
+```
+
+**Characteristics:**
+- Fast training, fewer parameters
+- Requires pre-imputation for NaN values (`--impute_strategy median|mean|zero`)
+- Best for clean or mostly-complete data
+
+#### Transformer Encoder (Native NaN Handling)
+
+```
+Each feature as "token" → Embed(1→d_model) → LayerNorm
+                        → Replace NaN with learnable [MASK] token
+                        → Self-Attention (features attend to each other)
+                        → Weighted Pooling (exclude NaN positions)
+                        → Linear(d_model→embed_dim) → Embedding
+```
+
+**Characteristics:**
+- Handles missing values natively without imputation
+- Learns feature correlations via self-attention
+- Uses **context of present features** to understand missing ones
+- More compute-intensive but more powerful
+
+**How Transformer NaN Handling Works:**
+
+Unlike fixed imputation (which replaces NaN with a global statistic), the transformer:
+
+1. **Treats each feature as a separate "token"** (like words in a sentence)
+2. **Assigns a learnable [MASK] embedding** to NaN positions
+3. **Uses self-attention** so each token (including MASK) can "look at" all other tokens
+4. **Infers missing information from context** - if gene1 and gene2 are correlated, high gene1 helps infer gene2
+
+```
+Example: Input = [gene1=0.5, gene2=NaN, gene3=0.3]
+
+MLP (median impute):     gene2 = 0.4 (global median, ignores context)
+Transformer:             gene2 = f(gene1, gene3) = learned from correlation
+```
+
+**When to use which:**
+
+| Scenario | Recommended Encoder |
+|----------|---------------------|
+| < 5% NaN values | MLP (faster) |
+| 5-30% NaN values | Transformer (better quality) |
+| > 30% NaN, correlated features | Transformer (essential) |
+| Fast iteration, prototyping | MLP |
+| Final production model | Transformer (if NaN present) |
+
+**Usage:**
+```bash
+# MLP encoder (default) with median imputation
+python examples/pretrain_contrastive.py --encoder_type mlp --impute_strategy median
+
+# Transformer encoder with native NaN handling
+python examples/pretrain_contrastive.py --encoder_type transformer --impute_strategy none
+```
+
 ### How It Works
 
 #### Two-Stage Training Paradigm

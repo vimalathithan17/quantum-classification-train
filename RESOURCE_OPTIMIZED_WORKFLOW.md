@@ -169,6 +169,35 @@ python examples/pretrain_contrastive.py \
     --impute_strategy none
 ```
 
+**How Transformer NaN Handling Works:**
+
+The transformer encoder treats each feature as a "token" in a sequence (like words in a sentence):
+
+```
+Input:  [gene1=0.5, gene2=NaN, gene3=0.3, gene4=NaN, gene5=0.8]
+                       ↓
+Step 1: Embed each feature → [emb(0.5), emb(0), emb(0.3), emb(0), emb(0.8)]
+                       ↓
+Step 2: Replace NaN positions with learnable [MASK] token:
+        → [emb(0.5), [MASK], emb(0.3), [MASK], emb(0.8)]
+                       ↓
+Step 3: Self-attention allows each feature to "look at" all others:
+        • gene2 (missing) can attend to gene1, gene3, gene5
+        • The model LEARNS what gene2 should be based on context
+                       ↓
+Step 4: Weighted pooling (only non-NaN positions contribute to final embedding)
+```
+
+**Why this is better than traditional imputation:**
+
+| Method | What happens to NaN=gene2 | Uses context? |
+|--------|---------------------------|---------------|
+| Zero imputation | gene2 = 0 | No |
+| Mean imputation | gene2 = global_mean | No |
+| **Transformer** | gene2 = f(gene1, gene3, gene5) | **Yes** |
+
+The transformer **learns correlations** between features, so if gene1 and gene2 are highly correlated, a high gene1 value will help the model infer an appropriate representation for missing gene2.
+
 **Approach 2: MLP Encoder (Faster, requires imputation)**
 
 Use `--encoder_type mlp` with an imputation strategy:
