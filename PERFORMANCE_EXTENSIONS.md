@@ -184,16 +184,21 @@ class MultimodalTransformer(nn.Module):
         # Modality embeddings (learnable positional-like encodings)
         self.modality_embeddings = nn.Embedding(num_modalities, embed_dim)
         
-        # Transformer encoder
+        # Transformer encoder with Pre-LN for stability
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=num_heads,
             dim_feedforward=1024,
             dropout=0.1,
             activation='gelu',
-            batch_first=True
+            batch_first=True,
+            norm_first=True  # CRITICAL: Pre-LN prevents gradient explosion
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=num_layers,
+            enable_nested_tensor=False  # Required when using norm_first=True
+        )
         
         # Classification head
         self.classifier = nn.Sequential(

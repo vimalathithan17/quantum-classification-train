@@ -1684,6 +1684,16 @@ Warning: NaN/Inf gradient detected at epoch 1, batch 2. Skipping batch.
 Epoch [4/5000] Complete. Avg Loss: nan (0/9 batches)
 ```
 
+> **TransformerModalityEncoder Stability (v2.1+)**
+>
+> The transformer-based encoder now includes architectural improvements:
+> - **Pre-LayerNorm** (`norm_first=True`) - stabilizes gradient flow
+> - **Input clamping** `[-10, 10]` - prevents extreme activations
+> - **Output clamping** `[-100, 100]` - catches residual instability
+> - **Xavier initialization** - proper weight scaling
+>
+> These changes significantly reduce the occurrence of NaN issues. If you still encounter NaN, check the causes below.
+
 **Causes:**
 
 **Cause A: Temperature Too Low**

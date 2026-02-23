@@ -516,10 +516,19 @@ Early stopping: The script automatically saves the best model based on validatio
 
 If you see `Warning: NaN/Inf gradient detected` or `Avg Loss: nan`:
 
+> **Note: TransformerModalityEncoder Stability (v2.1+)**
+> The `TransformerModalityEncoder` now includes architectural improvements for numerical stability:
+> - **Pre-LN architecture** (`norm_first=True`) - applies LayerNorm before attention/FFN
+> - **Input clamping** to `[-10, 10]` - prevents extreme values from entering the transformer
+> - **Output clamping** to `[-100, 100]` - catches any residual instability
+> - **Xavier weight initialization** - proper starting gradients
+>
+> These features significantly reduce NaN issues. If you still encounter NaN, check the causes below.
+
 **Early Training NaN (first 100 epochs):**
 1. Temperature too low (< 0.05) with transformer encoder
 2. Learning rate too high for early training
-3. Data contains extreme values
+3. Data contains extreme values (beyond clamping range)
 
 **Solutions:**
 ```bash

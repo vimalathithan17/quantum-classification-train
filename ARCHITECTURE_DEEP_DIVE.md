@@ -1464,6 +1464,8 @@ Question: What data do I have?
 
 **Key Innovation:** Treats each feature as a "token" in a sequence, enabling attention-based imputation.
 
+**Stability Features:** Pre-LN transformer, multiple LayerNorms, input/output clamping to prevent NaN accumulation.
+
 ```
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                      TransformerModalityEncoder                              ║
@@ -1479,8 +1481,10 @@ Question: What data do I have?
 ╠═════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 1: Feature Embedding                                               │║
-║  │ ═════════════════════════                                               │║
+║  │ STEP 1: Input Clamping + Feature Embedding                              │║
+║  │ ══════════════════════════════════════════                              │║
+║  │                                                                         │║
+║  │ CLAMP: x = clamp(x, -10, 10)  ← Prevent extreme input values!          │║
 ║  │                                                                         │║
 ║  │ Each scalar feature → d_model dimensional vector                        │║
 ║  │                                                                         │║
@@ -1488,52 +1492,55 @@ Question: What data do I have?
 ║  │   Input:  (batch, 200) → reshape to (batch, 200, 1)                    │║
 ║  │   Output: (batch, 200, 64)                                             │║
 ║  │                                                                         │║
+║  │ LAYERNORM(d_model):  Normalize embeddings for stability                │║
+║  │   Critical for preventing activation explosion!                        │║
+║  │                                                                         │║
 ║  │ WHY: Transformers need vectors, not scalars                            │║
-║  │      Also: gives model capacity to learn feature-specific transforms   │║
+║  │      LayerNorm prevents extreme values from propagating                │║
 ║  │                                                                         │║
 ║  └─────────────────────────────────────────────────────────────────────────┘║
 ║                                     │                                        ║
 ║                                     ▼                                        ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 2: Positional Encoding                                             │║
-║  │ ═══════════════════════════                                             │║
+║  │ STEP 2: NaN Handling + Positional Encoding                              │║
+║  │ ══════════════════════════════════════════                              │║
+║  │                                                                         │║
+║  │ For each NaN position:                                                  │║
+║  │   Replace embedding with learnable mask_token                          │║
+║  │   mask_token: (1, 1, d_model) - learned "missing" representation       │║
 ║  │                                                                         │║
 ║  │ pos_encoding: (1, input_dim, d_model) = (1, 200, 64) LEARNABLE         │║
+║  │   Scaled by 0.02/sqrt(d_model) for stability                           │║
 ║  │                                                                         │║
 ║  │ embedded = feature_embedded + pos_encoding                              │║
 ║  │                                                                         │║
+║  │ PRE_TRANSFORMER_NORM: LayerNorm before transformer                     │║
+║  │   Additional stability layer before attention                          │║
+║  │                                                                         │║
 ║  │ WHY: Without position info, transformer doesn't know feature order     │║
-║  │      "Gene 1" vs "Gene 100" would be indistinguishable                 │║
+║  │      LayerNorm ensures inputs to transformer are well-scaled           │║
 ║  │                                                                         │║
 ║  └─────────────────────────────────────────────────────────────────────────┘║
 ║                                     │                                        ║
 ║                                     ▼                                        ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 3: NaN Handling                                                    │║
-║  │ ═══════════════════                                                     │║
-║  │                                                                         │║
-║  │ For each NaN position:                                                  │║
-║  │   1. Replace embedding with learnable mask_token                       │║
-║  │      mask_token: (1, 1, d_model) - learned "missing" representation    │║
-║  │                                                                         │║
-║  │   2. Create attention mask: src_key_padding_mask[i] = True             │║
-║  │      → NaN features won't attend to or be attended by others           │║
-║  │                                                                         │║
-║  │ WHY: - mask_token gives model a way to represent "unknown"             │║
-║  │      - Attention mask prevents NaN from corrupting other features      │║
-║  │                                                                         │║
-║  └─────────────────────────────────────────────────────────────────────────┘║
-║                                     │                                        ║
-║                                     ▼                                        ║
-║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 4: Transformer Encoder                                             │║
-║  │ ═══════════════════════════                                             │║
+║  │ STEP 3: Transformer Encoder (Pre-LN Architecture)                       │║
+║  │ ═════════════════════════════════════════════════                       │║
 ║  │                                                                         │║
 ║  │ nn.TransformerEncoderLayer × num_layers (default 2):                   │║
 ║  │   - d_model = 64                                                        │║
 ║  │   - nhead = 4 (so head_dim = 64/4 = 16)                                │║
 ║  │   - dim_feedforward = 256 (4 × d_model)                                │║
 ║  │   - activation = 'gelu'                                                 │║
+║  │   - norm_first = True  ← CRITICAL: Pre-LN for gradient stability!     │║
+║  │                                                                         │║
+║  │ Final LayerNorm after all layers                                       │║
+║  │                                                                         │║
+║  │ Pre-LN vs Post-LN:                                                      │║
+║  │   Post-LN (default): x → Attention → Add → LN → FFN → Add → LN        │║
+║  │   Pre-LN (ours):     x → LN → Attention → Add → LN → FFN → Add        │║
+║  │                           ↑                                             │║
+║  │   Pre-LN is MORE STABLE - gradients don't explode over epochs!         │║
 ║  │                                                                         │║
 ║  │ WHAT HAPPENS:                                                           │║
 ║  │   Each feature "looks at" other features via attention                 │║
@@ -1546,12 +1553,17 @@ Question: What data do I have?
 ║                                     │                                        ║
 ║                                     ▼                                        ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 5: Masked Mean Pooling                                             │║
-║  │ ═══════════════════════════                                             │║
+║  │ STEP 4: NaN Check + Masked Mean Pooling                                 │║
+║  │ ═══════════════════════════════════════                                 │║
+║  │                                                                         │║
+║  │ SAFETY: If NaN detected in output → return missing_modality_token      │║
+║  │         (Should not happen with Pre-LN, but defensive)                 │║
 ║  │                                                                         │║
 ║  │ ONLY average over NON-NaN features:                                    │║
 ║  │                                                                         │║
 ║  │   pooled = sum(features[~nan_mask]) / count(~nan_mask)                 │║
+║  │                                                                         │║
+║  │ CLAMP: pooled = clamp(pooled, -100, 100)  ← Safety net                 │║
 ║  │                                                                         │║
 ║  │ WHY: NaN features shouldn't contribute to final representation         │║
 ║  │      Variable-length pooling handles different NaN patterns            │║
@@ -1562,12 +1574,37 @@ Question: What data do I have?
 ║                                     │                                        ║
 ║                                     ▼                                        ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐║
-║  │ STEP 6: Output Projection                                               │║
+║  │ STEP 5: Output Projection                                               │║
 ║  │ ═════════════════════════                                               │║
 ║  │                                                                         │║
 ║  │ LINEAR(d_model → embed_dim): 64 → 256                                  │║
+║  │ GELU()  ← Smooth activation for better gradients                       │║
 ║  │ LAYERNORM(embed_dim)                                                   │║
+║  │ DROPOUT(0.1)                                                           │║
 ║  │                                                                         │║
+║  │ CLAMP: output = clamp(output, -100, 100)  ← Final safety net           │║
+║  │                                                                         │║
+║  │ Output: (batch, 256) final embeddings                                  │║
+║  │                                                                         │║
+║  │ ALSO RETURNS: valid_mask (batch,)                                      │║
+║  │   - False for samples where ALL features are NaN                       │║
+║  │   - Used to exclude invalid samples from loss computation              │║
+║  │                                                                         │║
+║  └─────────────────────────────────────────────────────────────────────────┘║
+║                                                                              ║
+║  NUMERICAL STABILITY SUMMARY:                                                ║
+║  ════════════════════════════                                                ║
+║  • Input clamping: Prevents extreme feature values                          ║
+║  • Post-embedding LayerNorm: Normalizes initial representations             ║
+║  • Pre-transformer LayerNorm: Stabilizes attention inputs                   ║
+║  • Pre-LN transformer (norm_first=True): Prevents gradient explosion        ║
+║  • Final LayerNorm after transformer: Stabilizes output                     ║
+║  • Pooled output clamping: Safety net before projection                     ║
+║  • Final output clamping: Ensures bounded embeddings                        ║
+║  • Xavier initialization: Better starting gradients                         ║
+║                                                                              ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 ║  │ Output: (batch, 256) final embeddings                                  │║
 ║  │                                                                         │║
 ║  │ ALSO RETURNS: valid_mask (batch,)                                      │║
@@ -2520,6 +2557,9 @@ for param in model.parameters():
 2. Batch with all NaN features → skip batch
 3. Numerical instability in softmax → use log_softmax
 4. Division by zero in normalization → add epsilon
+5. Post-LN transformer (default) → switch to Pre-LN (norm_first=True)
+6. Extreme input values → clamp inputs before encoding
+7. Missing LayerNorm after embeddings → add embedding normalization
 
 ---
 
@@ -2543,6 +2583,13 @@ for param in model.parameters():
 ║   • Enable gradient clipping (max_norm=1.0)                                 ║
 ║   • Train for 50-200 epochs depending on data size                          ║
 ║                                                                              ║
+║  TRANSFORMER ENCODER (TransformerModalityEncoder):                          ║
+║   • MUST use Pre-LN (norm_first=True) - Post-LN causes NaN after epochs!   ║
+║   • Apply LayerNorm after feature embedding                                 ║
+║   • Clamp inputs to [-10, 10] to prevent extreme values                     ║
+║   • Use Xavier initialization for linear layers                             ║
+║   • If NaN appears: reduce LR, increase gradient clipping                   ║
+║                                                                              ║
 ║  TRANSFORMER FUSION:                                                        ║
 ║   • Use Pre-LN configuration (norm_first=True)                              ║
 ║   • AdamW with weight_decay=0.01                                            ║
@@ -2560,4 +2607,4 @@ for param in model.parameters():
 
 ---
 
-*Document updated with CFE variants, MultimodalFusionClassifier, and comprehensive training procedures.*
+*Document updated with CFE variants, MultimodalFusionClassifier, comprehensive training procedures, and TransformerModalityEncoder stability improvements.*

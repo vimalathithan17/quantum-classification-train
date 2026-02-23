@@ -70,6 +70,13 @@ Each team member will train a different variant of the contrastive encoder to co
 - Native NaN handling via [MASK] tokens (`--impute_strategy none`)
 - Learns to infer missing values from context
 - Better for data with missing features
+- **Uses Pre-LN architecture for numerical stability** (prevents NaN after many epochs)
+
+**Stability Features (as of Feb 2026):**
+- Pre-LN transformer (`norm_first=True`) - critical for preventing gradient explosion
+- LayerNorm after feature embedding
+- Input clamping to [-10, 10]
+- Xavier weight initialization
 
 **Key Arguments:**
 | Argument | Description | Default |
@@ -519,6 +526,11 @@ python dre_standard.py \
 | member4_128dim_temp05 | 128 | 0.5 | 2.611 | Too high temp |
 
 **Conclusion:** Temperature 0.07 is recommended for stability. Lower temperatures (0.02-0.05) can achieve better loss but risk NaN/gradient explosion.
+
+**Note (Feb 2026):** TransformerModalityEncoder has been updated with Pre-LN architecture and additional stability layers. NaN issues should now be rare even with lower temperatures. If NaN still occurs:
+1. Increase `--warmup_epochs` (try 20-30)
+2. Reduce learning rate
+3. Increase `--max_grad_norm` clipping
 
 ---
 
