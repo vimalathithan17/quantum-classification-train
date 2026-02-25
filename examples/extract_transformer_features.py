@@ -84,6 +84,13 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
             # Get labels and case_ids from first modality
             if labels is None and 'class' in df.columns:
                 labels = df['class'].values
+                # If labels are strings, encode them to integers
+                if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
+                    from sklearn.preprocessing import LabelEncoder
+                    le = LabelEncoder()
+                    labels = le.fit_transform(labels)
+                    print(f"  Encoded string labels to integers: {le.classes_}")
+                labels = labels.astype(np.int64)
             if case_ids is None:
                 # Try to get case_id from column or index
                 if 'case_id' in df.columns:
