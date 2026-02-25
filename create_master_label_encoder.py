@@ -9,8 +9,9 @@ from logging_utils import log
 # --- Configuration ---
 # The directory containing all your source data files (configurable via env var SOURCE_DIR)
 SOURCE_DIR = os.environ.get('SOURCE_DIR', 'final_processed_datasets')
-# The directory where you will save your final models and outputs
-OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'master_label_encoder')
+# The directory where you will save the label encoder
+# Supports both ENCODER_DIR (consistent with tune_models.py) and OUTPUT_DIR (legacy)
+OUTPUT_DIR = os.environ.get('ENCODER_DIR', os.environ.get('OUTPUT_DIR', 'master_label_encoder'))
 # The name of the column containing the categorical labels
 LABEL_COL = 'class'
 
