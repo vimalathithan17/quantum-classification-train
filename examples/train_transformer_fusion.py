@@ -77,6 +77,13 @@ def load_pretrained_features(features_dir, modalities=None):
     labels_file = features_dir / 'labels.npy'
     if labels_file.exists():
         labels = np.load(labels_file, allow_pickle=True)
+        # If labels are strings, encode them to integers
+        if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            labels = le.fit_transform(labels)
+            print(f"Encoded string labels to integers: {le.classes_}")
+        labels = labels.astype(np.int64)
         print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
     
     # Load embeddings for each modality
