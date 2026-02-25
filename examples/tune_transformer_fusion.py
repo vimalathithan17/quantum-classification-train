@@ -432,7 +432,7 @@ def main():
   python examples/tune_transformer_fusion.py --device cuda --n_trials 50
   
   # Use pretrained encoder embeddings (recommended)
-  python examples/tune_transformer_fusion.py --use_pretrained_embeddings \\
+  python examples/tune_transformer_fusion.py --use_pretrained_features \
       --pretrained_features_dir pretrained_features_mlp_264dim --n_trials 50
   
   # Custom epochs per trial
@@ -446,10 +446,10 @@ def main():
     data_args = parser.add_argument_group('data configuration')
     data_args.add_argument('--data_dir', type=str, default=None,
                           help='Directory with parquet files (default: from SOURCE_DIR env)')
-    data_args.add_argument('--use_pretrained_embeddings', action='store_true',
+    data_args.add_argument('--use_pretrained_features', action='store_true',
                           help='Use pretrained encoder embeddings instead of raw features')
     data_args.add_argument('--pretrained_features_dir', type=str, default=None,
-                          help='Directory with pretrained embeddings (required if --use_pretrained_embeddings)')
+                          help='Directory with pretrained embeddings (required if --use_pretrained_features)')
     data_args.add_argument('--modalities', type=str, nargs='+', 
                           default=['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot'],
                           help='Modalities to use (default: GeneExpr miRNA Meth CNV Prot)')
@@ -494,9 +494,9 @@ def main():
     log.info(f"Using device: {device}")
     
     # Load data - either pretrained embeddings or raw features
-    if args.use_pretrained_embeddings:
+    if args.use_pretrained_features:
         if not args.pretrained_features_dir:
-            log.error("--pretrained_features_dir is required when using --use_pretrained_embeddings")
+            log.error("--pretrained_features_dir is required when using --use_pretrained_features")
             return
         log.info(f"Loading pretrained embeddings from: {args.pretrained_features_dir}")
         data, labels, modality_dims, case_ids = load_pretrained_embeddings(args.pretrained_features_dir, args.modalities)

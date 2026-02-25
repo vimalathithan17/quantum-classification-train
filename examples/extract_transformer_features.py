@@ -97,6 +97,56 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
     return data, labels, modality_dims, case_ids
 
 
+def load_pretrained_embeddings(features_dir: Path, modalities: list = None) -> tuple:
+    """
+    Load pretrained features from extracted embeddings.
+    
+    Args:
+        features_dir: Directory containing *_embeddings.npy files
+        modalities: List of modalities to load (default: all available)
+        
+    Returns:
+        Tuple of (data_dict, labels, modality_dims, case_ids)
+    """
+    if modalities is None:
+        modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
+    
+    data = {}
+    modality_dims = {}
+    
+    # Load case_ids and labels first
+    case_ids = None
+    labels = None
+    
+    case_ids_file = features_dir / 'case_ids.npy'
+    if case_ids_file.exists():
+        case_ids = np.load(case_ids_file, allow_pickle=True)
+        print(f"Loaded case_ids: {len(case_ids)} samples")
+    
+    labels_file = features_dir / 'labels.npy'
+    if labels_file.exists():
+        labels = np.load(labels_file, allow_pickle=True)
+        print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
+    
+    # Load embeddings for each modality
+    for modality in modalities:
+        file_path = features_dir / f"{modality}_embeddings.npy"
+        
+        if file_path.exists():
+            print(f"Loading pretrained {modality} from {file_path}")
+            features = np.load(file_path).astype(np.float32)
+            
+            data[modality] = features
+            modality_dims[modality] = features.shape[1]
+            
+            print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
+    
+    if not data:
+        raise ValueError(f"No embeddings found in {features_dir}")
+    
+    return data, labels, modality_dims, case_ids
+
+
 def load_transformer_model(model_dir: Path, device: torch.device) -> tuple:
     """
     Load trained transformer model and its configuration.
@@ -153,7 +203,9 @@ def extract_features(
     extract_type: str = 'both',
     batch_size: int = 64,
     device: str = 'auto',
-    output_format: str = 'both'
+    output_format: str = 'both',
+    use_pretrained_features: bool = False,
+    pretrained_features_dir: str = None
 ):
     """
     Extract transformer predictions and/or features.
@@ -185,7 +237,13 @@ def extract_features(
     modalities = list(config['modality_dims'].keys())
     
     # Load data (now includes case_ids)
-    data, labels, _, case_ids = load_multiomics_data(data_dir, modalities)
+    if use_pretrained_features and pretrained_features_dir:
+        print(f"Loading pretrained features from: {pretrained_features_dir}")
+        data, labels, _, case_ids = load_pretrained_embeddings(
+            Path(pretrained_features_dir), modalities
+        )
+    else:
+        data, labels, _, case_ids = load_multiomics_data(data_dir, modalities)
     n_samples = list(data.values())[0].shape[0]
     print(f"\nLoaded {n_samples} samples across {len(data)} modalities")
     
@@ -362,6 +420,10 @@ Meta-learner usage:
     parser.add_argument('--device', type=str, default='auto',
                         choices=['auto', 'cpu', 'cuda'],
                         help='Device to use (default: auto)')
+    parser.add_argument('--use_pretrained_features', action='store_true',
+                        help='Use pretrained encoder features instead of raw parquet data')
+    parser.add_argument('--pretrained_features_dir', type=str, default=None,
+                        help='Directory containing pretrained *_embeddings.npy files')
     
     args = parser.parse_args()
     
@@ -372,7 +434,9 @@ Meta-learner usage:
         extract_type=args.extract_type,
         batch_size=args.batch_size,
         device=args.device,
-        output_format=args.output_format
+        output_format=args.output_format,
+        use_pretrained_features=args.use_pretrained_features,
+        pretrained_features_dir=args.pretrained_features_dir
     )
 
 

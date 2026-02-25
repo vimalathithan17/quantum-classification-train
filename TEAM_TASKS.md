@@ -168,7 +168,9 @@ python examples/extract_transformer_features.py \
     --model_dir /kaggle/working/transformer_models_member1 \
     --data_dir /kaggle/input/datasets/vimalathithan22i272/gbm-lgg-balanced-xgb-reduced/final_processed_datasets_xgb_balanced \
     --output_dir /kaggle/working/transformer_predictions_member1 \
-    --output_format csv
+    --output_format csv \
+    --use_pretrained_features \
+    --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim
 ```
 
 **Expected Output:**
@@ -191,7 +193,7 @@ This approach uses the 264-dim embeddings from pretrained contrastive encoders a
 
 ```bash
 python examples/tune_transformer_fusion.py \
-    --use_pretrained_embeddings \
+    --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --modalities GeneExpr miRNA Meth CNV Prot \
     --n_trials 50 \
@@ -217,7 +219,7 @@ python examples/tune_transformer_fusion.py \
 ```bash
 # Check best params in transformer_tuning_results/member2_pretrained_embeddings_best_config.json
 python examples/train_transformer_fusion.py \
-    --use_pretrained_embeddings \
+    --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_models_member2 \
     --embed_dim <best_embed_dim> \
@@ -235,7 +237,7 @@ python examples/train_transformer_fusion.py \
 ```bash
 python examples/extract_transformer_features.py \
     --model_dir /kaggle/working/transformer_models_member2 \
-    --use_pretrained_embeddings \
+    --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --output_dir /kaggle/working/transformer_predictions_member2 \
     --output_format csv

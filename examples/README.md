@@ -1,4 +1,5 @@
-# Performance Extensions Examples
+# Quick validation - runs with minimal data
+python examples/compare_entanglers.py --synthetic --n_samples 30 --steps 10 --entanglers basic --quiet# Performance Extensions Examples
 
 This directory contains example scripts demonstrating the performance enhancement strategies described in [PERFORMANCE_EXTENSIONS.md](../PERFORMANCE_EXTENSIONS.md).
 
@@ -21,7 +22,102 @@ The performance extensions implement two complementary approaches to improve qua
    - **Best for:** 500+ samples, missing modalities common (>20%)
    - **Benefit:** Cross-modal attention, native missing modality handling
 
+3. **Entangler Comparison** (`compare_entanglers.py`) - NEW
+   - **Purpose:** Compare different quantum entangler architectures
+   - **Validates:** Claims about BasicEntanglerLayers vs StronglyEntanglingLayers
+
 These can be used independently, with QML, or combined for maximum performance improvement.
+
+---
+
+## Quantum Entangler Comparison
+
+The script `compare_entanglers.py` benchmarks different entangler architectures to validate architectural decisions.
+
+### Entanglers Tested
+
+| Entangler | PennyLane Class | Architecture | Parameters per Layer |
+|-----------|-----------------|--------------|---------------------|
+| **basic** | `BasicEntanglerLayers` | RX rotations + CNOT chain | n_qubits |
+| **strongly** | `StronglyEntanglingLayers` | Rot(θ,φ,ω) + variable CNOTs | 3 × n_qubits |
+| **random** | `RandomLayers` | Random gates + random CNOTs | n_qubits |
+| **simplified** | `SimplifiedTwoDesign` | RY rotations + CZ entanglement | n_qubits |
+
+### Usage
+
+```bash
+# Quick test with synthetic data
+python examples/compare_entanglers.py --synthetic --steps 50
+
+# Full comparison with real data
+python examples/compare_entanglers.py \
+    --data_dir final_processed_datasets \
+    --datatype GeneExpr \
+    --n_qubits 8 \
+    --n_layers 3 \
+    --steps 100 \
+    --n_trials 3
+
+# Compare only specific entanglers
+python examples/compare_entanglers.py --synthetic --entanglers basic strongly
+```
+
+### Expected Output
+
+```
+====================================================================================================
+ENTANGLER COMPARISON SUMMARY
+====================================================================================================
+
+BasicEntanglerLayers (CNOT chain)
+  Accuracy:          0.7500 ± 0.0500
+  F1 (weighted):     0.7400 ± 0.0450
+  Training Time:     45.2s ± 2.1s
+  Parameters:        32
+
+StronglyEntanglingLayers (Rot + variable CNOT)
+  Accuracy:          0.7600 ± 0.0550
+  F1 (weighted):     0.7500 ± 0.0500
+  Training Time:     135.8s ± 5.3s
+  Parameters:        96
+
+...
+
+CONCLUSIONS:
+  Best Accuracy:  strongly (0.7600)
+  Best F1:        strongly (0.7500)
+  Fastest:        basic (45.2s)
+
+  StronglyEntangling is 3.0x slower than BasicEntangler
+  StronglyEntangling has 1.0% higher accuracy - MINIMAL gain
+====================================================================================================
+```
+
+### Why BasicEntanglerLayers?
+
+> ⚠️ **Honesty Note:** The comparison script uses the **same hyperparameters for all entanglers**.
+> This is methodologically flawed because StronglyEntanglingLayers has 3x more parameters and
+> likely needs different learning rates and more training steps. The results below are 
+> **preliminary observations**, not rigorous conclusions.
+
+**Current rationale for BasicEntanglerLayers:**
+
+1. **Speed**: Faster than StronglyEntanglingLayers (fewer parameters)
+2. **Simplicity**: Easier to optimize, fewer hyperparameters to tune
+3. **Sufficient for our data**: No clear evidence that more complex entanglers help
+
+**To properly compare entanglers, you would need to:**
+1. Tune hyperparameters (LR, steps) separately for each entangler type
+2. Run until convergence, not fixed steps
+3. Test on multiple datasets
+4. Use statistical significance testing
+
+**The script is useful for:**
+- Quick sanity checks
+- Understanding architecture differences
+- Exploring tradeoffs (but not for definitive conclusions)
+
+---
 
 ## Quick Decision Guide
 
@@ -438,6 +534,8 @@ python examples/pretrain_contrastive.py \
 | `--output_format` | `both` | Output format: `npy`, `csv` (metalearner compatible), or `both` |
 | `--batch_size` | `64` | Batch size for inference |
 | `--device` | `auto` | Device (`auto`, `cpu`, `cuda`) |
+| `--use_pretrained_features` | `false` | Use pretrained encoder features instead of raw parquet data |
+| `--pretrained_features_dir` | `None` | Directory containing pretrained `*_embeddings.npy` files |
 
 ## Expected Performance Improvements
 

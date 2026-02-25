@@ -46,6 +46,60 @@ from performance_extensions.training_utils import load_pretrained_encoders
 from utils.metrics_utils import compute_metrics
 
 
+def load_pretrained_features(features_dir, modalities=None):
+    """
+    Load pretrained features from extracted embeddings.
+    
+    Args:
+        features_dir: Directory containing *_embeddings.npy files
+        modalities: List of modality names to load (if None, load all available)
+        
+    Returns:
+        Tuple of (data_dict, labels, modality_dims, case_ids)
+    """
+    features_dir = Path(features_dir)
+    
+    if modalities is None:
+        modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
+    
+    data = {}
+    modality_dims = {}
+    
+    # Load case_ids and labels first
+    case_ids = None
+    labels = None
+    
+    case_ids_file = features_dir / 'case_ids.npy'
+    if case_ids_file.exists():
+        case_ids = np.load(case_ids_file, allow_pickle=True)
+        print(f"Loaded case_ids: {len(case_ids)} samples")
+    
+    labels_file = features_dir / 'labels.npy'
+    if labels_file.exists():
+        labels = np.load(labels_file, allow_pickle=True)
+        print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
+    
+    # Load embeddings for each modality
+    for modality in modalities:
+        file_path = features_dir / f"{modality}_embeddings.npy"
+        
+        if file_path.exists():
+            print(f"Loading pretrained {modality} from {file_path}")
+            features = np.load(file_path).astype(np.float32)
+            
+            data[modality] = features
+            modality_dims[modality] = features.shape[1]
+            
+            print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
+        else:
+            print(f"Warning: {file_path} not found, skipping {modality}")
+    
+    if not data:
+        raise ValueError(f"No embeddings found in {features_dir}")
+    
+    return data, labels, modality_dims, case_ids
+
+
 def load_multiomics_data(data_dir, modalities=None):
     """
     Load multi-omics data from parquet files.
@@ -234,14 +288,20 @@ def main():
         description="Train multimodal transformer fusion model with cross-modal attention",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Train from scratch
+  # Train from scratch on raw data
   python train_transformer_fusion.py --data_dir data --num_epochs 50
+  
+  # Train with pretrained features (from extract_pretrained_features.py)
+  python train_transformer_fusion.py --use_pretrained_features --pretrained_features_dir pretrained_features
   
   # With pretrained encoders (fine-tuning)
   python train_transformer_fusion.py --pretrained_encoders_dir pretrained/encoders --num_epochs 30
   
   # With frozen pretrained encoders (linear probing)
   python train_transformer_fusion.py --pretrained_encoders_dir pretrained/encoders --freeze_encoders
+  
+  # Select specific modalities
+  python train_transformer_fusion.py --modalities GeneExpr miRNA Prot --num_epochs 50
   
   # Large model configuration
   python train_transformer_fusion.py --embed_dim 512 --num_heads 16 --num_layers 8
@@ -255,6 +315,16 @@ def main():
                           help='Output directory for trained model (default: transformer_models)')
     data_args.add_argument('--test_size', type=float, default=0.2,
                           help='Test set fraction (default: 0.2)')
+    
+    # Pretrained features configuration
+    feature_args = parser.add_argument_group('pretrained features')
+    feature_args.add_argument('--use_pretrained_features', action='store_true',
+                             help='Use pretrained embeddings instead of raw parquet data')
+    feature_args.add_argument('--pretrained_features_dir', type=str, default=None,
+                             help='Directory with *_embeddings.npy files from extract_pretrained_features.py')
+    feature_args.add_argument('--modalities', type=str, nargs='+', 
+                             default=None,
+                             help='Modalities to use (default: all available). E.g., --modalities GeneExpr miRNA Prot')
     
     # Model architecture
     model_args = parser.add_argument_group('model architecture')
@@ -346,9 +416,22 @@ def main():
         print(f"  {arg}: {value}")
     print()
     
-    # Load data
-    print("Loading multi-omics data...")
-    data, labels, modality_dims = load_multiomics_data(args.data_dir)
+    # Load data - either from pretrained features or raw parquet
+    print("Loading data...")
+    case_ids = None
+    
+    if args.use_pretrained_features and args.pretrained_features_dir:
+        print(f"Using pretrained features from: {args.pretrained_features_dir}")
+        data, labels, modality_dims, case_ids = load_pretrained_features(
+            args.pretrained_features_dir, 
+            modalities=args.modalities
+        )
+    else:
+        print(f"Loading raw data from: {args.data_dir}")
+        data, labels, modality_dims = load_multiomics_data(
+            args.data_dir, 
+            modalities=args.modalities
+        )
     
     if not data or labels is None:
         print("Error: No data or labels found!")

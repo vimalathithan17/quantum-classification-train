@@ -247,18 +247,34 @@ Input (n_qubits dims) → AngleEmbedding → [BasicEntanglerLayers × n_layers] 
 | Decision | Choice | Reasoning |
 |----------|--------|-----------|
 | **Embedding** | AngleEmbedding | Encodes features as rotation angles. Simple, interpretable, works well for normalized data in [0, π] |
-| **Entangler** | BasicEntanglerLayers | CNOT chain provides sufficient entanglement without excessive depth. More complex entanglers (StronglyEntanglingLayers) didn't improve results |
+| **Entangler** | BasicEntanglerLayers | CNOT chain provides sufficient entanglement without excessive depth. See "Entangler Comparison" note below |
 | **Measurements** | PauliZ on ALL qubits | Provides n_qubits real values to the classical head; using only some qubits wastes information |
 | **Interface** | autograd | Compatible with PennyLane's automatic differentiation; enables gradient-based optimization |
 
-**Why Not Use More Complex Ansätze?**
+**Entangler Comparison (Preliminary)**
 
-We tested:
-1. **StronglyEntanglingLayers** - More expressive but 3x slower, minimal accuracy gain
-2. **RandomLayers** - Inconsistent results across runs
-3. **Custom hardware-efficient ansatz** - No benefit for simulated quantum
+> ⚠️ **Honesty Note:** The entangler comparison has NOT been rigorously validated. The script
+> `examples/compare_entanglers.py` uses the **same hyperparameters for all entanglers**, which
+> is methodologically flawed because:
+> - StronglyEntanglingLayers has 3x more parameters → may need different LR, more steps
+> - Each entangler should be tuned separately before comparison
+> - Results may not generalize to different datasets
+>
+> The claims below are **preliminary observations**, not rigorous conclusions.
 
-**Conclusion:** BasicEntanglerLayers provides the best accuracy/speed trade-off for our dataset size.
+Alternative entanglers available in PennyLane:
+1. **StronglyEntanglingLayers** - 3x more parameters (Rot gates), potentially more expressive
+2. **RandomLayers** - Random gate placement, results vary by seed
+3. **SimplifiedTwoDesign** - Hardware-efficient (RY + CZ)
+
+**To run your own comparison:**
+```bash
+python examples/compare_entanglers.py --synthetic --steps 100 --n_trials 3
+```
+
+**Current choice rationale:** BasicEntanglerLayers was chosen for simplicity and speed.
+Whether more complex entanglers provide meaningful accuracy improvements **requires proper
+hyperparameter tuning per entangler**, which has not been done.
 
 ---
 
