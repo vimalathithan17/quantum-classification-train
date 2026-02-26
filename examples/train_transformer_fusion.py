@@ -94,6 +94,15 @@ def load_pretrained_features(features_dir, modalities=None):
             print(f"Loading pretrained {modality} from {file_path}")
             features = np.load(file_path).astype(np.float32)
             
+            # Check for NaN/Inf values in pretrained features
+            nan_count = np.isnan(features).sum()
+            inf_count = np.isinf(features).sum()
+            if nan_count > 0 or inf_count > 0:
+                print(f"  Warning: Found {nan_count} NaN and {inf_count} Inf values in {modality}")
+                # Replace with 0 (embeddings are typically centered)
+                features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+                print(f"  Replaced NaN/Inf with 0")
+            
             data[modality] = features
             modality_dims[modality] = features.shape[1]
             
@@ -107,17 +116,20 @@ def load_pretrained_features(features_dir, modalities=None):
     return data, labels, modality_dims, case_ids
 
 
-def load_multiomics_data(data_dir, modalities=None):
+def load_multiomics_data(data_dir, modalities=None, standardize=True):
     """
     Load multi-omics data from parquet files.
     
     Args:
         data_dir: Directory containing data files
         modalities: List of modality names to load (if None, load all available)
+        standardize: Whether to standardize features (zero mean, unit variance)
         
     Returns:
         Tuple of (data_dict, labels, modality_dims)
     """
+    from sklearn.preprocessing import StandardScaler
+    
     data_dir = Path(data_dir)
     
     if modalities is None:
@@ -148,6 +160,28 @@ def load_multiomics_data(data_dir, modalities=None):
             # Extract features (exclude metadata columns)
             feature_cols = [col for col in df.columns if col not in METADATA_COLS]
             features = df[feature_cols].values.astype(np.float32)
+            
+            # Check for NaN/Inf values and handle them
+            nan_count = np.isnan(features).sum()
+            inf_count = np.isinf(features).sum()
+            if nan_count > 0 or inf_count > 0:
+                print(f"  Warning: Found {nan_count} NaN and {inf_count} Inf values in {modality}")
+                # Replace NaN with column mean, Inf with large finite value
+                col_means = np.nanmean(features, axis=0)
+                col_means = np.nan_to_num(col_means, nan=0.0)  # If column is all NaN, use 0
+                for col_idx in range(features.shape[1]):
+                    mask_nan = np.isnan(features[:, col_idx])
+                    mask_inf = np.isinf(features[:, col_idx])
+                    features[mask_nan, col_idx] = col_means[col_idx]
+                    features[mask_inf, col_idx] = col_means[col_idx]
+                print(f"  Replaced NaN/Inf with column means")
+            
+            # Standardize features to prevent numerical instability
+            if standardize:
+                scaler = StandardScaler()
+                features = scaler.fit_transform(features)
+                features = features.astype(np.float32)
+                print(f"  Standardized features (mean=0, std=1)")
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
@@ -188,17 +222,51 @@ def train_epoch(model, dataloader, optimizer, criterion, device, max_grad_norm=N
     total_loss = 0
     correct = 0
     total = 0
+    nan_detected = False
     
-    for batch_data, batch_labels in dataloader:
+    for batch_idx, (batch_data, batch_labels) in enumerate(dataloader):
         # Move data to device
         for modality in batch_data:
             if batch_data[modality] is not None:
                 batch_data[modality] = batch_data[modality].to(device)
+                # Check for NaN/Inf in input data
+                if torch.isnan(batch_data[modality]).any() or torch.isinf(batch_data[modality]).any():
+                    if not nan_detected:
+                        print(f"  Warning: NaN/Inf detected in {modality} input data at batch {batch_idx}")
+                        nan_detected = True
         batch_labels = batch_labels.to(device)
         
         # Forward pass
         logits, _ = model(batch_data)
+        
+        # Check for NaN in logits
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            if not nan_detected:
+                print(f"  Warning: NaN/Inf detected in model outputs at batch {batch_idx}")
+                nan_detected = True
+        
         loss = criterion(logits, batch_labels)
+        
+        # Skip NaN loss to prevent model corruption
+        if torch.isnan(loss) or torch.isinf(loss):
+            if not nan_detected:
+                print(f"  Warning: NaN/Inf loss at batch {batch_idx}, skipping update")
+                nan_detected = True
+            continue
+        
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        
+        # Gradient clipping
+        if max_grad_norm is not None and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        
+        optimizer.step()
+        
+        # Track metrics
+        total_loss += loss.item()
+        _, predicted = torch.max(logits, 1)
         
         # Backward pass
         optimizer.zero_grad()
@@ -329,6 +397,8 @@ def main():
                           help='Output directory for trained model (default: transformer_models)')
     data_args.add_argument('--test_size', type=float, default=0.2,
                           help='Test set fraction (default: 0.2)')
+    data_args.add_argument('--no_standardize', action='store_true',
+                          help='Disable feature standardization (not recommended)')
     
     # Pretrained features configuration
     feature_args = parser.add_argument_group('pretrained features')
@@ -444,7 +514,8 @@ def main():
         print(f"Loading raw data from: {args.data_dir}")
         data, labels, modality_dims = load_multiomics_data(
             args.data_dir, 
-            modalities=args.modalities
+            modalities=args.modalities,
+            standardize=not args.no_standardize
         )
     
     if not data or labels is None:
