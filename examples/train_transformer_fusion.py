@@ -300,6 +300,7 @@ def evaluate(model, dataloader, criterion, device, n_classes=None):
     total_loss = 0
     all_preds = []
     all_labels = []
+    processed_batches = 0
     
     with torch.no_grad():
         for batch_data, batch_labels in dataloader:
@@ -311,7 +312,16 @@ def evaluate(model, dataloader, criterion, device, n_classes=None):
             
             # Forward pass
             logits, _ = model(batch_data)
+            
+            # Skip NaN outputs
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                continue
+                
             loss = criterion(logits, batch_labels)
+            
+            # Skip NaN loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                continue
             
             # Track metrics
             total_loss += loss.item()
@@ -319,8 +329,12 @@ def evaluate(model, dataloader, criterion, device, n_classes=None):
             
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
+            processed_batches += 1
     
-    avg_loss = total_loss / len(dataloader)
+    if processed_batches == 0:
+        return float('nan'), 0.0, [], [], None
+        
+    avg_loss = total_loss / processed_batches
     accuracy = 100.0 * accuracy_score(all_labels, all_preds)
     
     # Compute comprehensive metrics if n_classes provided
