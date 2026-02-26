@@ -222,6 +222,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, max_grad_norm=N
     total_loss = 0
     correct = 0
     total = 0
+    processed_batches = 0
     nan_detected = False
     
     for batch_idx, (batch_data, batch_labels) in enumerate(dataloader):
@@ -239,11 +240,12 @@ def train_epoch(model, dataloader, optimizer, criterion, device, max_grad_norm=N
         # Forward pass
         logits, _ = model(batch_data)
         
-        # Check for NaN in logits
+        # Check for NaN in logits - skip batch if found
         if torch.isnan(logits).any() or torch.isinf(logits).any():
             if not nan_detected:
                 print(f"  Warning: NaN/Inf detected in model outputs at batch {batch_idx}")
                 nan_detected = True
+            continue
         
         loss = criterion(logits, batch_labels)
         
@@ -267,24 +269,15 @@ def train_epoch(model, dataloader, optimizer, criterion, device, max_grad_norm=N
         # Track metrics
         total_loss += loss.item()
         _, predicted = torch.max(logits, 1)
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        
-        # Gradient clipping
-        if max_grad_norm is not None and max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        
-        optimizer.step()
-        
-        # Track metrics
-        total_loss += loss.item()
-        _, predicted = torch.max(logits, 1)
         total += batch_labels.size(0)
         correct += (predicted == batch_labels).sum().item()
+        processed_batches += 1
     
-    avg_loss = total_loss / len(dataloader)
+    # Handle case where all batches were skipped
+    if processed_batches == 0:
+        return float('nan'), 0.0
+    
+    avg_loss = total_loss / processed_batches
     accuracy = 100.0 * correct / total
     
     return avg_loss, accuracy
