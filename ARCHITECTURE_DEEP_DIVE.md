@@ -522,7 +522,31 @@ miRNA features → miRNA embedding                          ↓
                                            likely to be GBM"
 ```
 
-### 5.2 Why nn.TransformerEncoderLayer for Only 5 Modalities?
+### 5.2 Data Preprocessing (Automatic)
+
+**Critical for Numerical Stability:** `train_transformer_fusion.py` automatically preprocesses raw parquet data:
+
+| Step | What | Why |
+|------|------|-----|
+| **NaN/Inf Detection** | Detects and replaces with column means | Multi-omics data often has missing values |
+| **Feature Standardization** | StandardScaler (mean=0, std=1) | Prevents gradient explosion from large feature values |
+
+**Example Log Output:**
+```
+Loading Meth from data_Meth_.parquet
+  Warning: Found 25434 NaN and 0 Inf values in Meth
+  Replaced NaN/Inf with column means
+  Standardized features (mean=0, std=1)
+```
+
+**Disable Standardization (not recommended):**
+```bash
+python train_transformer_fusion.py --no_standardize
+```
+
+**For Pretrained Features:** Only NaN handling is applied (embeddings are already normalized from contrastive learning).
+
+### 5.3 Why nn.TransformerEncoderLayer for Only 5 Modalities?
 
 **Your Question:** "Why use a full transformer for just 5 tokens (modalities)?"
 
@@ -547,7 +571,7 @@ miRNA features → miRNA embedding                          ↓
 | Single Attention | 0.88 |
 | **Transformer (2 layers)** | **0.91** |
 
-### 5.3 Architecture Details
+### 5.4 Architecture Details
 
 ```python
 encoder_layer = nn.TransformerEncoderLayer(
@@ -572,7 +596,7 @@ self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 | `norm_first=True` | Pre-LN | Critical! Post-LN causes training instability |
 | `num_layers=2-4` | 2-4 | 2 for speed, 4 for best accuracy |
 
-### 5.4 ModalityFeatureEncoder: Why Another Encoder?
+### 5.5 ModalityFeatureEncoder: Why Another Encoder?
 
 ```python
 class ModalityFeatureEncoder(nn.Module):
@@ -601,7 +625,7 @@ Pretrained 264-dim embedding ─────┐
                         Transformer Fusion
 ```
 
-### 5.5 Missing Modality Handling
+### 5.6 Missing Modality Handling
 
 ```python
 # Learnable token for missing modality

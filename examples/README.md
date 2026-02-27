@@ -499,6 +499,11 @@ python examples/pretrain_contrastive.py \
 |----------|---------|-------------|
 | `--data_dir` | `final_processed_datasets` | Directory with parquet data files |
 | `--output_dir` | `transformer_models` | Output directory |
+| `--test_size` | `0.2` | Test set size (fraction) |
+| `--no_standardize` | `False` | Disable automatic feature standardization (not recommended) |
+| `--use_pretrained_features` | `False` | Use pretrained embeddings instead of raw parquet data |
+| `--pretrained_features_dir` | `None` | Directory with `*_embeddings.npy` files |
+| `--modalities` | `None` (all) | Specific modalities to use (e.g., `--modalities GeneExpr miRNA`) |
 | `--pretrained_encoders_dir` | `None` | Directory with pretrained encoders |
 | `--embed_dim` | `256` | Embedding dimension |
 | `--num_heads` | `8` | Number of attention heads |
@@ -509,9 +514,14 @@ python examples/pretrain_contrastive.py \
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--freeze_encoders` | `False` | Freeze pretrained encoders |
-| `--test_size` | `0.2` | Test set size (fraction) |
+| `--checkpoint_interval` | `10` | Save checkpoint every N epochs (0 to disable) |
+| `--keep_last_n` | `3` | Keep only last N checkpoints |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
+
+**Data Preprocessing (automatic):**
+- **NaN/Inf handling**: Automatically detects and replaces NaN/Inf values with column means
+- **Feature standardization**: Automatically standardizes features to zero mean and unit variance (disable with `--no_standardize`, but not recommended as it may cause NaN loss)
 
 ### extract_pretrained_features.py
 
