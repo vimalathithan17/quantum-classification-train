@@ -227,71 +227,69 @@ for data_type in data_types:
     log.info(f"Final parameters - n_qubits: {config['n_qubits']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
 
     # --- Load Data and Encode Labels ---
-    file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
-    df = safe_load_parquet(file_path)
-    if df is None:
-        continue
-        
-    # Ensure deterministic ordering by sorting on case_id and set the index
-    df = df.sort_values(ID_COL).set_index(ID_COL)
-    X = df.drop(columns=[LABEL_COL])
-    y_categorical = df[LABEL_COL]
+    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
     
-    # Use the pre-loaded master encoder to transform labels
-    y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+    if use_pretrained:
+        # Load directly from .npy files (faster, assumes extract script saved in case_id sorted order)
+        pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
+        labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
+        case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
+        
+        if not os.path.exists(pretrained_file):
+            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to parquet")
+            use_pretrained = False
+        elif not os.path.exists(labels_file):
+            log.warning(f"  - Labels file not found: {labels_file}, falling back to parquet")
+            use_pretrained = False
+        elif not os.path.exists(case_ids_file):
+            log.warning(f"  - Case IDs file not found: {case_ids_file}, falling back to parquet")
+            use_pretrained = False
+        else:
+            log.info(f"  - Loading pretrained features from {args.pretrained_features_dir}")
+            embeddings = np.load(pretrained_file)
+            labels_raw = np.load(labels_file, allow_pickle=True)
+            case_ids = np.load(case_ids_file, allow_pickle=True)
+            
+            # Convert to DataFrame/Series for compatibility
+            X = pd.DataFrame(embeddings, index=case_ids)
+            y_categorical = pd.Series(labels_raw, index=case_ids)
+            
+            # Sort by case_id for consistent ordering
+            X = X.sort_index()
+            y_categorical = y_categorical.sort_index()
+            
+            # Encode labels
+            y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+            
+            log.info(f"  - Loaded pretrained features: {X.shape[0]} samples, {X.shape[1]} embed_dim")
+    
+    if not use_pretrained:
+        # Original flow: load from parquet
+        file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
+        df = safe_load_parquet(file_path)
+        if df is None:
+            continue
+            
+        # Ensure deterministic ordering by sorting on case_id and set the index
+        df = df.sort_values(ID_COL).set_index(ID_COL)
+        X = df.drop(columns=[LABEL_COL])
+        y_categorical = df[LABEL_COL]
+        
+        # Use the pre-loaded master encoder to transform labels
+        y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
     # Deterministic train/test split using the shared RANDOM_STATE
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
-    scaler_obj = get_scaler(config.get('scaler', 'MinMax'))
-
-    # --- Check for pretrained features ---
-    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
-    X_train_pretrained = None
-    X_test_pretrained = None
     
-    if use_pretrained:
-        pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
-        if os.path.exists(pretrained_file):
-            log.info(f"  - Loading pretrained features from {pretrained_file}")
-            embeddings = np.load(pretrained_file)
-            
-            # Load case_ids for proper alignment
-            case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
-            if os.path.exists(case_ids_file):
-                pretrained_case_ids = np.load(case_ids_file, allow_pickle=True)
-                
-                # Create mapping from case_id to embedding index
-                case_id_to_idx = {str(cid): i for i, cid in enumerate(pretrained_case_ids)}
-                
-                # Select embeddings aligned with X_train and X_test by case_id
-                try:
-                    train_embed_idx = [case_id_to_idx[str(cid)] for cid in X_train.index]
-                    test_embed_idx = [case_id_to_idx[str(cid)] for cid in X_test.index]
-                except KeyError as e:
-                    log.error(f"  - Case ID {e} not found in pretrained features. Ensure data was processed with same samples.")
-                    missing_train = [cid for cid in X_train.index if str(cid) not in case_id_to_idx]
-                    missing_test = [cid for cid in X_test.index if str(cid) not in case_id_to_idx]
-                    if missing_train:
-                        log.error(f"  - Missing from train: {missing_train[:10]}..." if len(missing_train) > 10 else f"  - Missing from train: {missing_train}")
-                    if missing_test:
-                        log.error(f"  - Missing from test: {missing_test[:10]}..." if len(missing_test) > 10 else f"  - Missing from test: {missing_test}")
-                    raise
-                
-                X_train_pretrained = embeddings[train_embed_idx]
-                X_test_pretrained = embeddings[test_embed_idx]
-                
-                log.info(f"  - Pretrained features aligned by case_id: train={X_train_pretrained.shape}, test={X_test_pretrained.shape}")
-            else:
-                # Fallback: use positional indices (assumes same order as sorted data)
-                log.warning(f"  - case_ids.npy not found, using positional alignment (assumes same order)")
-                all_indices = np.arange(len(embeddings))
-                train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
-                X_train_pretrained = embeddings[train_idx]
-                X_test_pretrained = embeddings[test_idx]
-                log.info(f"  - Pretrained features loaded: train={X_train_pretrained.shape}, test={X_test_pretrained.shape}")
-        else:
-            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
-            use_pretrained = False
+    # Log data split information
+    log.info(f"  - Data split: Total={len(X)} samples, Train={len(X_train)} ({100*len(X_train)/len(X):.1f}%), Test={len(X_test)} ({100*len(X_test)/len(X):.1f}%)")
+    log.info(f"  - Features: {X.shape[1]} {'pretrained embed_dim' if use_pretrained else 'raw features'}")
+    train_class_counts = y_train.value_counts().sort_index()
+    test_class_counts = y_test.value_counts().sort_index()
+    log.info(f"  - Train class distribution: {dict(train_class_counts)}")
+    log.info(f"  - Test class distribution: {dict(test_class_counts)}")
+    
+    scaler_obj = get_scaler(config.get('scaler', 'MinMax'))
 
     # --- Build the appropriate pipeline using TUNED params ---
     
@@ -299,7 +297,7 @@ for data_type in data_types:
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if (args.max_training_time or args.resume) else None
     
     if use_pretrained:
-        embed_dim = X_train_pretrained.shape[1]
+        embed_dim = X_train.shape[1]
         n_qubits_final = min(config['n_qubits'], embed_dim)
         log.info(f"  - Using pretrained features pipeline (embed_dim={embed_dim}, n_qubits={n_qubits_final}, reducer={args.dim_reducer})")
         
@@ -333,8 +331,6 @@ for data_type in data_types:
                 wandb_run_name=args.wandb_run_name or f'dre_relupload_{data_type}_pretrained'
             ))
         ])
-        X_train = pd.DataFrame(X_train_pretrained, index=X_train.index)
-        X_test = pd.DataFrame(X_test_pretrained, index=X_test.index)
     else:
         log.info("  - Using standard pipeline for all data types...")
         

@@ -109,6 +109,10 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
     """
     Initialize Weights & Biases logging if requested.
     
+    If a W&B run is already active (e.g., created by the calling script for a trial
+    or modality), this function will reuse it instead of creating a new one.
+    This ensures that per-fold training in tuning or CV logs to the same run.
+    
     Args:
         use_wandb: Whether to use wandb
         wandb_project: W&B project name
@@ -116,19 +120,28 @@ def _initialize_wandb(use_wandb, wandb_project, wandb_run_name, config_dict=None
         config_dict: Configuration dictionary to log
         
     Returns:
-        wandb module if initialized, None otherwise
+        wandb module if initialized/active, None otherwise
     """
     if not use_wandb:
         return None
     
     try:
+        # Check if a run is already active - if so, reuse it
+        if wandb.run is not None:
+            log.info(f"Reusing existing W&B run: '{wandb.run.name}' (project: '{wandb.run.project}')")
+            # Optionally update config with new parameters
+            if config_dict:
+                wandb.config.update(config_dict, allow_val_change=True)
+            return wandb
+        
+        # No active run - create a new one
         wandb.init(
             project=wandb_project,
             name=wandb_run_name,
             config=config_dict or {},
             reinit=True
         )
-        log.info(f"Initialized W&B logging: project='{wandb_project}', run='{wandb_run_name}'")
+        log.info(f"Initialized new W&B run: project='{wandb_project}', run='{wandb_run_name}'")
         return wandb
     except Exception as e:
         log.warning(f"Failed to initialize wandb: {e}")

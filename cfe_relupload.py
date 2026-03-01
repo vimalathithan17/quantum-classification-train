@@ -221,6 +221,15 @@ for data_type in data_types:
     log.info(f"Final parameters - n_qubits: {config['n_qubits']}, n_layers: {config['n_layers']}, steps: {config['steps']}, scaler: {config['scaler']}")
 
     # --- Load Data and Encode Labels ---
+    # CFE (Approach 2) requires raw features with NaN values for missingness-aware encoding
+    # Pretrained features don't have NaN (encoder handles missingness), so not compatible
+    if args.use_pretrained_features and args.pretrained_features_dir is not None:
+        log.error("Pretrained features are not compatible with CFE (Conditional Feature Encoding).")
+        log.error("CFE requires raw features with NaN values for missingness-aware encoding.")
+        log.error("Use dre_standard.py or dre_relupload.py for pretrained features instead.")
+        continue
+    
+    # Load from parquet (CFE always uses raw features)
     file_path = os.path.join(SOURCE_DIR, f'data_{data_type}_.parquet')
     df = safe_load_parquet(file_path)
     if df is None:
@@ -234,54 +243,41 @@ for data_type in data_types:
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
     y_train, y_test = pd.Series(y_train, index=X_train.index), pd.Series(y_test, index=X_test.index)
-
-    # --- Check for pretrained features ---
-    use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
     
-    if use_pretrained:
-        pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
-        if os.path.exists(pretrained_file):
-            log.info(f"  - Loading pretrained features from {pretrained_file}")
-            embeddings = np.load(pretrained_file)
-            
-            # Load case_ids for proper alignment
-            case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
-            if os.path.exists(case_ids_file):
-                pretrained_case_ids = np.load(case_ids_file, allow_pickle=True)
-                
-                # Create mapping from case_id to embedding index
-                case_id_to_idx = {str(cid): i for i, cid in enumerate(pretrained_case_ids)}
-                
-                # Select embeddings aligned with X_train and X_test by case_id
-                try:
-                    train_embed_idx = [case_id_to_idx[str(cid)] for cid in X_train.index]
-                    test_embed_idx = [case_id_to_idx[str(cid)] for cid in X_test.index]
-                except KeyError as e:
-                    log.error(f"  - Case ID {e} not found in pretrained features. Ensure data was processed with same samples.")
-                    missing_train = [cid for cid in X_train.index if str(cid) not in case_id_to_idx]
-                    missing_test = [cid for cid in X_test.index if str(cid) not in case_id_to_idx]
-                    if missing_train:
-                        log.error(f"  - Missing from train: {missing_train[:10]}..." if len(missing_train) > 10 else f"  - Missing from train: {missing_train}")
-                    if missing_test:
-                        log.error(f"  - Missing from test: {missing_test[:10]}..." if len(missing_test) > 10 else f"  - Missing from test: {missing_test}")
-                    raise
-                
-                X_train = pd.DataFrame(embeddings[train_embed_idx], index=X_train.index)
-                X_test = pd.DataFrame(embeddings[test_embed_idx], index=X_test.index)
-                
-                log.info(f"  - Pretrained features aligned by case_id: train={X_train.shape}, test={X_test.shape}")
-                log.info("  - Note: LightGBM feature selection will be skipped, using PCA instead")
-            else:
-                # Fallback: use positional indices (assumes same order as sorted data)
-                log.warning(f"  - case_ids.npy not found, using positional alignment (assumes same order)")
-                all_indices = np.arange(len(embeddings))
-                train_idx, test_idx = train_test_split(all_indices, test_size=0.2, random_state=RANDOM_STATE, stratify=y.values)
-                X_train = pd.DataFrame(embeddings[train_idx], index=X_train.index)
-                X_test = pd.DataFrame(embeddings[test_idx], index=X_test.index)
-                log.info(f"  - Pretrained features loaded: train={X_train.shape}, test={X_test.shape}")
-        else:
-            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to standard pipeline")
-            use_pretrained = False
+    # Log data split information
+    log.info(f"  - Data split: Total={len(X)} samples, Train={len(X_train)} ({100*len(X_train)/len(X):.1f}%), Test={len(X_test)} ({100*len(X_test)/len(X):.1f}%)")
+    log.info(f"  - Features: {X.shape[1]} raw features")
+    train_class_counts = y_train.value_counts().sort_index()
+    test_class_counts = y_test.value_counts().sort_index()
+    log.info(f"  - Train class distribution: {dict(train_class_counts)}")
+    log.info(f"  - Test class distribution: {dict(test_class_counts)}")
+
+    # --- Initialize W&B run for this modality (one run per data_type) ---
+    modality_wandb_run = None
+    if args.use_wandb:
+        try:
+            import wandb
+            run_name = args.wandb_run_name or f'cfe_relupload_{data_type}'
+            modality_wandb_run = wandb.init(
+                project=args.wandb_project,
+                name=run_name,
+                config={
+                    'script': 'cfe_relupload',
+                    'data_type': data_type,
+                    'n_qubits': config.get('n_qubits', n_classes),
+                    'n_layers': config.get('n_layers', 3),
+                    'steps': config.get('steps', 100),
+                    'n_classes': n_classes,
+                    'train_samples': len(X_train),
+                    'test_samples': len(X_test),
+                },
+                reinit=True,
+                group=f"cfe_relupload_{data_type}"
+            )
+            log.info(f"  - Initialized W&B run: {run_name}")
+        except Exception as e:
+            log.warning(f"  - Failed to initialize W&B: {e}")
+            modality_wandb_run = None
 
     # --- Generate Out-of-Fold Predictions Correctly ---
     if not args.skip_cross_validation:
@@ -326,6 +322,7 @@ for data_type in data_types:
             X_val_scaled = X_val_filled
 
             # 3. Train model on this fold and predict on the validation part
+            # Note: use_wandb=False for fold models - we log fold metrics manually to modality run
             checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}_fold{fold+1}') if (args.max_training_time or args.resume) else None
             model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
@@ -338,13 +335,26 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
                 resume=args.resume,
-                use_wandb=args.use_wandb,
-                wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_fold{fold+1}'
+                use_wandb=False,  # Disabled for fold models - only final model logs to wandb
+                wandb_project=None,
+                wandb_run_name=None
             )
             model.fit((X_train_scaled, is_missing_train), y_train_fold.values)
             val_preds = model.predict_proba((X_val_scaled, is_missing_val))
             oof_preds[val_idx] = val_preds
+            
+            # Log fold validation metrics to modality wandb run
+            if modality_wandb_run:
+                try:
+                    import wandb
+                    val_pred_labels = val_preds.argmax(axis=1)
+                    fold_acc = (val_pred_labels == y_val_fold.values).mean()
+                    wandb.log({
+                        f'cv/fold_{fold+1}_accuracy': float(fold_acc),
+                        f'cv/fold_{fold+1}_samples': len(y_val_fold),
+                    })
+                except Exception as e:
+                    log.warning(f"Failed to log fold metrics to wandb: {e}")
 
         oof_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
         pd.DataFrame(oof_preds, index=X_train.index, columns=oof_cols).to_csv(os.path.join(OUTPUT_DIR, f'train_oof_preds_{data_type}.csv'))
@@ -382,6 +392,7 @@ for data_type in data_types:
     X_train_scaled = X_train_filled
     
     checkpoint_dir = os.path.join(OUTPUT_DIR, f'checkpoints_{data_type}') if (args.max_training_time or args.resume) else None
+    # Final model logs to the modality-level wandb run (reuses existing run)
     final_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
@@ -393,9 +404,9 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
                 resume=args.resume,
-                use_wandb=args.use_wandb,
+                use_wandb=args.use_wandb,  # Will reuse modality-level run
                 wandb_project=args.wandb_project,
-                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}_final'
+                wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}'
             )
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
@@ -497,5 +508,29 @@ for data_type in data_types:
         with open(metrics_path, 'w') as f:
             json.dump(metrics_json, f, indent=2)
         log.info(f"Saved comprehensive metrics to {metrics_path}")
+        
+        # Log final test metrics to wandb
+        if modality_wandb_run:
+            try:
+                import wandb
+                wandb.log({
+                    'test/accuracy': float(metrics['accuracy']),
+                    'test/f1_macro': float(metrics['f1_macro']),
+                    'test/f1_weighted': float(metrics['f1_weighted']),
+                    'test/precision_macro': float(metrics['precision_macro']),
+                    'test/recall_macro': float(metrics['recall_macro']),
+                    'test/specificity_macro': float(metrics['specificity_macro']),
+                })
+            except Exception as e:
+                log.warning(f"Failed to log test metrics to wandb: {e}")
     except Exception as e:
         log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")
+
+    # --- Finish wandb run for this modality ---
+    if modality_wandb_run:
+        try:
+            import wandb
+            wandb.finish()
+            log.info(f"  - Finished W&B run for {data_type}")
+        except Exception as e:
+            log.warning(f"Failed to finish wandb run: {e}")

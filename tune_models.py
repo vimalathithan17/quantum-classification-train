@@ -415,23 +415,13 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-            # Generate wandb run name for this fold
-            if args.use_wandb:
-                base_name = f"tune_DRE_{args.datatype}_{args.qml_model}_q{n_qubits}_l{n_layers}"
-                scaler_name = params.get('scaler', None)
-                if scaler_name:
-                    base_name += f"_{scaler_name}"
-                wandb_run_name_fold = f"{base_name}_f{fold+1}"
-            else:
-                wandb_run_name_fold = None
-            if args.wandb_run_name:
-                wandb_run_name_fold = args.wandb_run_name
-
             # Instantiate fresh model for this fold
+            # Note: use_wandb=False for QML models - fold metrics are logged to trial-level run via _log_fold_metrics_to_wandb
+            # This avoids step-logging conflicts across folds
             if args.qml_model == 'standard':
-                qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+                qml_model = MulticlassQuantumClassifierDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=False, wandb_project=None, wandb_run_name=None)
             else:  # reuploading
-                qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+                qml_model = MulticlassQuantumClassifierDataReuploadingDR(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=False, wandb_project=None, wandb_run_name=None)
 
             pipeline = Pipeline(steps_list + [('qml', qml_model)])
 
@@ -538,19 +528,12 @@ def objective(trial, args, X, y, n_classes, min_qbits, max_qbits, scaler_options
             X_train_scaled = X_train_filled
             X_val_scaled = X_val_filled
 
-            # Generate wandb run name for this fold and instantiate a fresh QML model
-            if args.use_wandb:
-                base_name = f"tune_CF_{args.datatype}_{args.qml_model}_q{n_qubits}_l{n_layers}"
-                wandb_run_name_fold = f"{base_name}_f{fold+1}"
-            else:
-                wandb_run_name_fold = None
-            if args.wandb_run_name:
-                wandb_run_name_fold = args.wandb_run_name
-
+            # Instantiate fresh model for this fold
+            # Note: use_wandb=False for QML models - fold metrics are logged to trial-level run via _log_fold_metrics_to_wandb
             if args.qml_model == 'standard':
-                qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+                qml_model = ConditionalMulticlassQuantumClassifierFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=False, wandb_project=None, wandb_run_name=None)
             else: # reuploading
-                qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=args.use_wandb, wandb_project=args.wandb_project, wandb_run_name=wandb_run_name_fold)
+                qml_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(n_qubits=n_qubits, n_layers=n_layers, steps=steps, n_classes=n_classes, verbose=args.verbose, validation_frequency=args.validation_frequency, use_wandb=False, wandb_project=None, wandb_run_name=None)
 
             qml_model.fit((X_train_scaled, is_missing_train), y_train.values)
             
@@ -771,6 +754,10 @@ def main():
         X = pd.DataFrame(X_np, index=case_ids)
         y_categorical = pd.Series(y_np, index=case_ids)
         
+        # CRITICAL: Sort by case_id for consistent ordering across all scripts
+        X = X.sort_index()
+        y_categorical = y_categorical.sort_index()
+        
         # Labels are already encoded in pretrained features
         le = LabelEncoder()
         le.fit(y_categorical)
@@ -779,6 +766,7 @@ def main():
         
         log.info(f"Loaded pretrained features: X shape = {X.shape}, embed_dim = {X.shape[1]}")
         log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+        log.info(f"Total samples: {len(X)}, Class distribution: {dict(y.value_counts().sort_index())}")
     else:
         # Original flow: load from parquet
         df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))
@@ -795,7 +783,9 @@ def main():
         le = LabelEncoder()
         y = pd.Series(le.fit_transform(y_categorical), index=y_categorical.index)
         n_classes = len(le.classes_)
+        log.info(f"Loaded raw features: X shape = {X.shape}")
         log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+        log.info(f"Total samples: {len(X)}, Class distribution: {dict(y.value_counts().sort_index())}")
 
     # Determine qubit search range
     min_qbits = args.min_qbits if args.min_qbits is not None else n_classes

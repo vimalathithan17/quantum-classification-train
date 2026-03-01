@@ -21,6 +21,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import joblib
 from pathlib import Path
 
 
@@ -46,13 +47,14 @@ from performance_extensions.training_utils import load_pretrained_encoders
 from utils.metrics_utils import compute_metrics
 
 
-def load_pretrained_features(features_dir, modalities=None):
+def load_pretrained_features(features_dir, modalities=None, label_encoder=None):
     """
     Load pretrained features from extracted embeddings.
     
     Args:
         features_dir: Directory containing *_embeddings.npy files
         modalities: List of modality names to load (if None, load all available)
+        label_encoder: Pre-fitted LabelEncoder for consistent label mapping
         
     Returns:
         Tuple of (data_dict, labels, modality_dims, case_ids)
@@ -77,12 +79,13 @@ def load_pretrained_features(features_dir, modalities=None):
     labels_file = features_dir / 'labels.npy'
     if labels_file.exists():
         labels = np.load(labels_file, allow_pickle=True)
-        # If labels are strings, encode them to integers
+        # If labels are strings, encode them to integers using master encoder
         if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
-            from sklearn.preprocessing import LabelEncoder
-            le = LabelEncoder()
-            labels = le.fit_transform(labels)
-            print(f"Encoded string labels to integers: {le.classes_}")
+            if label_encoder is None:
+                raise ValueError("String labels found but no label_encoder provided. "
+                               "Use --label_encoder_path to specify master label encoder.")
+            labels = label_encoder.transform(labels)
+            print(f"Encoded string labels using master encoder: {label_encoder.classes_}")
         labels = labels.astype(np.int64)
         print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
     
@@ -116,7 +119,7 @@ def load_pretrained_features(features_dir, modalities=None):
     return data, labels, modality_dims, case_ids
 
 
-def load_multiomics_data(data_dir, modalities=None, standardize=True):
+def load_multiomics_data(data_dir, modalities=None, standardize=True, label_encoder=None):
     """
     Load multi-omics data from parquet files.
     
@@ -124,6 +127,7 @@ def load_multiomics_data(data_dir, modalities=None, standardize=True):
         data_dir: Directory containing data files
         modalities: List of modality names to load (if None, load all available)
         standardize: Whether to standardize features (zero mean, unit variance)
+        label_encoder: Pre-fitted LabelEncoder for consistent label mapping
         
     Returns:
         Tuple of (data_dict, labels, modality_dims)
@@ -189,12 +193,13 @@ def load_multiomics_data(data_dir, modalities=None, standardize=True):
             # Extract labels (from first modality encountered)
             if labels is None and 'class' in df.columns:
                 labels = df['class'].values
-                # If labels are strings, encode them to integers
+                # If labels are strings, encode them to integers using master encoder
                 if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
-                    from sklearn.preprocessing import LabelEncoder
-                    le = LabelEncoder()
-                    labels = le.fit_transform(labels)
-                    print(f"  Encoded string labels to integers: {le.classes_}")
+                    if label_encoder is None:
+                        raise ValueError("String labels found but no label_encoder provided. "
+                                       "Use --label_encoder_path to specify master label encoder.")
+                    labels = label_encoder.transform(labels)
+                    print(f"  Encoded string labels using master encoder: {label_encoder.classes_}")
                 labels = labels.astype(np.int64)
             
             print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
@@ -467,6 +472,12 @@ def main():
     log_args.add_argument('--wandb_run_name', type=str, default=None,
                          help='W&B run name')
     
+    # Label encoder configuration
+    encoder_args = parser.add_argument_group('label encoder configuration')
+    encoder_args.add_argument('--label_encoder_path', type=str, 
+                             default='master_label_encoder/label_encoder.joblib',
+                             help='Path to master label encoder (default: master_label_encoder/label_encoder.joblib)')
+    
     args = parser.parse_args()
     
     # Set seed for reproducibility
@@ -507,22 +518,35 @@ def main():
         print(f"  {arg}: {value}")
     print()
     
+    # Load master label encoder
+    label_encoder = None
+    label_encoder_path = Path(args.label_encoder_path)
+    if label_encoder_path.exists():
+        label_encoder = joblib.load(label_encoder_path)
+        print(f"Loaded master label encoder from: {label_encoder_path}")
+        print(f"  Classes: {list(label_encoder.classes_)}")
+    else:
+        print(f"Warning: Label encoder not found at {label_encoder_path}")
+        print("  Run create_master_label_encoder.py first or provide --label_encoder_path")
+    
     # Load data - either from pretrained features or raw parquet
-    print("Loading data...")
+    print("\nLoading data...")
     case_ids = None
     
     if args.use_pretrained_features and args.pretrained_features_dir:
         print(f"Using pretrained features from: {args.pretrained_features_dir}")
         data, labels, modality_dims, case_ids = load_pretrained_features(
             args.pretrained_features_dir, 
-            modalities=args.modalities
+            modalities=args.modalities,
+            label_encoder=label_encoder
         )
     else:
         print(f"Loading raw data from: {args.data_dir}")
         data, labels, modality_dims = load_multiomics_data(
             args.data_dir, 
             modalities=args.modalities,
-            standardize=not args.no_standardize
+            standardize=not args.no_standardize,
+            label_encoder=label_encoder
         )
     
     if not data or labels is None:
@@ -552,8 +576,14 @@ def main():
     train_labels = labels[train_idx]
     test_labels = labels[test_idx]
     
-    print(f"Training samples: {len(train_labels)}")
-    print(f"Test samples: {len(test_labels)}")
+    print(f"Training samples: {len(train_labels)} ({100*len(train_labels)/len(labels):.1f}%)")
+    print(f"Test samples: {len(test_labels)} ({100*len(test_labels)/len(labels):.1f}%)")
+    
+    # Log class distribution
+    unique_train, counts_train = np.unique(train_labels, return_counts=True)
+    unique_test, counts_test = np.unique(test_labels, return_counts=True)
+    print(f"Train class distribution: {dict(zip(unique_train.tolist(), counts_train.tolist()))}")
+    print(f"Test class distribution: {dict(zip(unique_test.tolist(), counts_test.tolist()))}")
     
     # Create dataloaders
     train_loader = create_dataloader(train_data, train_labels, args.batch_size, shuffle=True)
@@ -683,7 +713,9 @@ def main():
                 'val_acc': float(val_acc),
                 'seed': args.seed,
                 'test_size': args.test_size,
-                'max_grad_norm': args.max_grad_norm
+                'max_grad_norm': args.max_grad_norm,
+                'label_encoder_path': str(args.label_encoder_path),
+                'label_classes': list(label_encoder.classes_) if label_encoder else None
             }
             with open(output_dir / 'config.json', 'w') as f:
                 json.dump(config, f, indent=2)
