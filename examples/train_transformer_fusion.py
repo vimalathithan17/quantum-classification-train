@@ -473,10 +473,13 @@ def main():
                          help='W&B run name')
     
     # Label encoder configuration
+    # Check ENCODER_DIR environment variable for consistency with other training scripts
+    default_encoder_dir = os.environ.get('ENCODER_DIR', 'master_label_encoder')
+    default_encoder_path = os.path.join(default_encoder_dir, 'label_encoder.joblib')
     encoder_args = parser.add_argument_group('label encoder configuration')
     encoder_args.add_argument('--label_encoder_path', type=str, 
-                             default='master_label_encoder/label_encoder.joblib',
-                             help='Path to master label encoder (default: master_label_encoder/label_encoder.joblib)')
+                             default=default_encoder_path,
+                             help=f'Path to master label encoder (default: {default_encoder_path})')
     
     args = parser.parse_args()
     
