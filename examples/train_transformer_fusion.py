@@ -51,89 +51,174 @@ def load_pretrained_features(features_dir, modalities=None, label_encoder=None):
     """
     Load pretrained features from extracted embeddings.
     
+    Supports two formats:
+    1. Split format (preferred, no leakage): {modality}_train_embeddings.npy, {modality}_test_embeddings.npy
+    2. Combined format (legacy, warns about leakage): {modality}_embeddings.npy
+    
     Args:
         features_dir: Directory containing *_embeddings.npy files
         modalities: List of modality names to load (if None, load all available)
         label_encoder: Pre-fitted LabelEncoder for consistent label mapping
         
     Returns:
-        Tuple of (data_dict, labels, modality_dims, case_ids)
+        Tuple of (data_dict, labels, modality_dims, case_ids, is_split)
+        - If is_split=True: data_dict contains 'train' and 'test' keys with modality sub-dicts
+        - If is_split=False: data_dict contains modality keys directly (legacy format)
     """
     features_dir = Path(features_dir)
     
     if modalities is None:
         modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
     
-    data = {}
-    modality_dims = {}
+    # Check if split files exist (indicates proper train/test split from pretraining)
+    first_modality = modalities[0]
+    train_file_check = features_dir / f"{first_modality}_train_embeddings.npy"
+    test_file_check = features_dir / f"{first_modality}_test_embeddings.npy"
+    has_split_files = train_file_check.exists() and test_file_check.exists()
     
-    # Load case_ids and labels first
-    case_ids = None
-    labels = None
-    
-    case_ids_file = features_dir / 'case_ids.npy'
-    if case_ids_file.exists():
-        case_ids = np.load(case_ids_file, allow_pickle=True)
-        print(f"Loaded case_ids: {len(case_ids)} samples")
-    
-    labels_file = features_dir / 'labels.npy'
-    if labels_file.exists():
-        labels = np.load(labels_file, allow_pickle=True)
-        # If labels are strings, encode them to integers using master encoder
-        if labels.dtype.kind in ('U', 'S', 'O'):  # Unicode, byte string, or object
-            if label_encoder is None:
-                raise ValueError("String labels found but no label_encoder provided. "
-                               "Use --label_encoder_path to specify master label encoder.")
-            labels = label_encoder.transform(labels)
-            print(f"Encoded string labels using master encoder: {label_encoder.classes_}")
-        labels = labels.astype(np.int64)
-        print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
-    
-    # Load embeddings for each modality
-    for modality in modalities:
-        file_path = features_dir / f"{modality}_embeddings.npy"
+    if has_split_files:
+        # ✓ Properly split pretrained features - load train/test separately
+        print("Loading SPLIT pretrained features (no leakage)")
         
-        if file_path.exists():
-            print(f"Loading pretrained {modality} from {file_path}")
-            features = np.load(file_path).astype(np.float32)
+        train_data = {}
+        test_data = {}
+        modality_dims = {}
+        
+        # Load train/test labels and case_ids
+        train_labels_file = features_dir / 'train_labels.npy'
+        test_labels_file = features_dir / 'test_labels.npy'
+        train_case_ids_file = features_dir / 'train_case_ids.npy'
+        test_case_ids_file = features_dir / 'test_case_ids.npy'
+        
+        if not train_labels_file.exists() or not test_labels_file.exists():
+            raise ValueError(f"Split label files not found in {features_dir}")
+        
+        train_labels = np.load(train_labels_file, allow_pickle=True)
+        test_labels = np.load(test_labels_file, allow_pickle=True)
+        train_case_ids = np.load(train_case_ids_file, allow_pickle=True) if train_case_ids_file.exists() else None
+        test_case_ids = np.load(test_case_ids_file, allow_pickle=True) if test_case_ids_file.exists() else None
+        
+        # Encode labels if string
+        if train_labels.dtype.kind in ('U', 'S', 'O'):
+            if label_encoder is None:
+                raise ValueError("String labels found but no label_encoder provided.")
+            train_labels = label_encoder.transform(train_labels)
+            test_labels = label_encoder.transform(test_labels)
+            print(f"Encoded string labels using master encoder: {label_encoder.classes_}")
+        train_labels = train_labels.astype(np.int64)
+        test_labels = test_labels.astype(np.int64)
+        
+        print(f"Train labels: {len(train_labels)} samples, classes={np.unique(train_labels)}")
+        print(f"Test labels: {len(test_labels)} samples, classes={np.unique(test_labels)}")
+        
+        # Load embeddings for each modality
+        for modality in modalities:
+            train_file = features_dir / f"{modality}_train_embeddings.npy"
+            test_file = features_dir / f"{modality}_test_embeddings.npy"
             
-            # Check for NaN/Inf values in pretrained features
-            nan_count = np.isnan(features).sum()
-            inf_count = np.isinf(features).sum()
-            if nan_count > 0 or inf_count > 0:
-                print(f"  Warning: Found {nan_count} NaN and {inf_count} Inf values in {modality}")
-                # Replace with 0 (embeddings are typically centered)
-                features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
-                print(f"  Replaced NaN/Inf with 0")
-            
-            data[modality] = features
-            modality_dims[modality] = features.shape[1]
-            
-            print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
-        else:
-            print(f"Warning: {file_path} not found, skipping {modality}")
+            if train_file.exists() and test_file.exists():
+                print(f"Loading pretrained {modality} (train + test)")
+                train_features = np.load(train_file).astype(np.float32)
+                test_features = np.load(test_file).astype(np.float32)
+                
+                # Check for NaN/Inf
+                for name, features in [('train', train_features), ('test', test_features)]:
+                    nan_count = np.isnan(features).sum()
+                    inf_count = np.isinf(features).sum()
+                    if nan_count > 0 or inf_count > 0:
+                        print(f"  Warning: Found {nan_count} NaN and {inf_count} Inf in {modality} {name}")
+                        features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                train_data[modality] = train_features
+                test_data[modality] = test_features
+                modality_dims[modality] = train_features.shape[1]
+                
+                print(f"  Train: {train_features.shape[0]} samples, Test: {test_features.shape[0]} samples, dim={train_features.shape[1]}")
+            else:
+                print(f"Warning: {modality} split files not found, skipping")
+        
+        if not train_data:
+            raise ValueError(f"No split embeddings found in {features_dir}")
+        
+        # Return with is_split=True
+        return {'train': train_data, 'test': test_data}, \
+               {'train': train_labels, 'test': test_labels}, \
+               modality_dims, \
+               {'train': train_case_ids, 'test': test_case_ids}, \
+               True  # is_split
     
-    if not data:
-        raise ValueError(f"No embeddings found in {features_dir}")
-    
-    return data, labels, modality_dims, case_ids
+    else:
+        # ⚠️ Old format without split - warn about leakage
+        print("⚠️ LEAKAGE WARNING: Using combined pretrained features!")
+        print("The encoder may have seen test samples during pretraining.")
+        print("For proper evaluation, re-run pretrain_contrastive.py with --test_size 0.2")
+        print("Then re-run extract_pretrained_features.py")
+        
+        data = {}
+        modality_dims = {}
+        
+        # Load case_ids and labels
+        case_ids = None
+        labels = None
+        
+        case_ids_file = features_dir / 'case_ids.npy'
+        if case_ids_file.exists():
+            case_ids = np.load(case_ids_file, allow_pickle=True)
+            print(f"Loaded case_ids: {len(case_ids)} samples")
+        
+        labels_file = features_dir / 'labels.npy'
+        if labels_file.exists():
+            labels = np.load(labels_file, allow_pickle=True)
+            if labels.dtype.kind in ('U', 'S', 'O'):
+                if label_encoder is None:
+                    raise ValueError("String labels found but no label_encoder provided.")
+                labels = label_encoder.transform(labels)
+                print(f"Encoded string labels using master encoder: {label_encoder.classes_}")
+            labels = labels.astype(np.int64)
+            print(f"Loaded labels: {len(labels)} samples, classes={np.unique(labels)}")
+        
+        # Load embeddings for each modality
+        for modality in modalities:
+            file_path = features_dir / f"{modality}_embeddings.npy"
+            
+            if file_path.exists():
+                print(f"Loading pretrained {modality} from {file_path}")
+                features = np.load(file_path).astype(np.float32)
+                
+                nan_count = np.isnan(features).sum()
+                inf_count = np.isinf(features).sum()
+                if nan_count > 0 or inf_count > 0:
+                    print(f"  Warning: Found {nan_count} NaN and {inf_count} Inf values in {modality}")
+                    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                data[modality] = features
+                modality_dims[modality] = features.shape[1]
+                
+                print(f"  Loaded {features.shape[0]} samples with {features.shape[1]} features")
+            else:
+                print(f"Warning: {file_path} not found, skipping {modality}")
+        
+        if not data:
+            raise ValueError(f"No embeddings found in {features_dir}")
+        
+        # Return with is_split=False
+        return data, labels, modality_dims, case_ids, False  # is_split
 
 
-def load_multiomics_data(data_dir, modalities=None, standardize=True, label_encoder=None):
+def load_multiomics_data(data_dir, modalities=None, label_encoder=None):
     """
     Load multi-omics data from parquet files.
     
     Args:
         data_dir: Directory containing data files
         modalities: List of modality names to load (if None, load all available)
-        standardize: Whether to standardize features (zero mean, unit variance)
         label_encoder: Pre-fitted LabelEncoder for consistent label mapping
         
     Returns:
         Tuple of (data_dict, labels, modality_dims)
-    """
-    from sklearn.preprocessing import StandardScaler
     
+    Note: Standardization should be done AFTER train/test split to avoid data leakage.
+    """
     data_dir = Path(data_dir)
     
     if modalities is None:
@@ -180,12 +265,7 @@ def load_multiomics_data(data_dir, modalities=None, standardize=True, label_enco
                     features[mask_inf, col_idx] = col_means[col_idx]
                 print(f"  Replaced NaN/Inf with column means")
             
-            # Standardize features to prevent numerical instability
-            if standardize:
-                scaler = StandardScaler()
-                features = scaler.fit_transform(features)
-                features = features.astype(np.float32)
-                print(f"  Standardized features (mean=0, std=1)")
+            # NOTE: Standardization moved to AFTER train/test split to avoid data leakage
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
@@ -535,10 +615,11 @@ def main():
     # Load data - either from pretrained features or raw parquet
     print("\nLoading data...")
     case_ids = None
+    is_pretrained_split = False  # Track if pretrained features are already split
     
     if args.use_pretrained_features and args.pretrained_features_dir:
         print(f"Using pretrained features from: {args.pretrained_features_dir}")
-        data, labels, modality_dims, case_ids = load_pretrained_features(
+        data, labels, modality_dims, case_ids, is_pretrained_split = load_pretrained_features(
             args.pretrained_features_dir, 
             modalities=args.modalities,
             label_encoder=label_encoder
@@ -548,7 +629,6 @@ def main():
         data, labels, modality_dims = load_multiomics_data(
             args.data_dir, 
             modalities=args.modalities,
-            standardize=not args.no_standardize,
             label_encoder=label_encoder
         )
     
@@ -556,31 +636,58 @@ def main():
         print("Error: No data or labels found!")
         return
     
-    print(f"\nLoaded {len(data)} modalities:")
+    print(f"\nLoaded {len(modality_dims)} modalities:")
     for modality, dim in modality_dims.items():
         print(f"  {modality}: {dim} features")
     
-    # Determine number of classes
-    num_classes = len(np.unique(labels))
-    print(f"\nNumber of classes: {num_classes}")
+    # Handle split vs combined data
+    if is_pretrained_split:
+        # Data is already split properly (no leakage)
+        print(f"\nUsing pre-split data (no additional splitting needed)")
+        train_data = data['train']
+        test_data = data['test']
+        train_labels = labels['train']
+        test_labels = labels['test']
+        
+        # Determine number of classes from combined labels
+        all_labels = np.concatenate([train_labels, test_labels])
+        num_classes = len(np.unique(all_labels))
+    else:
+        # Legacy path: need to split the data
+        # Determine number of classes
+        num_classes = len(np.unique(labels))
+        print(f"\nNumber of classes: {num_classes}")
+        
+        # Split data
+        print(f"\nSplitting data (test_size={args.test_size}, seed={args.seed})...")
+        indices = np.arange(len(labels))
+        train_idx, test_idx = train_test_split(
+            indices,
+            test_size=args.test_size,
+            random_state=args.seed,
+            stratify=labels
+        )
+        
+        train_data = {k: v[train_idx] for k, v in data.items()}
+        test_data = {k: v[test_idx] for k, v in data.items()}
+        train_labels = labels[train_idx]
+        test_labels = labels[test_idx]
     
-    # Split data
-    print(f"\nSplitting data (test_size={args.test_size}, seed={args.seed})...")
-    indices = np.arange(len(labels))
-    train_idx, test_idx = train_test_split(
-        indices,
-        test_size=args.test_size,
-        random_state=args.seed,
-        stratify=labels
-    )
+    # Standardize AFTER split to avoid data leakage (fit on train only)
+    if not args.no_standardize and not args.use_pretrained_features:
+        from sklearn.preprocessing import StandardScaler
+        print("\nStandardizing features (fit on training data only to avoid leakage)...")
+        scalers = {}
+        for modality in train_data:
+            scaler = StandardScaler()
+            train_data[modality] = scaler.fit_transform(train_data[modality]).astype(np.float32)
+            test_data[modality] = scaler.transform(test_data[modality]).astype(np.float32)
+            scalers[modality] = scaler
+            print(f"  {modality}: standardized (train fit, test transform)")
     
-    train_data = {k: v[train_idx] for k, v in data.items()}
-    test_data = {k: v[test_idx] for k, v in data.items()}
-    train_labels = labels[train_idx]
-    test_labels = labels[test_idx]
-    
-    print(f"Training samples: {len(train_labels)} ({100*len(train_labels)/len(labels):.1f}%)")
-    print(f"Test samples: {len(test_labels)} ({100*len(test_labels)/len(labels):.1f}%)")
+    total_samples = len(train_labels) + len(test_labels)
+    print(f"\nTraining samples: {len(train_labels)} ({100*len(train_labels)/total_samples:.1f}%)")
+    print(f"Test samples: {len(test_labels)} ({100*len(test_labels)/total_samples:.1f}%)")
     
     # Log class distribution
     unique_train, counts_train = np.unique(train_labels, return_counts=True)

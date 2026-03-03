@@ -136,6 +136,8 @@ train_args.add_argument('--validation_frequency', type=int, default=10,
                        help='Validation frequency (default: 10 steps)')
 train_args.add_argument('--validation_frac', type=float, default=0.1,
                        help='Fraction of training data for validation during QML training (default: 0.1)')
+train_args.add_argument('--patience', type=int, default=50,
+                       help='Early stopping patience in steps (default: 50, 0 to disable)')
 
 checkpoint_args = parser.add_argument_group('checkpointing')
 checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,
@@ -335,6 +337,7 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
                 resume=args.resume,
+                patience=args.patience if args.patience > 0 else None,
                 use_wandb=False,  # Disabled for fold models - only final model logs to wandb
                 wandb_project=None,
                 wandb_run_name=None
@@ -404,6 +407,7 @@ for data_type in data_types:
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
                 resume=args.resume,
+                patience=args.patience if args.patience > 0 else None,
                 use_wandb=args.use_wandb,  # Will reuse modality-level run
                 wandb_project=args.wandb_project,
                 wandb_run_name=args.wandb_run_name or f'cfe_relupload_{data_type}'

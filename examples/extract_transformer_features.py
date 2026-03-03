@@ -108,15 +108,79 @@ def load_pretrained_embeddings(features_dir: Path, modalities: list = None) -> t
     """
     Load pretrained features from extracted embeddings.
     
+    Supports two formats:
+    1. Split format (preferred, no leakage): {modality}_train_embeddings.npy, {modality}_test_embeddings.npy
+    2. Combined format (legacy): {modality}_embeddings.npy
+    
     Args:
         features_dir: Directory containing *_embeddings.npy files
         modalities: List of modalities to load (default: all available)
         
     Returns:
-        Tuple of (data_dict, labels, modality_dims, case_ids)
+        Tuple of (data_dict, labels, modality_dims, case_ids, is_split)
+        - If is_split=True: data_dict contains 'train' and 'test' keys
+        - If is_split=False: data_dict contains modality keys directly
     """
     if modalities is None:
         modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
+    
+    # Check if split files exist
+    first_modality = modalities[0]
+    train_file_check = features_dir / f"{first_modality}_train_embeddings.npy"
+    test_file_check = features_dir / f"{first_modality}_test_embeddings.npy"
+    has_split_files = train_file_check.exists() and test_file_check.exists()
+    
+    if has_split_files:
+        # ✓ Properly split pretrained features
+        print("Loading SPLIT pretrained features (no leakage)")
+        
+        train_data = {}
+        test_data = {}
+        modality_dims = {}
+        
+        # Load train/test labels and case_ids
+        train_labels = np.load(features_dir / 'train_labels.npy', allow_pickle=True)
+        test_labels = np.load(features_dir / 'test_labels.npy', allow_pickle=True)
+        
+        train_case_ids = None
+        test_case_ids = None
+        if (features_dir / 'train_case_ids.npy').exists():
+            train_case_ids = np.load(features_dir / 'train_case_ids.npy', allow_pickle=True)
+            test_case_ids = np.load(features_dir / 'test_case_ids.npy', allow_pickle=True)
+        
+        # Encode labels if string
+        if train_labels.dtype.kind in ('U', 'S', 'O'):
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            le.fit(np.concatenate([train_labels, test_labels]))
+            train_labels = le.transform(train_labels)
+            test_labels = le.transform(test_labels)
+            print(f"Encoded string labels to integers: {le.classes_}")
+        train_labels = train_labels.astype(np.int64)
+        test_labels = test_labels.astype(np.int64)
+        
+        print(f"Train: {len(train_labels)} samples, Test: {len(test_labels)} samples")
+        
+        # Load embeddings for each modality
+        for modality in modalities:
+            train_file = features_dir / f"{modality}_train_embeddings.npy"
+            test_file = features_dir / f"{modality}_test_embeddings.npy"
+            
+            if train_file.exists() and test_file.exists():
+                print(f"Loading pretrained {modality} (train + test)")
+                train_data[modality] = np.load(train_file).astype(np.float32)
+                test_data[modality] = np.load(test_file).astype(np.float32)
+                modality_dims[modality] = train_data[modality].shape[1]
+                print(f"  Train: {train_data[modality].shape}, Test: {test_data[modality].shape}")
+        
+        return {'train': train_data, 'test': test_data}, \
+               {'train': train_labels, 'test': test_labels}, \
+               modality_dims, \
+               {'train': train_case_ids, 'test': test_case_ids}, \
+               True  # is_split
+    
+    # Legacy combined format
+    print("⚠️ Loading combined pretrained features (potential leakage)")
     
     data = {}
     modality_dims = {}
@@ -158,7 +222,7 @@ def load_pretrained_embeddings(features_dir: Path, modalities: list = None) -> t
     if not data:
         raise ValueError(f"No embeddings found in {features_dir}")
     
-    return data, labels, modality_dims, case_ids
+    return data, labels, modality_dims, case_ids, False  # is_split=False
 
 
 def load_transformer_model(model_dir: Path, device: torch.device) -> tuple:
@@ -250,60 +314,76 @@ def extract_features(
     model, config = load_transformer_model(model_dir, device)
     modalities = list(config['modality_dims'].keys())
     
-    # Load data (now includes case_ids)
+    # Load data (now includes case_ids and split info)
+    is_split = False
     if use_pretrained_features and pretrained_features_dir:
         print(f"Loading pretrained features from: {pretrained_features_dir}")
-        data, labels, _, case_ids = load_pretrained_embeddings(
+        data, labels, _, case_ids, is_split = load_pretrained_embeddings(
             Path(pretrained_features_dir), modalities
         )
     else:
         data, labels, _, case_ids = load_multiomics_data(data_dir, modalities)
-    n_samples = list(data.values())[0].shape[0]
-    print(f"\nLoaded {n_samples} samples across {len(data)} modalities")
     
-    # Prepare for extraction
-    all_logits = []
-    all_embeddings = []
+    # Helper function to extract features for a dataset
+    def extract_from_data(data_dict, description=""):
+        """Extract logits/embeddings from a data dict."""
+        n_samples = list(data_dict.values())[0].shape[0]
+        print(f"\nExtracting {description}: {n_samples} samples across {len(data_dict)} modalities")
+        
+        all_logits = []
+        all_embeddings = []
+        
+        with torch.no_grad():
+            for i in range(0, n_samples, batch_size):
+                # Prepare batch
+                batch_data = {}
+                for modality in modalities:
+                    if modality in data_dict:
+                        batch = data_dict[modality][i:i + batch_size]
+                        batch_data[modality] = torch.from_numpy(batch).float().to(device)
+                    else:
+                        batch_data[modality] = None
+                
+                # Forward pass
+                logits, attn_weights = model(batch_data)
+                all_logits.append(logits.cpu().numpy())
+                
+                # Extract embeddings if requested
+                if extract_type in ['embeddings', 'both', 'all']:
+                    embeddings = model.get_embeddings(batch_data) if hasattr(model, 'get_embeddings') else logits
+                    if hasattr(embeddings, 'cpu'):
+                        all_embeddings.append(embeddings.cpu().numpy())
+        
+        logits = np.vstack(all_logits)
+        probabilities = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
+        predictions = np.argmax(logits, axis=-1)
+        embeddings = np.vstack(all_embeddings) if all_embeddings else None
+        
+        return logits, probabilities, predictions, embeddings
     
-    with torch.no_grad():
-        for i in range(0, n_samples, batch_size):
-            # Prepare batch
-            batch_data = {}
-            for modality in modalities:
-                if modality in data:
-                    batch = data[modality][i:i + batch_size]
-                    batch_data[modality] = torch.from_numpy(batch).float().to(device)
-                else:
-                    # Handle missing modality with None
-                    batch_data[modality] = None
-            
-            # Forward pass
-            # The model returns (logits, attention_weights)
-            logits, attn_weights = model(batch_data)
-            all_logits.append(logits.cpu().numpy())
-            
-            # Extract embeddings if requested (penultimate layer)
-            # Access transformer output before classification head
-            if extract_type in ['embeddings', 'both', 'all']:
-                # Get embeddings by re-running through encoder layers only
-                embeddings = model.get_embeddings(batch_data) if hasattr(model, 'get_embeddings') else logits
-                if hasattr(embeddings, 'cpu'):
-                    all_embeddings.append(embeddings.cpu().numpy())
-    
-    # Concatenate results
-    logits = np.vstack(all_logits)
-    probabilities = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
-    predictions = np.argmax(logits, axis=-1)
+    # Process based on split vs non-split
+    if is_split:
+        print("\n✓ Processing SPLIT data (train and test separately)")
+        train_logits, train_probs, train_preds, train_embeds = extract_from_data(data['train'], "train set")
+        test_logits, test_probs, test_preds, test_embeds = extract_from_data(data['test'], "test set")
+        
+        train_labels = labels['train']
+        test_labels = labels['test']
+        train_case_ids = case_ids['train'] if case_ids else None
+        test_case_ids = case_ids['test'] if case_ids else None
+    else:
+        n_samples = list(data.values())[0].shape[0]
+        logits, probabilities, predictions, embeddings = extract_from_data(data, "all samples")
     
     # Save outputs based on extract_type
     extraction_info = {
         'source_model_dir': str(model_dir),
         'source_data_dir': str(data_dir),
-        'num_samples': n_samples,
         'num_classes': config['num_classes'],
         'modalities_used': modalities,
         'extract_type': extract_type,
         'output_format': output_format,
+        'has_split': is_split,
         'outputs_saved': []
     }
     
@@ -328,37 +408,77 @@ def extract_features(
         print(f"Saved {filename}: {df.shape} (metalearner-compatible)")
         return df
     
-    # Save in NPY format if requested
-    if output_format in ['npy', 'both']:
-        if extract_type in ['logits', 'both', 'all']:
-            save_npy(logits, "transformer_logits.npy")
+    if is_split:
+        # Save train/test separately
+        extraction_info['n_train_samples'] = len(train_labels)
+        extraction_info['n_test_samples'] = len(test_labels)
         
-        if extract_type in ['probabilities', 'both', 'all']:
-            save_npy(probabilities, "transformer_probabilities.npy")
+        if output_format in ['npy', 'both']:
+            if extract_type in ['logits', 'both', 'all']:
+                save_npy(train_logits, "train_transformer_logits.npy")
+                save_npy(test_logits, "test_transformer_logits.npy")
+            
+            if extract_type in ['probabilities', 'both', 'all']:
+                save_npy(train_probs, "train_transformer_probabilities.npy")
+                save_npy(test_probs, "test_transformer_probabilities.npy")
+            
+            if extract_type in ['embeddings', 'all'] and train_embeds is not None:
+                save_npy(train_embeds, "train_transformer_embeddings.npy")
+                save_npy(test_embeds, "test_transformer_embeddings.npy")
+            
+            save_npy(train_preds, "train_transformer_predictions.npy")
+            save_npy(test_preds, "test_transformer_predictions.npy")
+            save_npy(train_labels, "train_labels.npy")
+            save_npy(test_labels, "test_labels.npy")
+            
+            if train_case_ids is not None:
+                save_npy(train_case_ids, "train_case_ids.npy")
+                save_npy(test_case_ids, "test_case_ids.npy")
         
-        if extract_type in ['embeddings', 'all'] and all_embeddings:
-            embeddings = np.vstack(all_embeddings)
-            save_npy(embeddings, "transformer_embeddings.npy")
+        if output_format in ['csv', 'both']:
+            print("\n--- Generating metalearner-compatible CSV files ---")
+            save_metalearner_csv(train_probs, train_case_ids, 'train_oof_preds_Transformer.csv')
+            save_metalearner_csv(test_probs, test_case_ids, 'test_preds_Transformer.csv')
         
-        save_npy(predictions, "transformer_predictions.npy")
+        # Compute accuracy
+        train_acc = np.mean(train_preds == train_labels)
+        test_acc = np.mean(test_preds == test_labels)
+        extraction_info['train_accuracy'] = float(train_acc)
+        extraction_info['test_accuracy'] = float(test_acc)
+        print(f"\nTrain accuracy: {train_acc:.4f}")
+        print(f"Test accuracy: {test_acc:.4f}")
+    
+    else:
+        # Legacy: save combined
+        extraction_info['num_samples'] = n_samples
         
+        if output_format in ['npy', 'both']:
+            if extract_type in ['logits', 'both', 'all']:
+                save_npy(logits, "transformer_logits.npy")
+            
+            if extract_type in ['probabilities', 'both', 'all']:
+                save_npy(probabilities, "transformer_probabilities.npy")
+            
+            if extract_type in ['embeddings', 'all'] and embeddings is not None:
+                save_npy(embeddings, "transformer_embeddings.npy")
+            
+            save_npy(predictions, "transformer_predictions.npy")
+            
+            if labels is not None:
+                save_npy(labels, "labels.npy")
+            
+            if case_ids is not None:
+                save_npy(case_ids, "case_ids.npy")
+        
+        if output_format in ['csv', 'both']:
+            print("\n--- Generating metalearner-compatible CSV files ---")
+            save_metalearner_csv(probabilities, case_ids, 'train_oof_preds_Transformer.csv')
+        
+        # Compute accuracy
         if labels is not None:
-            save_npy(labels, "labels.npy")
-        
-        if case_ids is not None:
-            save_npy(case_ids, "case_ids.npy")
-    
-    # Save in CSV format for metalearner.py compatibility
-    if output_format in ['csv', 'both']:
-        print("\n--- Generating metalearner-compatible CSV files ---")
-        # Save all samples as training OOF predictions (no split column in data)
-        save_metalearner_csv(probabilities, case_ids, 'train_oof_preds_Transformer.csv')
-    
-    # Compute and save accuracy if labels available
-    if labels is not None:
-        accuracy = np.mean(predictions == labels)
-        extraction_info['accuracy'] = float(accuracy)
-        print(f"\nTransformer accuracy: {accuracy:.4f}")
+            accuracy = np.mean(predictions == labels)
+            extraction_info['accuracy'] = float(accuracy)
+            print(f"\nTransformer accuracy: {accuracy:.4f}")
     
     # Save extraction metadata
     metadata_file = output_dir / "extraction_metadata.json"

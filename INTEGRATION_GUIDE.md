@@ -32,6 +32,40 @@ This guide explains **how to integrate** the QML pipeline with performance exten
 2. **Standalone Performance Extensions** - Use transformer/contrastive learning without quantum components
 3. **Hybrid QML + Extensions** - Combine quantum and deep learning approaches
 
+### ⚠️ Data Leakage Prevention (IMPORTANT)
+
+When using pretrained features from contrastive encoders, **always split data BEFORE pretraining**:
+
+```bash
+# ✓ CORRECT: Split before pretraining (--test_size 0.2)
+python examples/pretrain_contrastive.py --test_size 0.2 ...
+
+# ✗ WRONG: No split (encoder sees ALL data, including test samples)
+python examples/pretrain_contrastive.py ...  # F1=1.0 is FAKE!
+```
+
+**Why this matters:**
+- Without split: Encoder trains on ALL samples → test samples "leak" into encoder → artificially perfect F1=1.0
+- With split: Encoder trains on 80% → honest evaluation on unseen 20% → realistic metrics
+
+**Pipeline with proper split:**
+```
+pretrain_contrastive.py     extract_pretrained_features.py     QML/Transformer scripts
+────────────────────────    ───────────────────────────────    ────────────────────────
+1. Split data (80/20)       1. Load train/test indices         1. Load *_train_embeddings.npy
+2. Standardize (fit train)  2. Apply scalers                   2. Load *_test_embeddings.npy  
+3. Train on TRAIN only      3. Extract train/test separately   3. Use directly (no re-split)
+4. Save indices, scalers    4. Save split files
+```
+
+**Split output files:**
+- `{modality}_train_embeddings.npy`, `{modality}_test_embeddings.npy`
+- `train_labels.npy`, `test_labels.npy`
+- `train_case_ids.npy`, `test_case_ids.npy`
+- `scalers.joblib` (StandardScaler fit on train only)
+
+All downstream scripts (`dre_standard.py`, `train_transformer_fusion.py`, etc.) automatically detect and use split files.
+
 ### Quick Start: Pre-extracted Features (Skip Encoder Training)
 
 Pre-extracted embeddings from contrastive pretraining are available on Kaggle:

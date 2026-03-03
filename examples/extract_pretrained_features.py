@@ -87,6 +87,9 @@ def extract_features(
     """
     Extract embeddings from pretrained encoders for all available modalities.
     
+    If the encoder was trained with train/test split (no leakage mode), this will
+    save train and test embeddings separately.
+    
     Args:
         encoder_dir: Directory containing pretrained encoders
         data_dir: Directory containing parquet data files
@@ -110,20 +113,58 @@ def extract_features(
     # Load pretrained encoders
     encoders, metadata = load_pretrained_encoders(encoder_dir, device)
     
+    # Check for train/test split info (from pretrain_contrastive.py --test_size)
+    # Split files are saved in encoder's parent directory
+    split_dir = encoder_dir.parent
+    train_indices_file = split_dir / 'train_indices.npy'
+    test_indices_file = split_dir / 'test_indices.npy'
+    scalers_file = split_dir / 'scalers.joblib'
+    
+    has_split = train_indices_file.exists() and test_indices_file.exists()
+    train_indices = None
+    test_indices = None
+    
+    if has_split:
+        train_indices = np.load(train_indices_file)
+        test_indices = np.load(test_indices_file)
+        print(f"\\n✓ Found train/test split info (no data leakage)")
+        print(f"  Train samples: {len(train_indices)}")
+        print(f"  Test samples: {len(test_indices)}")
+        print(f"  Will save train/test embeddings separately")
+    else:
+        print(f"\\n⚠️  WARNING: No train/test split info found!")
+        print(f"   Encoder may have been trained on ALL data (potential leakage)")
+        print(f"   Recommend re-running pretrain_contrastive.py with --test_size 0.2")
+    
+    # Load scalers if available (required if encoder was trained on standardized data)
+    scalers = None
+    if scalers_file.exists():
+        import joblib
+        scalers = joblib.load(scalers_file)
+        print(f"\\n✓ Loaded scalers from pretraining (will standardize input data)")
+        print(f"  Scalers available for: {list(scalers.keys())}")
+    else:
+        print(f"\\n⚠️  WARNING: No scalers found at {scalers_file}")
+        print(f"   If encoder was trained on standardized data, features may be incorrect!")
+    
     # Store extraction metadata
     extraction_info = {
         'source_encoder_dir': str(encoder_dir),
         'source_data_dir': str(data_dir),
         'embed_dim': metadata['embed_dim'],
         'modalities_extracted': [],
-        'samples_per_modality': {}
+        'samples_per_modality': {},
+        'has_train_test_split': has_split,
+        'n_train_samples': len(train_indices) if train_indices is not None else None,
+        'n_test_samples': len(test_indices) if test_indices is not None else None,
+        'scalers_applied': scalers is not None
     }
     
     labels_saved = False
     case_ids_saved = False
     
     for modality in metadata['modality_names']:
-        print(f"\nProcessing {modality}...")
+        print(f"\\nProcessing {modality}...")
         
         # Check if data file exists
         data_file = data_dir / f"data_{modality}_.parquet"
@@ -135,6 +176,13 @@ def extract_features(
         features, labels, case_ids = load_modality_data(data_dir, modality)
         n_samples = features.shape[0]
         print(f"  Loaded {n_samples} samples with {features.shape[1]} features")
+        
+        # Apply scaler if available (must use same standardization as training)
+        if scalers is not None and modality in scalers:
+            features = scalers[modality].transform(features).astype(np.float32)
+            print(f"  Applied standardization from pretraining")
+        elif scalers is not None:
+            print(f"  Warning: No scaler for {modality}, using raw features")
         
         # Get encoder and set to eval mode
         encoder = encoders[modality]
@@ -160,39 +208,73 @@ def extract_features(
         # Concatenate all embeddings
         embeddings = np.vstack(all_embeddings)
         
-        # Save embeddings
-        output_file = output_dir / f"{modality}_embeddings.npy"
-        np.save(output_file, embeddings)
-        print(f"  Saved embeddings: {embeddings.shape} -> {output_file}")
+        if has_split:
+            # Save train/test embeddings separately
+            train_emb = embeddings[train_indices]
+            test_emb = embeddings[test_indices]
+            
+            train_file = output_dir / f"{modality}_train_embeddings.npy"
+            test_file = output_dir / f"{modality}_test_embeddings.npy"
+            np.save(train_file, train_emb)
+            np.save(test_file, test_emb)
+            print(f"  Saved train embeddings: {train_emb.shape} -> {train_file}")
+            print(f"  Saved test embeddings: {test_emb.shape} -> {test_file}")
+            
+            # Also save combined (for backward compat) but mark it as potentially leaky
+            all_file = output_dir / f"{modality}_embeddings.npy"
+            np.save(all_file, embeddings)
+            print(f"  Saved all embeddings (use train/test files for proper evaluation): {all_file}")
+        else:
+            # No split info - save as single file
+            output_file = output_dir / f"{modality}_embeddings.npy"
+            np.save(output_file, embeddings)
+            print(f"  Saved embeddings: {embeddings.shape} -> {output_file}")
         
         extraction_info['modalities_extracted'].append(modality)
         extraction_info['samples_per_modality'][modality] = n_samples
         
-        # Save labels once (should be same across modalities)
+        # Save labels (handle split if present)
         if labels is not None and not labels_saved:
-            labels_file = output_dir / "labels.npy"
-            np.save(labels_file, labels)
-            print(f"  Saved labels -> {labels_file}")
+            if has_split:
+                np.save(output_dir / "train_labels.npy", labels[train_indices])
+                np.save(output_dir / "test_labels.npy", labels[test_indices])
+                np.save(output_dir / "labels.npy", labels)
+                print(f"  Saved train/test/all labels")
+            else:
+                np.save(output_dir / "labels.npy", labels)
+                print(f"  Saved labels")
             labels_saved = True
         
-        # Save case_ids once (for sample identification)
+        # Save case_ids (handle split if present)
         if case_ids is not None and not case_ids_saved:
-            case_ids_file = output_dir / "case_ids.npy"
-            np.save(case_ids_file, case_ids)
-            print(f"  Saved case_ids -> {case_ids_file}")
+            if has_split:
+                np.save(output_dir / "train_case_ids.npy", case_ids[train_indices])
+                np.save(output_dir / "test_case_ids.npy", case_ids[test_indices])
+                np.save(output_dir / "case_ids.npy", case_ids)
+                print(f"  Saved train/test/all case_ids")
+            else:
+                np.save(output_dir / "case_ids.npy", case_ids)
+                print(f"  Saved case_ids")
             case_ids_saved = True
     
     # Save extraction metadata
     metadata_file = output_dir / "extraction_metadata.json"
     with open(metadata_file, 'w') as f:
         json.dump(extraction_info, f, indent=2)
-    print(f"\nSaved extraction metadata -> {metadata_file}")
+    print(f"\\nSaved extraction metadata -> {metadata_file}")
     
-    print(f"\n{'='*60}")
+    print(f"\\n{'='*60}")
     print(f"Feature extraction complete!")
     print(f"Extracted {len(extraction_info['modalities_extracted'])} modalities")
     print(f"Output directory: {output_dir}")
     print(f"Embedding dimension: {metadata['embed_dim']}")
+    if has_split:
+        print(f"\\n✓ Train/test split preserved (no leakage)")
+        print(f"  Use *_train_embeddings.npy for training")
+        print(f"  Use *_test_embeddings.npy for evaluation")
+    else:
+        print(f"\\n⚠️  No split - ALL samples were encoded (potential leakage)")
+    print(f"{'='*60}")
     print(f"{'='*60}")
     
     return extraction_info

@@ -730,43 +730,75 @@ def main():
             log.error("Use --approach 1 with pretrained features instead.")
             return
         
-        # Load pretrained embeddings from numpy files
+        # Check for properly split pretrained features (no leakage)
+        # For tuning, we use ONLY the train embeddings to prevent leakage
+        train_emb_file = os.path.join(args.pretrained_features_dir, f'{args.datatype}_train_embeddings.npy')
+        train_labels_file = os.path.join(args.pretrained_features_dir, 'train_labels.npy')
+        train_case_ids_file = os.path.join(args.pretrained_features_dir, 'train_case_ids.npy')
+        
+        # Also check old format (combined file)  
         pretrained_file = os.path.join(args.pretrained_features_dir, f'{args.datatype}_embeddings.npy')
         labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
         case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
         
-        if not os.path.exists(pretrained_file):
-            log.error(f"Pretrained features not found: {pretrained_file}")
+        if os.path.exists(train_emb_file) and os.path.exists(train_labels_file):
+            # ✓ Properly split pretrained features - use train data only for tuning
+            log.info(f"Loading SPLIT pretrained features for tuning (train set only)")
+            
+            X_np = np.load(train_emb_file)
+            y_np = np.load(train_labels_file, allow_pickle=True)
+            case_ids = np.load(train_case_ids_file, allow_pickle=True)
+            
+            # Convert to DataFrame/Series for compatibility with existing pipeline
+            X = pd.DataFrame(X_np, index=case_ids)
+            y_categorical = pd.Series(y_np, index=case_ids)
+            
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            X = X.sort_index()
+            y_categorical = y_categorical.sort_index()
+            
+            # Encode labels
+            le = LabelEncoder()
+            le.fit(y_categorical)
+            y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+            n_classes = len(le.classes_)
+            
+            log.info(f"Loaded pretrained train features: X shape = {X.shape}, embed_dim = {X.shape[1]}")
+            log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+            log.info(f"Train samples for tuning: {len(X)}, Class distribution: {dict(y.value_counts().sort_index())}")
+            
+        elif os.path.exists(pretrained_file) and os.path.exists(labels_file) and os.path.exists(case_ids_file):
+            # ⚠️ Old format without split - warn about leakage
+            log.warning("⚠️ LEAKAGE WARNING: Using combined pretrained features!")
+            log.warning("The encoder may have seen test samples during pretraining.")
+            log.warning("For proper evaluation, re-run pretrain_contrastive.py with --test_size 0.2")
+            log.warning("Then re-run extract_pretrained_features.py")
+            
+            X_np = np.load(pretrained_file)
+            y_np = np.load(labels_file, allow_pickle=True)
+            case_ids = np.load(case_ids_file, allow_pickle=True)
+            
+            # Convert to DataFrame/Series for compatibility with existing pipeline
+            X = pd.DataFrame(X_np, index=case_ids)
+            y_categorical = pd.Series(y_np, index=case_ids)
+            
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            X = X.sort_index()
+            y_categorical = y_categorical.sort_index()
+            
+            # Labels are already encoded in pretrained features
+            le = LabelEncoder()
+            le.fit(y_categorical)
+            y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+            n_classes = len(le.classes_)
+            
+            log.info(f"Loaded pretrained features: X shape = {X.shape}, embed_dim = {X.shape[1]}")
+            log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
+            log.info(f"Total samples: {len(X)}, Class distribution: {dict(y.value_counts().sort_index())}")
+        else:
+            log.error(f"Pretrained features not found in: {args.pretrained_features_dir}")
+            log.error(f"Expected either split files ({args.datatype}_train_embeddings.npy) or combined ({args.datatype}_embeddings.npy)")
             return
-        if not os.path.exists(labels_file):
-            log.error(f"Labels file not found: {labels_file}")
-            return
-        if not os.path.exists(case_ids_file):
-            log.error(f"Case IDs file not found: {case_ids_file}")
-            return
-        
-        log.info(f"Loading pretrained features from: {args.pretrained_features_dir}")
-        X_np = np.load(pretrained_file)
-        y_np = np.load(labels_file, allow_pickle=True)  # String labels need allow_pickle
-        case_ids = np.load(case_ids_file, allow_pickle=True)  # String case IDs need allow_pickle
-        
-        # Convert to DataFrame/Series for compatibility with existing pipeline
-        X = pd.DataFrame(X_np, index=case_ids)
-        y_categorical = pd.Series(y_np, index=case_ids)
-        
-        # CRITICAL: Sort by case_id for consistent ordering across all scripts
-        X = X.sort_index()
-        y_categorical = y_categorical.sort_index()
-        
-        # Labels are already encoded in pretrained features
-        le = LabelEncoder()
-        le.fit(y_categorical)
-        y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
-        n_classes = len(le.classes_)
-        
-        log.info(f"Loaded pretrained features: X shape = {X.shape}, embed_dim = {X.shape[1]}")
-        log.info(f"Detected {n_classes} classes: {list(le.classes_)}")
-        log.info(f"Total samples: {len(X)}, Class distribution: {dict(y.value_counts().sort_index())}")
     else:
         # Original flow: load from parquet
         df = safe_load_parquet(os.path.join(SOURCE_DIR, f'data_{args.datatype}_.parquet'))

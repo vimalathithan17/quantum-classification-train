@@ -200,19 +200,29 @@ Prot:    (batch, 200)  → Encoder → (batch, 256)
 
 ### 1. Contrastive Pretraining (Option 2)
 
-Pretrain encoders on unlabeled data using contrastive learning:
+Pretrain encoders on unlabeled data using contrastive learning.
+
+> **⚠️ IMPORTANT: Data Leakage Prevention**
+>
+> Always use `--test_size 0.2` to split data BEFORE pretraining. This ensures the encoder
+> never sees test samples during training, preventing inflated evaluation metrics.
+>
+> Without `--test_size`: Encoder trains on ALL data → test samples "leak" into encoder → F1=1.0 (fake)
+> With `--test_size 0.2`: Encoder trains on 80% → honest evaluation on unseen 20% → realistic F1
 
 ```bash
-# Basic usage
+# ✓ RECOMMENDED: With train/test split (prevents data leakage)
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_models/contrastive \
+    --test_size 0.2 \
     --num_epochs 100
 
-# With cross-modal contrastive learning (recommended for multi-omics)
+# ✓ With cross-modal contrastive learning (recommended for multi-omics)
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_models/contrastive \
+    --test_size 0.2 \
     --num_epochs 100 \
     --use_cross_modal \
     --temperature 0.07
@@ -238,8 +248,11 @@ python examples/pretrain_contrastive.py \
 pretrained_models/contrastive/
 ├── best_model.pt                    # Combined model (all modalities)
 ├── contrastive_epoch_*.pt           # Periodic checkpoints
+├── train_indices.npy                # Train split indices (for extraction)
+├── test_indices.npy                 # Test split indices (for extraction)
+├── scalers.joblib                   # StandardScaler per modality (fit on train only)
 ├── encoders/                        # Per-modality encoders
-│   ├── mRNA_encoder.pt             
+│   ├── GeneExpr_encoder.pt             
 │   ├── miRNA_encoder.pt
 │   └── ...
 ├── projections/                     # Projection heads
@@ -322,7 +335,22 @@ python examples/extract_pretrained_features.py \
     --device cuda
 ```
 
-**Output:**
+**Output (with train/test split from pretraining):**
+```
+pretrained_features/
+├── GeneExpr_train_embeddings.npy    # Train embeddings per modality
+├── GeneExpr_test_embeddings.npy     # Test embeddings per modality
+├── miRNA_train_embeddings.npy
+├── miRNA_test_embeddings.npy
+├── ...                              # Other modalities
+├── train_labels.npy                 # Train labels
+├── test_labels.npy                  # Test labels
+├── train_case_ids.npy               # Train sample IDs
+├── test_case_ids.npy                # Test sample IDs
+└── extraction_metadata.json         # Configuration
+```
+
+**Output (legacy, without split - warns about leakage):**
 - `pretrained_features/{modality}_embeddings.npy` - Embeddings per modality
 - `pretrained_features/labels.npy` - Class labels
 - `pretrained_features/extraction_metadata.json` - Configuration
@@ -339,6 +367,14 @@ python examples/extract_transformer_features.py \
     --output_dir transformer_predictions \
     --output_format csv
 
+# With pretrained features (preserves train/test split)
+python examples/extract_transformer_features.py \
+    --model_dir transformer_models \
+    --output_dir transformer_predictions \
+    --use_pretrained_features \
+    --pretrained_features_dir pretrained_features \
+    --output_format csv
+
 # Extract all feature types in both formats
 python examples/extract_transformer_features.py \
     --model_dir transformer_models \
@@ -348,11 +384,13 @@ python examples/extract_transformer_features.py \
     --output_format both
 ```
 
-**Output (CSV format - metalearner compatible):**
+**Output (with train/test split - metalearner compatible):**
 - `transformer_predictions/train_oof_preds_Transformer.csv` - Training predictions
 - `transformer_predictions/test_preds_Transformer.csv` - Test predictions
+- `transformer_predictions/train_transformer_logits.npy` - Train logits
+- `transformer_predictions/test_transformer_logits.npy` - Test logits
 
-**Output (NPY format - for other uses):**
+**Output (legacy NPY format):**
 - `transformer_predictions/transformer_probabilities.npy` - Class probabilities
 - `transformer_predictions/transformer_predictions.npy` - Class predictions
 - `transformer_predictions/labels.npy` - Ground truth labels
@@ -366,22 +404,25 @@ python examples/extract_transformer_features.py \
 
 Combining QML base learners AND transformer fusion yields the best results:
 
+> **⚠️ CRITICAL: Use `--test_size 0.2` in Step 1 to prevent data leakage!**
+
 ```bash
-# Step 1: Pretrain encoders with contrastive learning
+# Step 1: Pretrain encoders with contrastive learning (SPLIT BEFORE TRAINING)
 python examples/pretrain_contrastive.py \
     --data_dir final_processed_datasets \
     --output_dir pretrained_models/contrastive \
+    --test_size 0.2 \
     --num_epochs 100 \
     --use_cross_modal \
     --batch_size 64
 
-# Step 2a: Extract pretrained features for QML base learners
+# Step 2a: Extract pretrained features (auto-detects split)
 python examples/extract_pretrained_features.py \
     --encoder_dir pretrained_models/contrastive/encoders \
     --data_dir final_processed_datasets \
     --output_dir pretrained_features
 
-# Step 2b: Train QML base learners on each modality
+# Step 2b: Train QML base learners on each modality (uses split files directly)
 for modality in GeneExpr miRNA Meth CNV Prot SNV; do
     OUTPUT_DIR=base_learner_outputs python dre_standard.py \
         --use_pretrained_features \
@@ -389,11 +430,11 @@ for modality in GeneExpr miRNA Meth CNV Prot SNV; do
         --datatypes $modality
 done
 
-# Step 3: Train transformer fusion with pretrained encoders
+# Step 3: Train transformer fusion with pretrained encoders (uses split data)
 python examples/train_transformer_fusion.py \
-    --data_dir final_processed_datasets \
+    --use_pretrained_features \
+    --pretrained_features_dir pretrained_features \
     --output_dir transformer_models \
-    --pretrained_encoders_dir pretrained_models/contrastive/encoders \
     --num_epochs 50 \
     --num_layers 4 \
     --num_heads 8 \
@@ -435,6 +476,7 @@ python metalearner.py \
 | `--use_cross_modal` | `False` | Use cross-modal contrastive loss |
 | `--impute_strategy` | auto | Strategy for handling NaN values: `none`, `median`, `mean`, `zero`, or `drop`. **Auto-selects**: `none` for transformer, `median` for MLP |
 | `--skip_modalities` | `None` | List of modalities to skip (e.g., `SNV Prot`) |
+| `--test_size` | `0.0` | Test set fraction (0.2 recommended). **Enables proper train/test split BEFORE pretraining to prevent data leakage** |
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--warmup_epochs` | `10` | Number of epochs for learning rate warmup (prevents gradient explosion) |

@@ -61,10 +61,12 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='none')
             - 'drop': Drop samples with any NaN (may reduce dataset size)
         
     Returns:
-        Tuple of (data_dict, modality_dims, nan_stats)
+        Tuple of (data_dict, modality_dims, nan_stats, case_ids, labels)
         - data_dict: Dict mapping modality names to numpy arrays
         - modality_dims: Dict mapping modality names to feature dimensions
         - nan_stats: Dict with NaN statistics per modality
+        - case_ids: Array of case IDs (for train/test split tracking)
+        - labels: Array of class labels (for stratified splitting)
     """
     data_dir = Path(data_dir)
     
@@ -74,6 +76,8 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='none')
     data = {}
     modality_dims = {}
     nan_stats = {}
+    case_ids = None
+    labels = None
     
     # Metadata columns to exclude from features (only case_id and class exist in the data)
     METADATA_COLS = {'class', 'case_id'}
@@ -92,6 +96,13 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='none')
             # CRITICAL: Sort by case_id for consistent ordering across all scripts
             if 'case_id' in df.columns:
                 df = df.sort_values('case_id')
+                # Extract case_ids from first modality
+                if case_ids is None:
+                    case_ids = df['case_id'].values
+            
+            # Extract labels from first modality (for stratified split)
+            if labels is None and 'class' in df.columns:
+                labels = df['class'].values
             
             # Extract features (exclude metadata columns)
             feature_cols = [col for col in df.columns if col.lower() not in METADATA_COLS and col not in METADATA_COLS]
@@ -146,7 +157,7 @@ def load_multiomics_data(data_dir, skip_modalities=None, impute_strategy='none')
         else:
             print(f"Warning: {file_path} not found, skipping {modality}")
     
-    return data, modality_dims, nan_stats
+    return data, modality_dims, nan_stats, case_ids, labels
 
 
 def main():
@@ -178,6 +189,8 @@ def main():
     data_args.add_argument('--impute_strategy', type=str, default=None,
                           choices=['none', 'median', 'mean', 'zero', 'drop'],
                           help='How to handle NaN values. Default: "none" for transformer encoder, "median" for MLP encoder')
+    data_args.add_argument('--test_size', type=float, default=0.2,
+                          help='Fraction of data to hold out for test (default: 0.2). CRITICAL: Encoder only sees train data to prevent leakage.')
     
     # Model architecture
     model_args = parser.add_argument_group('model architecture')
@@ -304,7 +317,7 @@ def main():
     
     # Load data with NaN handling
     print("Loading multi-omics data...")
-    data, modality_dims, nan_stats = load_multiomics_data(
+    data, modality_dims, nan_stats, case_ids, labels = load_multiomics_data(
         args.data_dir, 
         skip_modalities=args.skip_modalities,
         impute_strategy=args.impute_strategy
@@ -314,7 +327,8 @@ def main():
         print("Error: No data files found!")
         return
     
-    print(f"\nLoaded {len(data)} modalities:")
+    n_total_samples = list(data.values())[0].shape[0]
+    print(f"\nLoaded {len(data)} modalities with {n_total_samples} total samples:")
     for modality, dim in modality_dims.items():
         nan_info = nan_stats.get(modality, {})
         nan_pct = nan_info.get('nan_percentage', 0.0)
@@ -323,15 +337,85 @@ def main():
         else:
             print(f"  {modality}: {dim} features (no NaN)")
     
+    # CRITICAL: Train/test split BEFORE pretraining to prevent data leakage
+    # The encoder must NEVER see test samples during training
+    from sklearn.model_selection import train_test_split
+    
+    print(f"\n⚠️  IMPORTANT: Splitting data BEFORE pretraining to prevent data leakage")
+    print(f"   Encoder will only be trained on {100*(1-args.test_size):.0f}% of data (train split)")
+    
+    indices = np.arange(n_total_samples)
+    if labels is not None:
+        # Stratified split if we have labels
+        train_idx, test_idx = train_test_split(
+            indices, test_size=args.test_size, random_state=args.seed, stratify=labels
+        )
+        print(f"   Using stratified split (preserves class proportions)")
+    else:
+        train_idx, test_idx = train_test_split(
+            indices, test_size=args.test_size, random_state=args.seed
+        )
+        print(f"   Using random split (no labels for stratification)")
+    
+    # Create training-only data dict
+    train_data = {modality: features[train_idx] for modality, features in data.items()}
+    # Keep test data for later extraction
+    test_data = {modality: features[test_idx] for modality, features in data.items()}
+    
+    train_case_ids = case_ids[train_idx] if case_ids is not None else None
+    test_case_ids = case_ids[test_idx] if case_ids is not None else None
+    train_labels = labels[train_idx] if labels is not None else None
+    test_labels = labels[test_idx] if labels is not None else None
+    
+    print(f"   Train samples: {len(train_idx)} ({100*len(train_idx)/n_total_samples:.1f}%)")
+    print(f"   Test samples:  {len(test_idx)} ({100*len(test_idx)/n_total_samples:.1f}%)")
+    
+    # Save split information immediately (so downstream scripts know which samples are train/test)
+    split_dir = Path(args.output_dir)
+    split_dir.mkdir(parents=True, exist_ok=True)
+    
+    np.save(split_dir / 'train_indices.npy', train_idx)
+    np.save(split_dir / 'test_indices.npy', test_idx)
+    if train_case_ids is not None:
+        np.save(split_dir / 'train_case_ids.npy', train_case_ids)
+        np.save(split_dir / 'test_case_ids.npy', test_case_ids)
+    if labels is not None:
+        np.save(split_dir / 'labels.npy', labels)  # All labels for reference
+        np.save(split_dir / 'train_labels.npy', train_labels)
+        np.save(split_dir / 'test_labels.npy', test_labels)
+    
+    print(f"   Saved split info to {split_dir}/")
+    
+    # Standardize features (fit on train only to prevent leakage)
+    from sklearn.preprocessing import StandardScaler
+    
+    print(f"\n📊 Standardizing features (fit on train data only)...")
+    scalers = {}
+    for modality in train_data.keys():
+        scaler = StandardScaler()
+        # Fit on training data, transform both train and test
+        train_data[modality] = scaler.fit_transform(train_data[modality]).astype(np.float32)
+        test_data[modality] = scaler.transform(test_data[modality]).astype(np.float32)
+        scalers[modality] = scaler
+        
+        # Log scale info
+        print(f"  {modality}: mean≈{scaler.mean_.mean():.2f}, std≈{np.sqrt(scaler.var_).mean():.2f} (pre-scaling)")
+    
+    # Save scalers for inference (extract_pretrained_features.py will need them)
+    import joblib
+    scalers_path = split_dir / 'scalers.joblib'
+    joblib.dump(scalers, scalers_path)
+    print(f"   Saved scalers to {scalers_path}")
+    
     # Note: One encoder is created per modality file
-    print(f"\n📦 Encoders to be created: {len(data)} (one per modality)")
-    for modality in data.keys():
+    print(f"\n📦 Encoders to be created: {len(train_data)} (one per modality)")
+    for modality in train_data.keys():
         print(f"  - encoder_{modality}.pt")
     
-    # Create dataset (no labels needed for pretraining)
-    print("\nCreating dataset with augmentation...")
+    # Create dataset using TRAINING DATA ONLY (no labels needed for pretraining)
+    print("\nCreating dataset with augmentation (TRAIN SPLIT ONLY)...")
     dataset = MultiOmicsDataset(
-        data=data,
+        data=train_data,  # CRITICAL: Only training data!
         labels=None,  # No labels needed for pretraining
         apply_augmentation=True,
         num_augmented_views=2
@@ -485,7 +569,16 @@ def main():
             'final_loss': metrics['epoch_losses'][-1],
             'impute_strategy': args.impute_strategy,
             'skipped_modalities': args.skip_modalities or [],
-            'nan_statistics': nan_stats
+            'nan_statistics': nan_stats,
+            # CRITICAL: Track train/test split to prevent data leakage
+            'train_test_split': {
+                'test_size': args.test_size,
+                'seed': args.seed,
+                'n_train_samples': len(train_idx),
+                'n_test_samples': len(test_idx),
+                'n_total_samples': n_total_samples,
+                'split_files': ['train_indices.npy', 'test_indices.npy', 'train_case_ids.npy', 'test_case_ids.npy']
+            }
         }
     )
     

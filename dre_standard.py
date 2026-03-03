@@ -152,6 +152,8 @@ train_args.add_argument('--validation_frequency', type=int, default=10,
                        help='Validation metric frequency in steps (default: 10)')
 train_args.add_argument('--validation_frac', type=float, default=0.1,
                        help='Fraction of training data for validation during QML training (default: 0.1)')
+train_args.add_argument('--patience', type=int, default=50,
+                       help='Early stopping patience in steps (default: 50, 0 to disable)')
 
 # Checkpointing
 checkpoint_args = parser.add_argument_group('checkpointing')
@@ -241,24 +243,50 @@ for data_type in data_types:
 
     # --- Load Data and Encode Labels ---
     use_pretrained = args.use_pretrained_features and args.pretrained_features_dir is not None
+    pretrained_has_split = False  # Track if pretrained features have proper train/test split
     
     if use_pretrained:
-        # Load directly from .npy files (faster, assumes extract script saved in case_id sorted order)
+        # Check for properly split pretrained features (no leakage)
+        train_emb_file = os.path.join(args.pretrained_features_dir, f'{data_type}_train_embeddings.npy')
+        test_emb_file = os.path.join(args.pretrained_features_dir, f'{data_type}_test_embeddings.npy')
+        train_labels_file = os.path.join(args.pretrained_features_dir, 'train_labels.npy')
+        test_labels_file = os.path.join(args.pretrained_features_dir, 'test_labels.npy')
+        train_case_ids_file = os.path.join(args.pretrained_features_dir, 'train_case_ids.npy')
+        test_case_ids_file = os.path.join(args.pretrained_features_dir, 'test_case_ids.npy')
+        
+        # Also check old format (combined file)
         pretrained_file = os.path.join(args.pretrained_features_dir, f'{data_type}_embeddings.npy')
         labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
         case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
         
-        if not os.path.exists(pretrained_file):
-            log.warning(f"  - Pretrained file not found: {pretrained_file}, falling back to parquet")
-            use_pretrained = False
-        elif not os.path.exists(labels_file):
-            log.warning(f"  - Labels file not found: {labels_file}, falling back to parquet")
-            use_pretrained = False
-        elif not os.path.exists(case_ids_file):
-            log.warning(f"  - Case IDs file not found: {case_ids_file}, falling back to parquet")
-            use_pretrained = False
-        else:
-            log.info(f"  - Loading pretrained features from {args.pretrained_features_dir}")
+        if os.path.exists(train_emb_file) and os.path.exists(test_emb_file):
+            # ✓ Properly split pretrained features - use directly without additional splitting
+            log.info(f"  - Loading SPLIT pretrained features (no leakage)")
+            pretrained_has_split = True
+            
+            train_embeddings = np.load(train_emb_file)
+            test_embeddings = np.load(test_emb_file)
+            train_labels_raw = np.load(train_labels_file, allow_pickle=True)
+            test_labels_raw = np.load(test_labels_file, allow_pickle=True)
+            train_case_ids = np.load(train_case_ids_file, allow_pickle=True)
+            test_case_ids = np.load(test_case_ids_file, allow_pickle=True)
+            
+            # Convert to DataFrame/Series for compatibility
+            X_train = pd.DataFrame(train_embeddings, index=train_case_ids)
+            X_test = pd.DataFrame(test_embeddings, index=test_case_ids)
+            y_train = pd.Series(le.transform(train_labels_raw), index=train_case_ids)
+            y_test = pd.Series(le.transform(test_labels_raw), index=test_case_ids)
+            
+            log.info(f"  - Loaded train: {X_train.shape[0]} samples, {X_train.shape[1]} embed_dim")
+            log.info(f"  - Loaded test:  {X_test.shape[0]} samples, {X_test.shape[1]} embed_dim")
+            
+        elif os.path.exists(pretrained_file) and os.path.exists(labels_file) and os.path.exists(case_ids_file):
+            # ⚠️ Old format without split - warn about leakage
+            log.warning(f"  - ⚠️ LEAKAGE WARNING: Using combined pretrained features!")
+            log.warning(f"  - The encoder may have seen test samples during pretraining.")
+            log.warning(f"  - For proper evaluation, re-run pretrain_contrastive.py with --test_size 0.2")
+            log.warning(f"  - Then re-run extract_pretrained_features.py")
+            
             embeddings = np.load(pretrained_file)
             labels_raw = np.load(labels_file, allow_pickle=True)
             case_ids = np.load(case_ids_file, allow_pickle=True)
@@ -275,6 +303,9 @@ for data_type in data_types:
             y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
             
             log.info(f"  - Loaded pretrained features: {X.shape[0]} samples, {X.shape[1]} embed_dim")
+        else:
+            log.warning(f"  - Pretrained files not found in {args.pretrained_features_dir}, falling back to parquet")
+            use_pretrained = False
     
     if not use_pretrained:
         # Original flow: load from parquet
@@ -291,12 +322,15 @@ for data_type in data_types:
         # Use the pre-loaded master encoder to transform labels
         y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
     
-    # Deterministic train/test split using the shared RANDOM_STATE
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
+    # Deterministic train/test split (skip if pretrained features already split)
+    if not pretrained_has_split:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
     
     # Log data split information
-    log.info(f"  - Data split: Total={len(X)} samples, Train={len(X_train)} ({100*len(X_train)/len(X):.1f}%), Test={len(X_test)} ({100*len(X_test)/len(X):.1f}%)")
-    log.info(f"  - Features: {X.shape[1]} {'pretrained embed_dim' if use_pretrained else 'raw features'}")
+    total_samples = len(X_train) + len(X_test)
+    n_features = X_train.shape[1]
+    log.info(f"  - Data split: Total={total_samples} samples, Train={len(X_train)} ({100*len(X_train)/total_samples:.1f}%), Test={len(X_test)} ({100*len(X_test)/total_samples:.1f}%)")
+    log.info(f"  - Features: {n_features} {'pretrained embed_dim' if use_pretrained else 'raw features'}")
     train_class_counts = y_train.value_counts().sort_index()
     test_class_counts = y_test.value_counts().sort_index()
     log.info(f"  - Train class distribution: {dict(train_class_counts)}")
@@ -341,6 +375,7 @@ for data_type in data_types:
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
+                patience=args.patience if args.patience > 0 else None,
                 resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
@@ -367,6 +402,7 @@ for data_type in data_types:
                 max_training_time=args.max_training_time,
                 validation_frequency=args.validation_frequency,
                 validation_frac=args.validation_frac,
+                patience=args.patience if args.patience > 0 else None,
                 resume=args.resume,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,

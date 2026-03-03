@@ -24,6 +24,8 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 | 500+ samples | Transformer Fusion | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
 | 1000+ samples | Full Hybrid Pipeline | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
 
+> **⚠️ Data Leakage Prevention:** When using pretrained features from contrastive encoders, always use `--test_size 0.2` during pretraining to split data BEFORE encoder training. This prevents the encoder from seeing test samples. See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md#-data-leakage-prevention-important) for details.
+
 ---
 
 ## 🔄 Key Feature: 2-Step Preprocessing Funnel
