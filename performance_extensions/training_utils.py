@@ -15,7 +15,7 @@ from typing import Dict, Optional, Tuple, List
 from pathlib import Path
 import json
 
-from .contrastive_learning import ContrastiveMultiOmicsEncoder, ContrastiveLearningLoss, ModalityEncoder
+from .contrastive_learning import ContrastiveMultiOmicsEncoder, ContrastiveLearningLoss, ModalityEncoder, TransformerModalityEncoder
 from .augmentations import get_augmentation_pipeline
 
 
@@ -762,7 +762,24 @@ def load_pretrained_encoders(
         if not isinstance(embed_dim, int) or embed_dim <= 0:
             raise ValueError(f"Invalid embed_dim: {embed_dim}")
         
-        encoder = ModalityEncoder(input_dim, embed_dim, hidden_dim=hidden_dim)
+        # Create encoder based on encoder_type in metadata
+        encoder_type = metadata.get('encoder_type', 'mlp')
+        
+        if encoder_type == 'transformer':
+            # TransformerModalityEncoder requires additional params
+            d_model = metadata.get('transformer_d_model', 64)
+            num_heads = metadata.get('transformer_num_heads', 4)
+            num_layers = metadata.get('transformer_num_layers', 2)
+            encoder = TransformerModalityEncoder(
+                input_dim=input_dim,
+                embed_dim=embed_dim,
+                d_model=d_model,
+                num_heads=num_heads,
+                num_layers=num_layers
+            )
+        else:
+            # Default: MLP encoder
+            encoder = ModalityEncoder(input_dim, embed_dim, hidden_dim=hidden_dim)
         
         # Load weights
         try:
