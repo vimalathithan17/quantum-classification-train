@@ -34,6 +34,8 @@
 
 **Output:** `pretrained_models/encoders/` with encoder weights
 
+**Implementation note:** Contrastive pretraining now supports validation-based early stopping. Use `examples/pretrain_contrastive.py --val_size <frac> --patience <n>` to enable validation splits and early stopping. This helps prevent encoder overfitting on small datasets.
+
 ---
 
 ### Module 3: Feature Extraction
@@ -62,6 +64,8 @@
 | 4.6 Model Persistence | Save/load trained QML models | 4.4 |
 
 **Output:** `base_learner_outputs/` with predictions and models
+
+**Implementation note:** All QML classifiers (`qml_models.py`) now accept a `weight_decay` hyperparameter (default 0.0). When enabled, training applies an L2 penalty to quantum and classical readout weights to improve generalization. CLI scripts (`dre_standard.py`, `dre_relupload.py`, `cfe_standard.py`, `cfe_relupload.py`) can be updated to expose `--weight_decay` when running experiments.
 
 ---
 

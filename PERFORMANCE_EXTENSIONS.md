@@ -390,6 +390,8 @@ for batch in dataloader:
 
 **The Technology**: Contrastive learning trains models to distinguish between similar and dissimilar samples without needing labels. It learns representations where similar samples are close together and different samples are far apart in the embedding space.
 
+**Note (implementation update):** Contrastive pretraining now supports validation-based early stopping. The CLI `examples/pretrain_contrastive.py` accepts `--val_size` (fraction of training set reserved for validation) and `--patience` (early stopping patience). The training utility in `performance_extensions/training_utils.py` will monitor validation loss and stop when no improvement is seen for `patience` epochs.
+
 ### Encoder Architecture Choices
 
 The contrastive framework supports two encoder types for different use cases:

@@ -28,6 +28,12 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 
 ---
 
+## Recent Updates
+
+- Added validation-based early stopping to contrastive pretraining (`examples/pretrain_contrastive.py` and `performance_extensions/training_utils.py`). Use `--val_size` and `--patience` to enable/adjust early stopping during encoder pretraining.
+- All QML classifiers in `qml_models.py` now accept a `weight_decay` parameter and apply L2 regularization to the loss (controlled via `weight_decay`, default 0.0).
+
+
 ## 🔄 Key Feature: 2-Step Preprocessing Funnel
 
 Training-time preprocessing for quantum circuits. If using the data notebooks, set `SOURCE_DIR=final_processed_datasets_xgb_balanced`. See [DATA_PROCESSING.md](DATA_PROCESSING.md).

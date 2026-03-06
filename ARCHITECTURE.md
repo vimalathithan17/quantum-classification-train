@@ -377,6 +377,8 @@ The classical parameters are included in the optimizer state and checkpointing s
 The QML model classes use a cached PennyLane QNode to avoid repeated re-creation overhead. Because the cached QNode is a nested function (a closure), it isn't picklable by default. To support model persistence with `joblib`/pickle and reliable serialization across processes, the classes implement custom `__getstate__` and `__setstate__` methods:
 
 - `__getstate__`: Removes the non-picklable `_qcircuit` (the cached QNode) and the stored `_activation_fn` callable from the instance state before pickling. This produces a pickle-friendly state that contains all numeric parameters (quantum weights, classical weights and optimizer state) but not the runtime QNode object.
+
+Note: recent updates add a `weight_decay` hyperparameter to all QML classifier classes in `qml_models.py`. When set > 0, a small L2 penalty is applied to the quantum and classical weights during training to improve generalization and reduce overfitting.
 - `__setstate__`: Restores the numeric state and lazily recreates the cached QNode by calling the model's `_get_circuit()` factory. It also reinitializes the activation callable based on the `readout_activation` string.
 
 This design ensures pickled models are portable and can be unpickled in environments where PennyLane is available; if the device/QNode cannot be recreated during unpickle, the code falls back gracefully by setting the `_qcircuit` attribute to `None` and recreating it later on first use.

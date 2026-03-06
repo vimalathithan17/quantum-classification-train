@@ -160,7 +160,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -183,6 +183,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs  # used by joblib parallel fallback
+        self.weight_decay = weight_decay  # L2 regularization
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -493,6 +494,14 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                 else:
                     # If no samples have data (degenerate), fall back to mean of per-sample loss
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(w_quantum ** 2) + np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
             
             # Update all parameters jointly
@@ -700,7 +709,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         # n_qubits may be None here; we will infer it from the base_preds shape during fit if so
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -724,6 +733,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs
+        self.weight_decay = weight_decay  # L2 regularization
 
         # device created lazily when we know number of qubits
         self.dev = None
@@ -861,6 +871,8 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         validation used in `MulticlassQuantumClassifierDR.fit` but applies
         the classical indicator mask to the base-learner predictions before
         sending them to the quantum circuit.
+        
+        L2 regularization is applied to quantum and classical weights when weight_decay > 0.
         """
         base_preds, mask = X
         base_preds = np.atleast_2d(np.asarray(base_preds, dtype=np.float64))
@@ -871,6 +883,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
             raise ValueError(f"base_preds shape {base_preds.shape} and mask shape {mask.shape} must match")
 
         # Store the classes seen during fit (required by sklearn)
+        # NOTE: GatedMulticlassQuantumClassifierDR variant
         self.classes_ = np.unique(y)
 
         # Set default fallback dir based on checkpoint dir name
@@ -988,7 +1001,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
         step = start_step
         patience_counter = 0
 
-        # Training loop
+        # Training loop - GatedMulticlassQuantumClassifierDR
         while True:
             def cost(w_quantum, w1, b1, w2, b2):
                 # Apply mask to training inputs
@@ -1022,6 +1035,14 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                     loss = np.mean(per_sample_loss[sample_has_data])
                 else:
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(w_quantum ** 2) + np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
 
             (self.weights, self.W1, self.b1, self.W2, self.b2), current_loss = opt.step_and_cost(
@@ -1207,7 +1228,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -1230,6 +1251,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs
+        self.weight_decay = weight_decay  # L2 regularization
 
         # lazy device and qnode initialization
         self.dev = None
@@ -1366,6 +1388,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
             raise ValueError(f"base_preds shape {base_preds.shape} and mask shape {mask.shape} must match")
 
         # Store classes
+        # NOTE: GatedMulticlassQuantumClassifierDataReuploadingDR variant
         self.classes_ = np.unique(y)
 
         # Set default fallback dir based on checkpoint dir name
@@ -1483,7 +1506,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
         step = start_step
         patience_counter = 0
 
-        # Training loop
+        # Training loop - GatedMulticlassQuantumClassifierDataReuploadingDR
         while True:
             def cost(w_quantum, w1, b1, w2, b2):
                 # Apply mask to training inputs
@@ -1517,6 +1540,14 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
                     loss = np.mean(per_sample_loss[sample_has_data])
                 else:
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(w_quantum ** 2) + np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
 
             (self.weights, self.W1, self.b1, self.W2, self.b2), current_loss = opt.step_and_cost(
@@ -1719,7 +1750,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -1742,6 +1773,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs  # used by joblib parallel fallback
+        self.weight_decay = weight_decay  # L2 regularization
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -2041,6 +2073,14 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                     loss = np.mean(per_sample_loss[sample_has_data])
                 else:
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(w_quantum ** 2) + np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
             
             # Update all parameters jointly
@@ -2260,7 +2300,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -2283,6 +2323,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs  # used by joblib parallel fallback
+        self.weight_decay = weight_decay  # L2 regularization
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -2617,6 +2658,15 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                     loss = np.mean(per_sample_loss[sample_has_data])
                 else:
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(weights_ansatz ** 2) + np.sum(weights_missing ** 2) + 
+                        np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
             
             # Update all parameters jointly
@@ -2856,7 +2906,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
                  resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
-                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1):
+                 use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.n_classes = n_classes
@@ -2879,6 +2929,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.n_jobs = n_jobs  # used by joblib parallel fallback
+        self.weight_decay = weight_decay  # L2 regularization
 
         assert self.n_qubits >= self.n_classes, "Number of qubits must be >= number of classes."
         self.dev = qml.device("default.qubit", wires=self.n_qubits)
@@ -3199,6 +3250,15 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                     loss = np.mean(per_sample_loss[sample_has_data])
                 else:
                     loss = np.mean(per_sample_loss)
+                
+                # L2 regularization on quantum and classical weights
+                if self.weight_decay > 0:
+                    l2_reg = 0.5 * self.weight_decay * (
+                        np.sum(w_ansatz ** 2) + np.sum(w_missing ** 2) + 
+                        np.sum(w1 ** 2) + np.sum(w2 ** 2)
+                    )
+                    loss = loss + l2_reg
+                
                 return loss
 
             # Update all parameters jointly

@@ -56,6 +56,11 @@ Each team member will train a different variant of the contrastive encoder to co
 - `--max_grad_norm 1.0`
 - `--warmup_epochs 20` (prevents early gradient explosion)
 
+**New/Important Flags (team-wide):**
+- `--val_size <float>`: Reserve a fraction of training data for validation in pretraining (e.g. 0.1). Use to enable validation-based early stopping.
+- `--patience <int>`: Early-stopping patience (number of epochs with no val improvement before stopping) for contrastive pretraining.
+- `--weight_decay <float>`: L2 regularization applied to QML classifiers and (optionally) encoder optimizers. Default `0.0` (disabled). Recommended `1e-4`–`1e-2` for small datasets.
+
 ---
 
 ## Encoder Types
@@ -338,6 +343,10 @@ python dre_standard.py \
     --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits <best_qbits> --n_layers <best_layers> --steps 200 \
+    --learning_rate 0.05 \
+    --weight_decay 0.01 \
+    --patience 30 \
+    --validation_frac 0.15 \
     --use_wandb --wandb_project qml-classification --wandb_run_name member3_all_standard \
     --verbose
 ```
@@ -496,6 +505,10 @@ python dre_standard.py \
     --use_pretrained_features \
     --pretrained_features_dir /kaggle/working/pretrained_features_transformer_128dim \
     --n_qbits 14 --n_layers 4 --steps 200 \
+    --learning_rate 0.05 \
+    --weight_decay 0.01 \
+    --patience 30 \
+    --validation_frac 0.15 \
     --use_wandb --wandb_project qml-comparison --wandb_run_name geneexpr_transformer_128dim \
     --verbose
 ```

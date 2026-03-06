@@ -122,6 +122,8 @@ model_args.add_argument('--scaler', type=str, default=None,
                        help="Scaler: 's'=Standard, 'm'=MinMax, 'r'=Robust")
 model_args.add_argument('--skip_tuning', action='store_true',
                        help='Use CLI args instead of tuned parameters')
+model_args.add_argument('--weight_decay', type=float, default=0.0,
+                       help='L2 regularization (weight decay) for QML models (0 to disable)')
 
 mode_args = parser.add_argument_group('training mode (mutually exclusive)')
 mode_args.add_argument('--skip_cross_validation', action='store_true',
@@ -329,6 +331,7 @@ for data_type in data_types:
             model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
+                weight_decay=args.weight_decay,
                 checkpoint_dir=checkpoint_dir,
                 checkpoint_fallback_dir=args.checkpoint_fallback_dir,
                 checkpoint_frequency=args.checkpoint_frequency,
@@ -399,6 +402,7 @@ for data_type in data_types:
     final_model = ConditionalMulticlassQuantumClassifierDataReuploadingFS(
                 n_qubits=n_qubits, n_layers=config['n_layers'],
                 steps=config['steps'], n_classes=n_classes, verbose=args.verbose,
+                weight_decay=args.weight_decay,
                 checkpoint_dir=checkpoint_dir,
                 checkpoint_fallback_dir=args.checkpoint_fallback_dir,
                 checkpoint_frequency=args.checkpoint_frequency,
