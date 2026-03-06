@@ -216,6 +216,10 @@ def main():
                            help='Use full batch gradient descent (entire dataset per update)')
     train_args.add_argument('--num_epochs', type=int, default=100,
                            help='Number of pretraining epochs (default: 100)')
+    train_args.add_argument('--val_size', type=float, default=0.1,
+                           help='Fraction of training data for validation (default: 0.1). Set to 0 to disable validation.')
+    train_args.add_argument('--patience', type=int, default=15,
+                           help='Early stopping patience (epochs without improvement). Set to 0 to disable. (default: 15)')
     train_args.add_argument('--lr', type=float, default=1e-3,
                            help='Learning rate (default: 0.001)')
     
@@ -407,6 +411,31 @@ def main():
     joblib.dump(scalers, scalers_path)
     print(f"   Saved scalers to {scalers_path}")
     
+    # Split training data into train/validation for early stopping (if val_size > 0)
+    val_data = None
+    val_dataloader = None
+    
+    if args.val_size > 0:
+        n_train = len(train_idx)
+        val_indices = np.arange(n_train)
+        
+        # Simple random split of already-split training indices
+        np.random.seed(args.seed)
+        np.random.shuffle(val_indices)
+        
+        n_val = int(n_train * args.val_size)
+        val_idx_subset = val_indices[:n_val]
+        train_idx_subset = val_indices[n_val:]
+        
+        print(f"\n🔍 Validation split for early stopping:")
+        print(f"   Train subset: {len(train_idx_subset)} samples")
+        print(f"   Val subset:   {len(val_idx_subset)} samples")
+        
+        # Create validation data dict
+        val_data = {modality: features[val_idx_subset] for modality, features in train_data.items()}
+        # Update train_data to only include train subset
+        train_data = {modality: features[train_idx_subset] for modality, features in train_data.items()}
+    
     # Note: One encoder is created per modality file
     print(f"\n📦 Encoders to be created: {len(train_data)} (one per modality)")
     for modality in train_data.keys():
@@ -440,6 +469,25 @@ def main():
     
     print(f"Dataset size: {len(dataset)} samples")
     print(f"Number of batches: {len(dataloader)}")
+    
+    # Create validation dataloader if validation enabled
+    if val_data is not None:
+        val_dataset = MultiOmicsDataset(
+            data=val_data,
+            labels=None,
+            apply_augmentation=True,  # Still use augmentation for consistent loss calculation
+            num_augmented_views=2
+        )
+        val_dataloader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=actual_batch_size,
+            shuffle=False,  # No need to shuffle validation
+            num_workers=0,
+            drop_last=False,
+            collate_fn=collate_augmented_multiomics
+        )
+        print(f"Validation dataset size: {len(val_dataset)} samples")
+        print(f"Validation batches: {len(val_dataloader)}")
     
     # Create model
     print(f"\nInitializing contrastive encoder (type={args.encoder_type}, embed_dim={args.embed_dim})...")
@@ -524,6 +572,8 @@ def main():
     # Pretrain
     print("\n" + "="*80)
     print("Starting Pretraining")
+    if val_dataloader is not None:
+        print(f"Validation enabled: early stopping with patience={args.patience}")
     print("="*80 + "\n")
     
     metrics = pretrain_contrastive(
@@ -542,7 +592,9 @@ def main():
         warmup_epochs=args.warmup_epochs,
         scheduler=scheduler,
         verbose=True,
-        wandb_run=wandb_run
+        wandb_run=wandb_run,
+        val_dataloader=val_dataloader,
+        patience=args.patience if args.patience > 0 else None
     )
     
     # Save final pretrained encoders
@@ -567,6 +619,11 @@ def main():
             'temperature': args.temperature,
             'use_cross_modal': args.use_cross_modal,
             'final_loss': metrics['epoch_losses'][-1],
+            'best_val_loss': metrics.get('best_val_loss'),
+            'best_epoch': metrics.get('best_epoch'),
+            'early_stopped': metrics.get('early_stopped', False),
+            'val_size': args.val_size,
+            'patience': args.patience,
             'impute_strategy': args.impute_strategy,
             'skipped_modalities': args.skip_modalities or [],
             'nan_statistics': nan_stats,
@@ -588,21 +645,31 @@ def main():
     
     # Compute loss statistics for unsupervised training
     epoch_losses = metrics['epoch_losses']
+    val_losses = metrics.get('val_losses', [])
+    
     loss_stats = {
         'min_loss': float(min(epoch_losses)),
         'max_loss': float(max(epoch_losses)),
         'final_loss': float(epoch_losses[-1]),
         'mean_loss': float(np.mean(epoch_losses)),
         'std_loss': float(np.std(epoch_losses)),
-        'best_epoch': int(np.argmin(epoch_losses) + 1),
+        'best_train_epoch': int(np.argmin(epoch_losses) + 1),
         'convergence_delta': float(epoch_losses[-1] - min(epoch_losses)) if len(epoch_losses) > 1 else 0.0,
         'improvement_ratio': float((epoch_losses[0] - epoch_losses[-1]) / epoch_losses[0]) if epoch_losses[0] > 0 else 0.0
     }
     
+    # Add validation stats if available
+    if val_losses:
+        loss_stats['best_val_loss'] = float(min(val_losses))
+        loss_stats['final_val_loss'] = float(val_losses[-1])
+        loss_stats['best_val_epoch'] = int(np.argmin(val_losses) + 1)
+    
     with open(metrics_path, 'w') as f:
         json.dump({
             'epoch_losses': epoch_losses,
+            'val_losses': val_losses,
             'loss_statistics': loss_stats,
+            'early_stopped': metrics.get('early_stopped', False),
             'config': {k: v for k, v in vars(args).items() if k != 'resume'}  # Exclude non-serializable
         }, f, indent=2)
     
@@ -610,7 +677,11 @@ def main():
     print(f"\\nLoss Statistics:")
     print(f"  Initial loss: {epoch_losses[0]:.4f}")
     print(f"  Final loss: {loss_stats['final_loss']:.4f}")
-    print(f"  Best loss: {loss_stats['min_loss']:.4f} (epoch {loss_stats['best_epoch']})")
+    print(f"  Best train loss: {loss_stats['min_loss']:.4f} (epoch {loss_stats['best_train_epoch']})")
+    if val_losses:
+        print(f"  Best val loss: {loss_stats['best_val_loss']:.4f} (epoch {loss_stats['best_val_epoch']})")
+        if metrics.get('early_stopped'):
+            print(f"  ⚠️  Training stopped early at epoch {len(epoch_losses)}")
     print(f"  Improvement: {loss_stats['improvement_ratio']*100:.1f}%")
     
     # Plot training curve
@@ -618,10 +689,13 @@ def main():
         import matplotlib.pyplot as plt
         
         plt.figure(figsize=(10, 6))
-        plt.plot(metrics['epoch_losses'])
+        plt.plot(metrics['epoch_losses'], label='Train Loss')
+        if val_losses:
+            plt.plot(val_losses, label='Val Loss', linestyle='--')
+            plt.legend()
         plt.xlabel('Epoch')
         plt.ylabel('Contrastive Loss')
-        plt.title('Pretraining Loss Curve')
+        plt.title('Pretraining Loss Curve' + (' (Early Stopped)' if metrics.get('early_stopped') else ''))
         plt.grid(True)
         
         plot_path = Path(args.output_dir) / "loss_curve.png"

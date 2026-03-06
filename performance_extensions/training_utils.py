@@ -165,7 +165,9 @@ def pretrain_contrastive(
     warmup_epochs: int = 10,
     scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
     verbose: bool = True,
-    wandb_run = None
+    wandb_run = None,
+    val_dataloader: Optional[DataLoader] = None,
+    patience: Optional[int] = None
 ) -> Dict[str, List[float]]:
     """
     Pretrain model with contrastive learning.
@@ -187,6 +189,8 @@ def pretrain_contrastive(
         scheduler: Learning rate scheduler (optional, stepped after warmup completes)
         verbose: Whether to print progress
         wandb_run: Weights & Biases run object for logging (optional)
+        val_dataloader: Optional validation DataLoader for early stopping
+        patience: Early stopping patience (epochs without improvement). None to disable.
         
     Returns:
         Dictionary of training metrics
@@ -194,9 +198,16 @@ def pretrain_contrastive(
     model.to(device)
     model.train()
     
-    metrics = {'epoch_losses': [], 'batch_losses': []}
+    metrics = {'epoch_losses': [], 'batch_losses': [], 'val_losses': []}
     best_loss = float('inf')
+    best_val_loss = float('inf')
     saved_checkpoints = []  # Track checkpoint paths for cleanup
+    epochs_without_improvement = 0
+    best_epoch = 0
+    use_validation = val_dataloader is not None
+    
+    if use_validation and verbose:
+        print(f"Validation enabled: early stopping with patience={patience}")
     
     # Store base learning rate for warmup
     base_lr = optimizer.param_groups[0]['lr']
@@ -311,21 +322,82 @@ def pretrain_contrastive(
             if verbose and epoch == warmup_epochs:
                 print(f"LR scheduler active. Current LR: {optimizer.param_groups[0]['lr']:.2e}")
         
+        # Validation loop (if validation dataloader provided)
+        val_loss = None
+        if use_validation:
+            model.eval()
+            val_epoch_loss = 0.0
+            val_n_batches = 0
+            
+            with torch.no_grad():
+                for val_batch_idx, (val_data_dict, _) in enumerate(val_dataloader):
+                    # Move augmented views to device
+                    val_augmented_views = {}
+                    for modality, views in val_data_dict.items():
+                        val_augmented_views[modality] = [v.to(device) for v in views]
+                    
+                    # Forward pass
+                    val_embeddings = {}
+                    val_projections = {}
+                    val_valid_masks = {}
+                    
+                    for modality, views in val_augmented_views.items():
+                        emb, proj, valid_mask = model(views[0], modality, return_projection=True)
+                        val_embeddings[modality] = emb
+                        val_projections[modality] = proj
+                        val_valid_masks[modality] = valid_mask
+                    
+                    # Compute validation loss
+                    v_loss, _ = loss_fn(val_augmented_views, val_embeddings, val_projections, model, val_valid_masks)
+                    
+                    if not (torch.isnan(v_loss) or torch.isinf(v_loss)):
+                        val_epoch_loss += v_loss.item()
+                        val_n_batches += 1
+            
+            model.train()  # Back to training mode
+            
+            val_loss = val_epoch_loss / val_n_batches if val_n_batches > 0 else float('nan')
+            metrics['val_losses'].append(val_loss)
+            
+            if verbose:
+                print(f"  Validation Loss: {val_loss:.4f}")
+            
+            # Early stopping check
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_without_improvement = 0
+                best_epoch = epoch
+            else:
+                epochs_without_improvement += 1
+                if verbose:
+                    print(f"  No improvement for {epochs_without_improvement} epoch(s)")
+                
+                if patience is not None and epochs_without_improvement >= patience:
+                    if verbose:
+                        print(f"\n⚠️  Early stopping triggered at epoch {epoch+1} (patience={patience})")
+                        print(f"   Best validation loss: {best_val_loss:.4f} at epoch {best_epoch+1}")
+                    break
+        
         # Log to wandb
         if wandb_run is not None:
             try:
                 log_dict = {'epoch': epoch + 1, 'loss': avg_epoch_loss, 'lr': optimizer.param_groups[0]['lr']}
+                if val_loss is not None:
+                    log_dict['val_loss'] = val_loss
                 for key, vals in epoch_loss_dict.items():
                     log_dict[key] = np.mean(vals)
                 wandb_run.log(log_dict)
             except Exception:
                 pass  # Non-fatal, continue training
         
-        # Save best model (based on contrastive loss - lower is better)
-        # Note: Contrastive loss indicates how well the model learns to distinguish samples.
-        # Lower loss = better separation of positive/negative pairs in embedding space.
-        if checkpoint_dir is not None and avg_epoch_loss < best_loss:
-            best_loss = avg_epoch_loss
+        # Determine which loss to use for best model (prefer validation if available)
+        current_loss_for_best = val_loss if use_validation and val_loss is not None else avg_epoch_loss
+        reference_best = best_val_loss if use_validation else best_loss
+        
+        # Save best model (based on validation loss if available, else training loss)
+        # Note: Lower loss = better separation of positive/negative pairs in embedding space.
+        if checkpoint_dir is not None and current_loss_for_best <= reference_best:
+            best_loss = avg_epoch_loss  # Always track training loss
             
             # Save combined model (for easy loading)
             best_model_path = checkpoint_dir / "best_model.pt"
@@ -334,6 +406,7 @@ def pretrain_contrastive(
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_epoch_loss,
+                'val_loss': val_loss,
                 'modality_dims': model.modality_dims,
                 'embed_dim': model.embed_dim,
                 'projection_dim': model.projection_dim,
@@ -353,6 +426,7 @@ def pretrain_contrastive(
                     'encoder_type': model.encoder_type,
                     'epoch': epoch,
                     'loss': avg_epoch_loss,
+                    'val_loss': val_loss,
                 }, encoder_path)
             
             # Also save projection heads separately (useful for continued pretraining)
@@ -368,7 +442,8 @@ def pretrain_contrastive(
                 }, proj_path)
             
             if verbose:
-                print(f"  New best model saved (loss: {best_loss:.4f})")
+                loss_info = f"val_loss: {val_loss:.4f}" if val_loss is not None else f"train_loss: {best_loss:.4f}"
+                print(f"  New best model saved ({loss_info})")
                 print(f"    - Combined: {best_model_path}")
                 print(f"    - Per-modality encoders: {encoders_dir}/")
         
@@ -406,6 +481,10 @@ def pretrain_contrastive(
     
     # Add best_loss to metrics
     metrics['best_loss'] = best_loss
+    if use_validation:
+        metrics['best_val_loss'] = best_val_loss
+        metrics['best_epoch'] = best_epoch
+        metrics['early_stopped'] = epochs_without_improvement >= (patience or float('inf'))
     
     return metrics
 
