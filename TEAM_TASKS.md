@@ -343,7 +343,6 @@ python dre_standard.py \
     --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits <best_qbits> --n_layers <best_layers> --steps 200 \
-    --learning_rate 0.05 \
     --weight_decay 0.01 \
     --patience 30 \
     --validation_frac 0.15 \
@@ -441,6 +440,9 @@ python dre_relupload.py \
     --use_pretrained_features \
     --pretrained_features_dir /kaggle/input/datasets/vimalathithan22i272/qml-tcga-pretrained-encoder-extracted-features/pretrained_features_mlp_264dim \
     --n_qbits <best_qbits> --n_layers <best_layers> --steps 200 \
+    --weight_decay 0.01 \
+    --patience 30 \
+    --validation_frac 0.15 \
     --use_wandb --wandb_project qml-classification --wandb_run_name member4_all_reup \
     --verbose
 ```
@@ -505,7 +507,6 @@ python dre_standard.py \
     --use_pretrained_features \
     --pretrained_features_dir /kaggle/working/pretrained_features_transformer_128dim \
     --n_qbits 14 --n_layers 4 --steps 200 \
-    --learning_rate 0.05 \
     --weight_decay 0.01 \
     --patience 30 \
     --validation_frac 0.15 \
