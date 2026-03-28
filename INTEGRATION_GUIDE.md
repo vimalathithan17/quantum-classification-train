@@ -214,12 +214,30 @@ python examples/pretrain_contrastive.py \
     --weight_decay 1e-4 \
     --lr_scheduler cosine
 
-# Step 2: Train transformer with pretrained encoders
+# Step 2: Train transformer with pretrained encoders (UPDATED with modern regularization)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --pretrained_encoders_dir pretrained_encoders/encoders \
     --output_dir transformer_models \
-    --num_epochs 50
+    --num_epochs 50 \
+    --batch_size 32 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --val_size 0.15 \
+    --patience 10 \
+    --lr_scheduler ReduceLROnPlateau \
+    --lr_patience 4 \
+    --min_lr 1e-6 \
+    --use_cls_token \
+    --verbose
+
+# NEW: Class weighting and loss details:
+# The script now applies class weights (inverse of class frequency) to handle imbalance
+# Label smoothing (0.05) prevents overconfident predictions on training data
+# ReduceLROnPlateau reduces learning rate if validation loss plateaus
+# Early stopping (patience=10) prevents overfitting when val_f1_weighted stops improving
+# Dropout (0.2) applied to all layers for regularization
 
 # Step 3: Extract transformer predictions as features (CSV format for metalearner)
 python examples/extract_transformer_features.py \
@@ -273,14 +291,34 @@ Final Classification (no QML meta-learner)
 
 **Implementation:**
 ```bash
-# Direct transformer training (no QML)
+# Direct transformer training with regularization (no QML, no pretrained encoders)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --output_dir transformer_only_models \
     --num_epochs 50 \
     --num_layers 6 \
     --num_heads 8 \
-    --embed_dim 256
+    --embed_dim 256 \
+    --batch_size 32 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --val_size 0.15 \
+    --patience 10 \
+    --lr_scheduler ReduceLROnPlateau \
+    --lr_patience 4 \
+    --min_lr 1e-6 \
+    --use_cls_token \
+    --verbose
+
+# Key improvements in this refactored version:
+# - Proper train/val/test split (no test leakage): val_set carved from training data
+# - Class-weighted loss: Handles imbalanced classes
+# - Label smoothing (0.05): Prevents overconfident predictions
+# - AdamW optimizer: Built-in L2 weight decay for regularization
+# - ReduceLROnPlateau: Adaptive learning rate scheduling
+# - Early stopping: Based on validation F1 (not accuracy)
+# - Best model selection: Reloads best checkpoint for test evaluation
 ```
 
 ---

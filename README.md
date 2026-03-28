@@ -30,8 +30,10 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 
 ## Recent Updates
 
+- **Regularization Defaults Strengthened:** All QML training scripts now use `weight_decay=1e-3` (was 0.0), `validation_frac=0.2` (was 0.1), and `patience=25` (was 50) by default to reduce overfitting. Override via CLI flags if needed.
+- Transformer fusion now includes modern regularization: class weighting, label smoothing, AdamW optimizer, ReduceLROnPlateau scheduler, and configurable dropout. See `train_transformer_fusion.py` for new args: `--dropout`, `--weight_decay`, `--label_smoothing`, `--patience`, `--lr_patience`.
 - Added validation-based early stopping to contrastive pretraining (`examples/pretrain_contrastive.py` and `performance_extensions/training_utils.py`). Use `--val_size` and `--patience` to enable/adjust early stopping during encoder pretraining.
-- All QML classifiers in `qml_models.py` now accept a `weight_decay` parameter and apply L2 regularization to the loss (controlled via `weight_decay`, default 0.0).
+- All QML classifiers in `qml_models.py` now accept a `weight_decay` parameter and apply L2 regularization to the loss (controlled via `weight_decay`, **default 1e-3**).
 
 
 ## 🔄 Key Feature: 2-Step Preprocessing Funnel
@@ -736,7 +738,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
 	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
 	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
-	- `--validation_frac` (float, default 0.1): Fraction of training data for internal validation during QML training.
+	- `--validation_frac` (float, default 0.2): Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection.
+	- `--patience` (int, default 25): Early stopping patience in steps. Reduced from 50 for faster convergence.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name.
@@ -765,7 +768,8 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
 	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
 	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
-	- `--validation_frac` (float, default 0.1): Fraction of training data for internal validation during QML training.
+	- `--validation_frac` (float, default 0.2): Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection.
+	- `--patience` (int, default 25): Early stopping patience in steps. Reduced from 50 for faster convergence.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name.
@@ -866,7 +870,8 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_t
 | `--checkpoint_fallback_dir` | str | No | `None` | - | Fallback directory for checkpoints if primary is read-only. |
 | `--resume` | str | No | `None` | `best`, `latest`, `auto` | Resume from checkpoint: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). |
 | `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
-| `--validation_frac` | float | No | `0.1` | - | Fraction of training data for internal validation during QML training. |
+| `--validation_frac` | float | No | `0.2` | - | Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection. |
+| `--patience` | int | No | `25` | - | Early stopping patience in steps. Reduced from 50 for faster convergence. |
 | `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging. |
 | `--wandb_project` | str | No | `None` | - | W&B project name. |
 | `--wandb_run_name` | str | No | `None` | - | W&B run name. |

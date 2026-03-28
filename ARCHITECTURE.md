@@ -1155,9 +1155,9 @@ python dre_standard.py --skip_tuning --n_qbits 8 --n_layers 4
 **Configuration:**
 ```python
 model = MulticlassQuantumClassifierDR(
-    validation_frac=0.1,      # Hold out 10% for validation
+    validation_frac=0.2,      # Hold out 20% for validation (increased from 0.1)
     selection_metric='f1_weighted',  # Use weighted F1 for model selection
-    patience=20                # Stop if no improvement for 20 epochs (optional)
+    patience=25               # Stop if no improvement for 25 steps (increased from 20)
 )
 ```
 

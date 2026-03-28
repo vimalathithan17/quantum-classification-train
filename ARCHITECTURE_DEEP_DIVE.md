@@ -2678,9 +2678,9 @@ for param in model.parameters():
 ║                                                                              ║
 ║  QML MODELS:                                                                 ║
 ║   • Start with lr=0.1, reduce if unstable                                   ║
-║   • Use validation_frac=0.1-0.2 for early stopping                          ║
+║   • Use validation_frac=0.2+ (default 0.2 – increased for better detection) ║
 ║   • Enable checkpointing for long runs (checkpoint_frequency=10)            ║
-║   • Use patience=50-100 for early stopping                                  ║
+║   • Use patience=25+ (default 25 – reduced for faster early stopping)       ║
 ║                                                                              ║
 ║  CONTRASTIVE PRETRAINING:                                                   ║
 ║   • Always use LR warmup (5-10 epochs)                                      ║
@@ -2698,8 +2698,9 @@ for param in model.parameters():
 ║                                                                              ║
 ║  TRANSFORMER FUSION:                                                        ║
 ║   • Use Pre-LN configuration (norm_first=True)                              ║
-║   • AdamW with weight_decay=0.01                                            ║
-║   • Lower LR than contrastive (1e-4 to 5e-5)                               ║
+║   • AdamW with weight_decay=0.01, class_weighting=True, label_smoothing=0.05║
+║   • Lower LR than contrastive (1e-4 to 5e-5) with ReduceLROnPlateau        ║
+║   • Dropout=0.2, proper train/val/test splits (no test leakage)            ║
 ║   • Watch for overfitting with small datasets                               ║
 ║                                                                              ║
 ║  GENERAL:                                                                   ║

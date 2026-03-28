@@ -273,35 +273,61 @@ pretrained_models/contrastive/
 
 **Note:** Training behavior is unchanged. Checkpoint saving is enhanced to support loading individual modality encoders.
 
-### 2. Transformer Fusion Training (Option 1)
+### 2. Transformer Fusion Training (Option 1) - UPDATED with Modern Regularization
 
 Train multimodal classifier with cross-modal attention:
 
 ```bash
-# Training from scratch
+# Training from scratch (NEW: with regularization)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --output_dir transformer_models \
     --num_epochs 50 \
     --num_layers 4 \
-    --num_heads 8
+    --num_heads 8 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --val_size 0.15 \
+    --patience 10 \
+    --lr_scheduler ReduceLROnPlateau \
+    --lr_patience 4 \
+    --min_lr 1e-6 \
+    --use_cls_token \
+    --verbose
 
-# Using pretrained encoders (Combined Approach)
+# Using pretrained encoders with regularization (Combined Approach)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --output_dir transformer_models_pretrained \
     --pretrained_encoders_dir pretrained_models/contrastive/encoders \
     --num_epochs 50 \
     --num_layers 4 \
-    --num_heads 8
+    --num_heads 8 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --patience 10 \
+    --use_cls_token
 
-# Linear probing (freeze encoders, train only classifier)
+# Linear probing (freeze encoders, train only classifier with regularization)
 python examples/train_transformer_fusion.py \
     --data_dir final_processed_datasets \
     --output_dir transformer_models_linear_probe \
     --pretrained_encoders_dir pretrained_models/contrastive/encoders \
     --freeze_encoders \
-    --num_epochs 30
+    --num_epochs 30 \
+    --dropout 0.1 \
+    --weight_decay 0.005 \
+    --label_smoothing 0.02 \
+    --patience 8
+
+# NEW: Best practices for regularization
+# - dropout=0.2: Standard value, increase to 0.3-0.5 for larger models
+# - weight_decay=0.01: L2 regularization, tune in range [0.001, 0.1]
+# - label_smoothing=0.05: Prevents overconfident predictions
+# - patience=10: Early stopping on validation F1 plateau
+# - use_cls_token=True: More stable than average pooling for classification
 ```
 
 **Output:**
@@ -542,6 +568,7 @@ python examples/pretrain_contrastive.py \
 | `--data_dir` | `final_processed_datasets` | Directory with parquet data files |
 | `--output_dir` | `transformer_models` | Output directory |
 | `--test_size` | `0.2` | Test set size (fraction) |
+| `--val_size` | `0.15` | Validation set size (fraction of training data, NEW) |
 | `--no_standardize` | `False` | Disable automatic feature standardization (not recommended) |
 | `--use_pretrained_features` | `False` | Use pretrained embeddings instead of raw parquet data |
 | `--pretrained_features_dir` | `None` | Directory with `*_embeddings.npy` files |
@@ -550,9 +577,18 @@ python examples/pretrain_contrastive.py \
 | `--embed_dim` | `256` | Embedding dimension |
 | `--num_heads` | `8` | Number of attention heads |
 | `--num_layers` | `4` | Number of transformer layers |
+| `--dropout` | `0.2` | Dropout probability (NEW, applied to all layers) |
+| `--use_cls_token` | `False` | Use learnable CLS token for pooling (NEW) |
 | `--batch_size` | `32` | Batch size |
 | `--num_epochs` | `50` | Number of epochs |
-| `--lr` | `1e-3` | Learning rate |
+| `--lr` | `1e-3` | Learning rate (AdamW optimizer) |
+| `--weight_decay` | `0.01` | L2 regularization for AdamW (NEW) |
+| `--label_smoothing` | `0.05` | Label smoothing factor (NEW, prevents overconfidence) |
+| `--patience` | `10` | Early stopping patience on validation F1 (NEW) |
+| `--lr_scheduler` | `ReduceLROnPlateau` | LR scheduler type (NEW, default ReduceLROnPlateau) |
+| `--lr_patience` | `4` | Patience for LR reduction (NEW, epochs without improvement) |
+| `--lr_factor` | `0.5` | LR reduction factor (NEW, multiply by this when reducing) |
+| `--min_lr` | `1e-6` | Minimum learning rate (NEW, floor for scheduler) |
 | `--seed` | `42` | Random seed for reproducibility |
 | `--max_grad_norm` | `1.0` | Maximum gradient norm for clipping (0 to disable) |
 | `--freeze_encoders` | `False` | Freeze pretrained encoders |
@@ -560,6 +596,15 @@ python examples/pretrain_contrastive.py \
 | `--keep_last_n` | `3` | Keep only last N checkpoints |
 | `--resume` | `None` | Path to checkpoint file to resume training from |
 | `--device` | `cuda` if available | Device (`cuda` or `cpu`) |
+
+**Key Improvements (NEW):**
+- **Proper train/val/test split**: Validation split carved from training data only (no test leakage)
+- **Class-weighted loss**: Automatically handles imbalanced classes
+- **Label smoothing**: Prevents overconfident predictions on training data
+- **AdamW optimizer**: Built-in L2 regularization via weight_decay parameter
+- **ReduceLROnPlateau scheduler**: Adaptively reduces learning rate if validation loss plateaus
+- **Early stopping**: Based on validation F1-weighted (robust for imbalanced data)
+- **Best model selection**: Reloads best_model.pt checkpoint before final test evaluation
 
 **Data Preprocessing (automatic):**
 - **NaN/Inf handling**: Automatically detects and replaces NaN/Inf values with column means

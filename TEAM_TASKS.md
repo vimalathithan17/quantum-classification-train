@@ -57,9 +57,10 @@ Each team member will train a different variant of the contrastive encoder to co
 - `--warmup_epochs 20` (prevents early gradient explosion)
 
 **New/Important Flags (team-wide):**
-- `--val_size <float>`: Reserve a fraction of training data for validation in pretraining (e.g. 0.1). Use to enable validation-based early stopping.
-- `--patience <int>`: Early-stopping patience (number of epochs with no val improvement before stopping) for contrastive pretraining.
-- `--weight_decay <float>`: L2 regularization applied to QML classifiers and (optionally) encoder optimizers. Default `0.0` (disabled). Recommended `1e-4`–`1e-2` for small datasets.
+- `--val_size <float>`: Reserve a fraction of training data for validation in pretraining (e.g. 0.15). Use to enable validation-based early stopping.
+- `--patience <int>`: Early-stopping patience (number of epochs with no val improvement before stopping) for QML and contrastive pretraining. QML default is now 25 (was 50).
+- `--weight_decay <float>`: L2 regularization applied to QML classifiers and (optionally) encoder optimizers. Default `1e-3` (now enabled by default). Was disabled (0.0). Recommended range `1e-4`–`1e-2` for tuning.
+- QML Defaults Changed: `validation_frac=0.2` (was 0.1), `patience=25` (was 50). These prevent overfitting on small datasets. Override via CLI if needed.
 
 ---
 
@@ -147,7 +148,7 @@ python examples/tune_transformer_fusion.py \
 - `batch_size`: [16, 32, 64]
 - `dropout`: 0.1-0.5
 
-#### Step 2: Train with Best Hyperparameters
+#### Step 2: Train with Best Hyperparameters (UPDATED with Regularization)
 
 After tuning completes, train final model with best config:
 
@@ -159,11 +160,22 @@ python examples/train_transformer_fusion.py \
     --embed_dim <best_embed_dim> \
     --num_heads <best_num_heads> \
     --num_layers <best_num_layers> \
-    --lr <best_lr> \
     --batch_size <best_batch_size> \
+    --lr <best_lr> \
     --num_epochs 100 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --val_size 0.15 \
+    --patience 10 \
+    --lr_scheduler ReduceLROnPlateau \
+    --lr_patience 4 \
+    --lr_factor 0.5 \
+    --min_lr 1e-6 \
+    --use_cls_token \
     --device cuda \
-    --use_wandb --wandb_project transformer-fusion --wandb_run_name member1_final_model
+    --use_wandb --wandb_project transformer-fusion --wandb_run_name member1_final_model \
+    --verbose
 ```
 
 #### Step 3: Extract Transformer Features for Meta-Learner
@@ -219,7 +231,7 @@ python examples/tune_transformer_fusion.py \
 - `batch_size`: [16, 32, 64]
 - `dropout`: 0.1-0.5
 
-#### Step 2: Train with Best Hyperparameters
+#### Step 2: Train with Best Hyperparameters (UPDATED with Regularization)
 
 ```bash
 # Check best params in transformer_tuning_results/member2_pretrained_embeddings_best_config.json
@@ -230,11 +242,22 @@ python examples/train_transformer_fusion.py \
     --embed_dim <best_embed_dim> \
     --num_heads <best_num_heads> \
     --num_layers <best_num_layers> \
-    --lr <best_lr> \
     --batch_size <best_batch_size> \
+    --lr <best_lr> \
     --num_epochs 100 \
+    --dropout 0.2 \
+    --weight_decay 0.01 \
+    --label_smoothing 0.05 \
+    --val_size 0.15 \
+    --patience 10 \
+    --lr_scheduler ReduceLROnPlateau \
+    --lr_patience 4 \
+    --lr_factor 0.5 \
+    --min_lr 1e-6 \
+    --use_cls_token \
     --device cuda \
-    --use_wandb --wandb_project transformer-fusion --wandb_run_name member2_final_model
+    --use_wandb --wandb_project transformer-fusion --wandb_run_name member2_final_model \
+    --verbose
 ```
 
 #### Step 3: Extract Transformer Features for Meta-Learner

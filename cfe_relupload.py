@@ -122,8 +122,8 @@ model_args.add_argument('--scaler', type=str, default=None,
                        help="Scaler: 's'=Standard, 'm'=MinMax, 'r'=Robust")
 model_args.add_argument('--skip_tuning', action='store_true',
                        help='Use CLI args instead of tuned parameters')
-model_args.add_argument('--weight_decay', type=float, default=0.0,
-                       help='L2 regularization (weight decay) for QML models (0 to disable)')
+model_args.add_argument('--weight_decay', type=float, default=1e-3,
+                       help='L2 regularization (weight decay) for QML models (default: 1e-3, 0 to disable)')
 
 mode_args = parser.add_argument_group('training mode (mutually exclusive)')
 mode_args.add_argument('--skip_cross_validation', action='store_true',
@@ -136,10 +136,10 @@ train_args.add_argument('--max_training_time', type=float, default=None,
                        help='Max training hours (overrides --steps)')
 train_args.add_argument('--validation_frequency', type=int, default=10,
                        help='Validation frequency (default: 10 steps)')
-train_args.add_argument('--validation_frac', type=float, default=0.1,
-                       help='Fraction of training data for validation during QML training (default: 0.1)')
-train_args.add_argument('--patience', type=int, default=50,
-                       help='Early stopping patience in steps (default: 50, 0 to disable)')
+train_args.add_argument('--validation_frac', type=float, default=0.2,
+                       help='Fraction of training data for validation during QML training (default: 0.2)')
+train_args.add_argument('--patience', type=int, default=25,
+                       help='Early stopping patience in steps (default: 25, 0 to disable)')
 
 checkpoint_args = parser.add_argument_group('checkpointing')
 checkpoint_args.add_argument('--checkpoint_frequency', type=int, default=50,

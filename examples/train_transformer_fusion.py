@@ -489,6 +489,8 @@ def main():
                           help='Output directory for trained model (default: transformer_models)')
     data_args.add_argument('--test_size', type=float, default=0.2,
                           help='Test set fraction (default: 0.2)')
+    data_args.add_argument('--val_size', type=float, default=0.15,
+                          help='Validation fraction taken from train split (default: 0.15)')
     data_args.add_argument('--no_standardize', action='store_true',
                           help='Disable feature standardization (not recommended)')
     
@@ -510,6 +512,10 @@ def main():
                            help='Number of attention heads (default: 8)')
     model_args.add_argument('--num_layers', type=int, default=4,
                            help='Number of transformer layers (default: 4)')
+    model_args.add_argument('--dropout', type=float, default=0.2,
+                           help='Dropout probability for transformer and head (default: 0.2)')
+    model_args.add_argument('--use_cls_token', action='store_true',
+                           help='Use CLS-token pooling instead of flattening all modalities')
     model_args.add_argument('--pretrained_encoders_dir', type=str, default=None,
                            help='Directory with pretrained encoders (optional, for transfer learning)')
     model_args.add_argument('--freeze_encoders', action='store_true',
@@ -523,6 +529,18 @@ def main():
                            help='Number of training epochs (default: 50)')
     train_args.add_argument('--lr', type=float, default=1e-3,
                            help='Learning rate (default: 0.001)')
+    train_args.add_argument('--weight_decay', type=float, default=1e-2,
+                           help='AdamW weight decay (default: 0.01)')
+    train_args.add_argument('--label_smoothing', type=float, default=0.05,
+                           help='Cross-entropy label smoothing (default: 0.05)')
+    train_args.add_argument('--patience', type=int, default=10,
+                           help='Early stopping patience on validation F1 (default: 10)')
+    train_args.add_argument('--lr_patience', type=int, default=4,
+                           help='ReduceLROnPlateau patience on validation loss (default: 4)')
+    train_args.add_argument('--lr_factor', type=float, default=0.5,
+                           help='ReduceLROnPlateau decay factor (default: 0.5)')
+    train_args.add_argument('--min_lr', type=float, default=1e-6,
+                           help='Minimum learning rate for scheduler (default: 1e-6)')
     train_args.add_argument('--seed', type=int, default=42,
                            help='Random seed for reproducibility (default: 42)')
     train_args.add_argument('--max_grad_norm', type=float, default=1.0,
@@ -642,35 +660,56 @@ def main():
     
     # Handle split vs combined data
     if is_pretrained_split:
-        # Data is already split properly (no leakage)
-        print(f"\nUsing pre-split data (no additional splitting needed)")
-        train_data = data['train']
+        # Data is already split for train/test; carve validation from train only.
+        print(f"\nUsing pre-split data (train/test provided)")
+        base_train_data = data['train']
         test_data = data['test']
-        train_labels = labels['train']
+        base_train_labels = labels['train']
         test_labels = labels['test']
-        
-        # Determine number of classes from combined labels
-        all_labels = np.concatenate([train_labels, test_labels])
+
+        all_labels = np.concatenate([base_train_labels, test_labels])
         num_classes = len(np.unique(all_labels))
+
+        train_indices = np.arange(len(base_train_labels))
+        train_idx, val_idx = train_test_split(
+            train_indices,
+            test_size=args.val_size,
+            random_state=args.seed,
+            stratify=base_train_labels
+        )
+        train_data = {k: v[train_idx] for k, v in base_train_data.items()}
+        val_data = {k: v[val_idx] for k, v in base_train_data.items()}
+        train_labels = base_train_labels[train_idx]
+        val_labels = base_train_labels[val_idx]
     else:
-        # Legacy path: need to split the data
-        # Determine number of classes
+        # Legacy path: split into train/test, then split train into train/val.
         num_classes = len(np.unique(labels))
         print(f"\nNumber of classes: {num_classes}")
-        
-        # Split data
-        print(f"\nSplitting data (test_size={args.test_size}, seed={args.seed})...")
+
+        print(f"\nSplitting data (test_size={args.test_size}, val_size={args.val_size}, seed={args.seed})...")
         indices = np.arange(len(labels))
-        train_idx, test_idx = train_test_split(
+        train_full_idx, test_idx = train_test_split(
             indices,
             test_size=args.test_size,
             random_state=args.seed,
             stratify=labels
         )
-        
-        train_data = {k: v[train_idx] for k, v in data.items()}
+
+        train_full_data = {k: v[train_full_idx] for k, v in data.items()}
+        train_full_labels = labels[train_full_idx]
+
+        train_sub_idx, val_sub_idx = train_test_split(
+            np.arange(len(train_full_labels)),
+            test_size=args.val_size,
+            random_state=args.seed,
+            stratify=train_full_labels
+        )
+
+        train_data = {k: v[train_sub_idx] for k, v in train_full_data.items()}
+        val_data = {k: v[val_sub_idx] for k, v in train_full_data.items()}
+        train_labels = train_full_labels[train_sub_idx]
+        val_labels = train_full_labels[val_sub_idx]
         test_data = {k: v[test_idx] for k, v in data.items()}
-        train_labels = labels[train_idx]
         test_labels = labels[test_idx]
     
     # Standardize AFTER split to avoid data leakage (fit on train only)
@@ -681,22 +720,27 @@ def main():
         for modality in train_data:
             scaler = StandardScaler()
             train_data[modality] = scaler.fit_transform(train_data[modality]).astype(np.float32)
+            val_data[modality] = scaler.transform(val_data[modality]).astype(np.float32)
             test_data[modality] = scaler.transform(test_data[modality]).astype(np.float32)
             scalers[modality] = scaler
-            print(f"  {modality}: standardized (train fit, test transform)")
+            print(f"  {modality}: standardized (train fit, val/test transform)")
     
-    total_samples = len(train_labels) + len(test_labels)
+    total_samples = len(train_labels) + len(val_labels) + len(test_labels)
     print(f"\nTraining samples: {len(train_labels)} ({100*len(train_labels)/total_samples:.1f}%)")
+    print(f"Validation samples: {len(val_labels)} ({100*len(val_labels)/total_samples:.1f}%)")
     print(f"Test samples: {len(test_labels)} ({100*len(test_labels)/total_samples:.1f}%)")
     
     # Log class distribution
     unique_train, counts_train = np.unique(train_labels, return_counts=True)
+    unique_val, counts_val = np.unique(val_labels, return_counts=True)
     unique_test, counts_test = np.unique(test_labels, return_counts=True)
     print(f"Train class distribution: {dict(zip(unique_train.tolist(), counts_train.tolist()))}")
+    print(f"Val class distribution: {dict(zip(unique_val.tolist(), counts_val.tolist()))}")
     print(f"Test class distribution: {dict(zip(unique_test.tolist(), counts_test.tolist()))}")
     
     # Create dataloaders
     train_loader = create_dataloader(train_data, train_labels, args.batch_size, shuffle=True)
+    val_loader = create_dataloader(val_data, val_labels, args.batch_size, shuffle=False)
     test_loader = create_dataloader(test_data, test_labels, args.batch_size, shuffle=False)
     
     # Load pretrained encoders if provided
@@ -720,6 +764,8 @@ def main():
         num_heads=args.num_heads,
         num_layers=args.num_layers,
         num_classes=num_classes,
+        dropout=args.dropout,
+        use_cls_token=args.use_cls_token,
         pretrained_encoders=pretrained_encoders
     )
     
@@ -738,11 +784,27 @@ def main():
     # Setup training
     device = torch.device(args.device)
     model.to(device)
-    
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(
+
+    class_counts = np.bincount(train_labels, minlength=num_classes).astype(np.float32)
+    class_weights = class_counts.sum() / np.maximum(class_counts, 1.0)
+    class_weights = class_weights / class_weights.mean()
+    class_weights_tensor = torch.from_numpy(class_weights).to(device)
+
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights_tensor,
+        label_smoothing=args.label_smoothing
+    )
+    optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr
+        lr=args.lr,
+        weight_decay=args.weight_decay
+    )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=args.lr_factor,
+        patience=args.lr_patience,
+        min_lr=args.min_lr
     )
     
     print(f"\nUsing device: {device}")
@@ -750,7 +812,9 @@ def main():
     # Resume from checkpoint if specified
     start_epoch = 0
     best_val_acc = 0
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    best_val_f1 = -1.0
+    epochs_without_improvement = 0
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'val_f1_weighted': [], 'lr': []}
     
     if args.resume:
         resume_path = Path(args.resume)
@@ -761,6 +825,7 @@ def main():
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint.get('epoch', 0)
             best_val_acc = checkpoint.get('val_acc', 0)
+            best_val_f1 = checkpoint.get('val_f1_weighted', best_val_f1)
             print(f"Resumed from epoch {start_epoch}, best val acc: {best_val_acc:.2f}%")
         else:
             print(f"Warning: Checkpoint not found at {resume_path}, starting from scratch")
@@ -777,14 +842,19 @@ def main():
             max_grad_norm=args.max_grad_norm
         )
         
-        # Evaluate (skip comprehensive metrics during training for speed)
-        val_loss, val_acc, _, _, _ = evaluate(model, test_loader, criterion, device)
+        # Evaluate on validation split (keeps test set untouched)
+        val_loss, val_acc, _, _, val_metrics = evaluate(model, val_loader, criterion, device, n_classes=num_classes)
+        val_f1_weighted = val_metrics['f1_weighted'] if val_metrics is not None else 0.0
+        scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
         
         # Track history
         history['train_loss'].append(train_loss)
         history['train_acc'].append(train_acc)
         history['val_loss'].append(val_loss)
         history['val_acc'].append(val_acc)
+        history['val_f1_weighted'].append(val_f1_weighted)
+        history['lr'].append(current_lr)
         
         # Log to wandb
         if wandb_run is not None:
@@ -794,17 +864,25 @@ def main():
                 'train_acc': train_acc,
                 'val_loss': val_loss,
                 'val_acc': val_acc,
+                'val_f1_weighted': val_f1_weighted,
+                'lr': current_lr,
+                'best_val_f1_weighted': best_val_f1,
                 'best_val_acc': best_val_acc
             })
         
         # Print progress
         print(f"Epoch [{epoch+1}/{args.num_epochs}] "
               f"Train Loss: {train_loss:.4f} Train Acc: {train_acc:.2f}% | "
-              f"Val Loss: {val_loss:.4f} Val Acc: {val_acc:.2f}%")
+              f"Val Loss: {val_loss:.4f} Val Acc: {val_acc:.2f}% Val F1(w): {val_f1_weighted:.4f} | LR: {current_lr:.2e}")
         
-        # Save best model
-        if val_acc > best_val_acc:
+        # Save best model based on weighted F1, with accuracy as tie-breaker
+        improved = (val_f1_weighted > best_val_f1 + 1e-6) or (
+            abs(val_f1_weighted - best_val_f1) <= 1e-6 and val_acc > best_val_acc
+        )
+        if improved:
             best_val_acc = val_acc
+            best_val_f1 = val_f1_weighted
+            epochs_without_improvement = 0
             output_dir = Path(args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             
@@ -818,17 +896,29 @@ def main():
                 'num_heads': args.num_heads,
                 'num_layers': args.num_layers,
                 'num_classes': num_classes,
-                'dropout': 0.1,
+                'dropout': args.dropout,
+                'use_cls_token': args.use_cls_token,
                 'epoch': epoch,
+                'val_f1_weighted': float(val_f1_weighted),
                 'val_acc': float(val_acc),
                 'seed': args.seed,
                 'test_size': args.test_size,
+                'val_size': args.val_size,
+                'weight_decay': args.weight_decay,
+                'label_smoothing': args.label_smoothing,
+                'patience': args.patience,
                 'max_grad_norm': args.max_grad_norm,
                 'label_encoder_path': str(args.label_encoder_path),
                 'label_classes': list(label_encoder.classes_) if label_encoder else None
             }
             with open(output_dir / 'config.json', 'w') as f:
                 json.dump(config, f, indent=2)
+        else:
+            epochs_without_improvement += 1
+
+        if args.patience > 0 and epochs_without_improvement >= args.patience:
+            print(f"Early stopping triggered at epoch {epoch+1} (patience={args.patience})")
+            break
         
         # Periodic checkpointing
         if args.checkpoint_interval > 0 and (epoch + 1) % args.checkpoint_interval == 0:
@@ -842,6 +932,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
                 'val_loss': val_loss,
+                'val_f1_weighted': val_f1_weighted,
                 'val_acc': val_acc,
                 'config': {
                     'modality_dims': modality_dims,
@@ -864,6 +955,13 @@ def main():
     print("\n" + "="*80)
     print("Final Evaluation")
     print("="*80 + "\n")
+
+    best_model_path = Path(args.output_dir) / 'best_model.pt'
+    if best_model_path.exists():
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
+        print(f"Loaded best validation checkpoint from: {best_model_path}")
+    else:
+        print("Warning: best_model.pt not found; evaluating last epoch weights")
     
     val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
         model, test_loader, criterion, device, n_classes=num_classes
@@ -892,6 +990,7 @@ def main():
         wandb_log_dict = {
             'final_test_loss': val_loss,
             'final_test_acc': val_acc,
+            'best_val_f1_weighted': best_val_f1,
             'best_val_acc': best_val_acc
         }
         if metrics_dict is not None:
@@ -961,6 +1060,7 @@ def main():
     
     print(f"\nModel saved to: {output_dir / 'best_model.pt'}")
     print(f"Training history saved to: {history_path}")
+    print(f"Best validation weighted F1: {best_val_f1:.4f}")
     print(f"Best validation accuracy: {best_val_acc:.2f}%")
 
 
