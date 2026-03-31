@@ -35,6 +35,7 @@ def set_seed(seed: int):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     print(f"Random seed set to {seed}")
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 
@@ -541,6 +542,10 @@ def main():
                            help='ReduceLROnPlateau decay factor (default: 0.5)')
     train_args.add_argument('--min_lr', type=float, default=1e-6,
                            help='Minimum learning rate for scheduler (default: 1e-6)')
+    train_args.add_argument('--lr_scheduler', type=str,
+                           default='ReduceLROnPlateau',
+                           choices=['ReduceLROnPlateau', 'none'],
+                           help='LR scheduler type (default: ReduceLROnPlateau)')
     train_args.add_argument('--seed', type=int, default=42,
                            help='Random seed for reproducibility (default: 42)')
     train_args.add_argument('--max_grad_norm', type=float, default=1.0,
@@ -569,6 +574,8 @@ def main():
                          help='W&B project name')
     log_args.add_argument('--wandb_run_name', type=str, default=None,
                          help='W&B run name')
+    log_args.add_argument('--verbose', action='store_true',
+                         help='Enable verbose logging (compatibility flag)')
     
     # Label encoder configuration
     # Check ENCODER_DIR environment variable for consistency with other training scripts
@@ -799,13 +806,15 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay
     )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=args.lr_factor,
-        patience=args.lr_patience,
-        min_lr=args.min_lr
-    )
+    scheduler = None
+    if args.lr_scheduler == 'ReduceLROnPlateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=args.lr_factor,
+            patience=args.lr_patience,
+            min_lr=args.min_lr
+        )
     
     print(f"\nUsing device: {device}")
     
@@ -845,7 +854,8 @@ def main():
         # Evaluate on validation split (keeps test set untouched)
         val_loss, val_acc, _, _, val_metrics = evaluate(model, val_loader, criterion, device, n_classes=num_classes)
         val_f1_weighted = val_metrics['f1_weighted'] if val_metrics is not None else 0.0
-        scheduler.step(val_loss)
+        if scheduler is not None:
+            scheduler.step(val_loss)
         current_lr = optimizer.param_groups[0]['lr']
         
         # Track history
