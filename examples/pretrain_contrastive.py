@@ -602,10 +602,10 @@ def main():
             'train_test_split': {
                 'test_size': args.test_size,
                 'seed': args.seed,
-                'n_train_samples': len(train_idx),
-                'n_test_samples': len(test_idx),
+                'n_train_samples': n_total_samples,
+                'n_test_samples': "Managed globally by Notebook 1",
                 'n_total_samples': n_total_samples,
-                'split_files': ['train_indices.npy', 'test_indices.npy', 'train_case_ids.npy', 'test_case_ids.npy']
+                'split_files': ['case_ids.npy', 'labels.npy']
             }
         }
     )
