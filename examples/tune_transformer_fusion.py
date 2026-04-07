@@ -393,7 +393,7 @@ def objective(trial, args, data, labels, modality_dims, n_classes, device):
         # Training loop
         best_f1 = 0
         patience_counter = 0
-        patience = 10
+        patience = args.patience
         
         for epoch in range(args.num_epochs):
             if interrupted:
@@ -409,7 +409,7 @@ def objective(trial, args, data, labels, modality_dims, n_classes, device):
                 patience_counter += 1
             
             # Early stopping
-            if patience_counter >= patience:
+            if patience > 0 and patience_counter >= patience:
                 log.info(f"    Early stopping at epoch {epoch + 1}")
                 break
             
@@ -474,6 +474,8 @@ def main():
                             help='Number of Optuna trials (default: 50)')
     tuning_args.add_argument('--num_epochs', type=int, default=50,
                             help='Training epochs per trial (default: 50)')
+    tuning_args.add_argument('--patience', type=int, default=10,
+                            help='Early stopping patience in epochs (default: 10, set to 0 to disable)')
     tuning_args.add_argument('--study_name', type=str, default=None,
                             help='Custom study name (auto-generated if not provided)')
     
