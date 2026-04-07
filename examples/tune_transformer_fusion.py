@@ -135,19 +135,30 @@ def load_pretrained_embeddings(embeddings_dir, modalities=None):
     modality_dims = {}
     
     for modality in modalities:
+        # Check both the old flat format and the new train_embeddings format
         emb_path = embeddings_dir / f"{modality}_embeddings.npy"
+        train_emb_path = embeddings_dir / f"{modality}_train_embeddings.npy"
         
-        if emb_path.exists():
+        if train_emb_path.exists():
+            log.info(f"Loading pretrained embeddings for {modality} from {train_emb_path}")
+            embeddings = np.load(train_emb_path).astype(np.float32)
+            data[modality] = embeddings
+            modality_dims[modality] = embeddings.shape[1]
+            log.info(f"  Loaded {embeddings.shape[0]} training samples with {embeddings.shape[1]}-dim embeddings")
+        elif emb_path.exists():
             log.info(f"Loading pretrained embeddings for {modality} from {emb_path}")
             embeddings = np.load(emb_path).astype(np.float32)
             data[modality] = embeddings
             modality_dims[modality] = embeddings.shape[1]
             log.info(f"  Loaded {embeddings.shape[0]} samples with {embeddings.shape[1]}-dim embeddings")
         else:
-            log.warning(f"Embeddings file not found: {emb_path}")
+            log.warning(f"Embeddings file not found for {modality}: {emb_path} or {train_emb_path}")
     
     # Load labels
-    labels_path = embeddings_dir / "labels.npy"
+    labels_path = embeddings_dir / "train_labels.npy"
+    if not labels_path.exists():
+        labels_path = embeddings_dir / "labels.npy"
+    
     if labels_path.exists():
         labels = np.load(labels_path, allow_pickle=True)  # String labels need allow_pickle
         # If labels are strings, encode them
@@ -161,10 +172,13 @@ def load_pretrained_embeddings(embeddings_dir, modalities=None):
         return None, None, None, None
     
     # Load case_ids (optional, for debugging/tracing)
-    case_ids_path = embeddings_dir / "case_ids.npy"
+    case_ids_path = embeddings_dir / "train_case_ids.npy"
+    if not case_ids_path.exists():
+        case_ids_path = embeddings_dir / "case_ids.npy"
+        
     if case_ids_path.exists():
         case_ids = np.load(case_ids_path, allow_pickle=True)
-        log.info(f"Loaded {len(case_ids)} case IDs")
+        log.info(f"Loaded {len(case_ids)} case IDs from {case_ids_path}")
     else:
         case_ids = None
         log.info("No case_ids.npy found (optional)")

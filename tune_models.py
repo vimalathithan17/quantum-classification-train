@@ -734,11 +734,37 @@ def main():
         # will contain only embeddings for the current pipeline split (global_train or global_test).
         # We tune exclusively on the global_train embeddings, which are saved without a '_train' suffix.
         
+        # Try new split format first
+        train_pretrained_file = os.path.join(args.pretrained_features_dir, f'{args.datatype}_train_embeddings.npy')
+        train_labels_file = os.path.join(args.pretrained_features_dir, 'train_labels.npy')
+        train_case_ids_file = os.path.join(args.pretrained_features_dir, 'train_case_ids.npy')
+
         pretrained_file = os.path.join(args.pretrained_features_dir, f'{args.datatype}_embeddings.npy')
         labels_file = os.path.join(args.pretrained_features_dir, 'labels.npy')
         case_ids_file = os.path.join(args.pretrained_features_dir, 'case_ids.npy')
         
-        if os.path.exists(pretrained_file) and os.path.exists(labels_file) and os.path.exists(case_ids_file):
+        if os.path.exists(train_pretrained_file) and os.path.exists(train_labels_file) and os.path.exists(train_case_ids_file):
+            log.info(f"Loading split format pretrained train features for tuning from: {args.pretrained_features_dir}")
+            
+            X_np = np.load(train_pretrained_file)
+            y_np = np.load(train_labels_file, allow_pickle=True)
+            case_ids = np.load(train_case_ids_file, allow_pickle=True)
+            
+            # Convert to DataFrame/Series for compatibility with existing pipeline
+            X = pd.DataFrame(X_np, index=case_ids)
+            y_categorical = pd.Series(y_np, index=case_ids)
+            
+            # CRITICAL: Sort by case_id for consistent ordering across all scripts
+            X = X.sort_index()
+            y_categorical = y_categorical.sort_index()
+            
+            # Labels are already encoded in pretrained features
+            le = LabelEncoder()
+            le.fit(y_categorical)
+            y = pd.Series(le.transform(y_categorical), index=y_categorical.index)
+            n_classes = len(le.classes_)
+
+        elif os.path.exists(pretrained_file) and os.path.exists(labels_file) and os.path.exists(case_ids_file):
             log.info(f"Loading pretrained features for tuning from: {args.pretrained_features_dir}")
             
             X_np = np.load(pretrained_file)
