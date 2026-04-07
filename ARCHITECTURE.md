@@ -33,6 +33,11 @@ Code default: `final_processed_datasets/` (set `SOURCE_DIR=final_processed_datas
 - **Process:** The script scans all `*.parquet` files in the source data directory, collects every unique class name (e.g., 'BRCA', 'LUAD'), and creates a single, master `LabelEncoder`.
 - **Output:** `master_label_encoder/label_encoder.joblib`. This artifact is a critical dependency for all subsequent training and inference scripts.
 
+**Stage 1.5: Global Train/Test Split (`create_global_split.py`)**
+- **Purpose:** To enforce strict data isolation between all training operations and final evaluation.
+- **Process:** Splits all datasets by `case_id` into identical 80/20 parts. All downstream tuning and pretraining only use `data/global_train`. Base models train exclusively on `global_train`, but at the very end of their training script they automatically load `data/global_test` to calculate final hold-out metrics for immediate logging to W&B. The final evaluation of the Meta-Learner is then run on the test data in the final `inference.py` stage.
+- **Output:** `data/global_train/` and `data/global_test/` directories containing identically named preprocessed parquet files.
+
 **Stage 2: Hyperparameter Tuning (`tune_models.py`)**
 - **Purpose:** To find the optimal set of hyperparameters for each base-learner configuration.
 - **Process:** Using Optuna, this script runs a series of trials for a specified data type (`--datatype`), architectural approach (`--approach`), and QML model (`--qml_model`). It uses `StratifiedKFold` cross-validation to robustly evaluate each parameter set.
@@ -153,9 +158,8 @@ predictions = (model_lgb.predict_proba(X_test) + model_xgb.predict_proba(X_test)
     1. Find the corresponding `best_params_*.json` file.
     2. Load the data and build the appropriate classical-quantum pipeline (2-step funnel).
     3. Use `cross_val_predict` (for DRE) or a manual loop (for CFE) to generate **out-of-fold (OOF) predictions** for the training set. These predictions are crucial for training the meta-learner without data leakage.
-    4. Train a final model on the *entire* training set.
-    5. Generate predictions on the hold-out test set.
-- **Output:** For each data type, the scripts save the OOF predictions, test predictions, and the final trained model artifacts (`.joblib` files) into a dedicated output directory (e.g., `base_learner_outputs_app1_standard/`).
+    4. Train a final base model on the *entire* `global_train` dataset.
+- **Output:** For each data type, the scripts save the OOF predictions and the final trained model artifacts (`.joblib` files) into a dedicated output directory (e.g., `base_learner_outputs_app1_standard/`). (Note: final test predictions are deferred entirely to the inference stage).
 
 ---
 

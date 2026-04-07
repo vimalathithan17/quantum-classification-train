@@ -1,12 +1,52 @@
-# Kaggle Environment Setup Guide
+# Kaggle Environment & Production Workflow Guide
 
-## Overview
-
-This guide covers setting up the quantum-classification-train project in a Kaggle notebook environment. Each team member should create their own notebook.
+This guide covers setting up the `quantum-classification-train` project in a Kaggle notebook environment and using our **5-Step Production Workflow**.
 
 ---
 
-## Step 1: Create a New Kaggle Notebook
+## The 5-Step Notebook Production Workflow
+
+The pipeline is split into 5 modular, sequentially numbered Jupyter Notebooks located in the `kaggle_notebooks/` directory. By splitting the work, we avoid Kaggle 12-hour VM timeouts and isolate our dependencies.
+
+### Step 1: Global Data Split (Notebook 01)
+* **File:** `kaggle_notebooks/01_Global_Data_Split_Kaggle.ipynb`
+* **Purpose:** Performs stratified splitting of the raw multi-omics data. This creates a rigorous training and holdout test set to prevent ANY data leakage across the entire pipeline.
+* **Output:** Generates and zips `global_split_data.zip`.
+* **Action Required:** Download `global_split_data.zip` to your local machine, go to Kaggle Datasets → New Dataset, and upload it (name it e.g. `qml-global-split-data`).
+
+### Step 2: Contrastive Pretraining (Notebook 02)
+* **File:** `kaggle_notebooks/02_Contrastive_Pretraining_Kaggle.ipynb`
+* **Prerequisites:** Attach the primary dataset and your newly created `qml-global-split-data` dataset to this notebook.
+* **Purpose:** Trains self-supervised contrastive encoders on the `global_train` dataset to learn rich feature representations before QML or Transformer modeling.
+* **Output:** Generates and zips `pretrained_embeddings.zip` and the encoder models.
+* **Action Required:** Download the outputs and upload them as another new Kaggle Dataset (e.g., `qml-pretrained-embeddings`).
+
+### Steps 3 & 4: Base Learner Training (Parallelizable)
+These two notebooks can be run in parallel on different Kaggle sessions.
+
+#### Notebook 03: QML Tuning and Training
+* **File:** `kaggle_notebooks/03_QML_Tuning_and_Training_Kaggle.ipynb`
+* **Prerequisites:** Attach the primary dataset and your `qml-global-split-data` dataset.
+* **Purpose:** Tunes hyperparameters (via Optuna) and trains our 4 Quantum Base models on the global training set using cross-validation.
+* **Output:** Generates base learner OOF (Out-Of-Fold) predictions (`.csv`) and trained models (`.joblib`).
+* **Action Required:** Download and upload as a Kaggle Dataset (e.g., `qml-base-learner-outputs`).
+
+#### Notebook 04: Transformer Fusion Training
+* **File:** `kaggle_notebooks/04_Transformer_Fusion_Kaggle.ipynb`
+* **Prerequisites:** Attach the primary dataset, `qml-global-split-data`, and `qml-pretrained-embeddings` to access the extracted features.
+* **Purpose:** Trains the classical multi-modal Transformer on the contrastively-learned embeddings.
+* **Output:** Generates Transformer OOF predictions (`.csv`) and model state dictionaries (`.pt`).
+* **Action Required:** Download and upload as a Kaggle Dataset (e.g., `qml-transformer-outputs`).
+
+### Step 5: Meta-Learner & Final Inference (Notebook 05)
+* **File:** `kaggle_notebooks/05_Meta_Learner_and_Inference_Kaggle.ipynb`
+* **Prerequisites:** Attach all previous Kaggle Datasets: `qml-global-split-data`, `qml-base-learner-outputs`, and `qml-transformer-outputs`.
+* **Purpose:** Stacks all base model OOF predictions and trains the Level-1 XGBoost Meta-Learner. Then, evaluates the full ensemble (Base + Meta) on the unseen `global_test` set.
+* **Output:** Final evaluation metrics, W&B logs, and confusion matrices.
+
+---
+
+## Setup: First-Time Kaggle Configuration
 
 1. Go to [Kaggle Notebooks](https://www.kaggle.com/code)
 2. Click **"+ New Notebook"**

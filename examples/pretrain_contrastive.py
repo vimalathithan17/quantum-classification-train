@@ -341,42 +341,24 @@ def main():
         else:
             print(f"  {modality}: {dim} features (no NaN)")
     
-    # CRITICAL: Train/test split BEFORE pretraining to prevent data leakage
-    # The encoder must NEVER see test samples during training
-    from sklearn.model_selection import train_test_split
+    # K-Fold / Full-Dataset Refactor: Removed static train_test_split.
+    # We now pretrain the encoder on 100% of the provided data
+    print(f"\n✅ Pretraining encoder on 100% of available data.")
     
-    print(f"\n⚠️  IMPORTANT: Splitting data BEFORE pretraining to prevent data leakage")
-    print(f"   Encoder will only be trained on {100*(1-args.test_size):.0f}% of data (train split)")
+    # We pass the entire dataset directly forward
+    train_data = data
+    train_case_ids = case_ids
+    train_labels = labels
     
-    indices = np.arange(n_total_samples)
-    if labels is not None:
-        # Stratified split if we have labels
-        train_idx, test_idx = train_test_split(
-            indices, test_size=args.test_size, random_state=args.seed, stratify=labels
-        )
-        print(f"   Using stratified split (preserves class proportions)")
-    else:
-        train_idx, test_idx = train_test_split(
-            indices, test_size=args.test_size, random_state=args.seed
-        )
-        print(f"   Using random split (no labels for stratification)")
+    print(f"   Total Pretraining samples: {n_total_samples}")
     
-    # Create training-only data dict
-    train_data = {modality: features[train_idx] for modality, features in data.items()}
-    # Keep test data for later extraction
-    test_data = {modality: features[test_idx] for modality, features in data.items()}
-    
-    train_case_ids = case_ids[train_idx] if case_ids is not None else None
-    test_case_ids = case_ids[test_idx] if case_ids is not None else None
-    train_labels = labels[train_idx] if labels is not None else None
-    test_labels = labels[test_idx] if labels is not None else None
-    
-    print(f"   Train samples: {len(train_idx)} ({100*len(train_idx)/n_total_samples:.1f}%)")
-    print(f"   Test samples:  {len(test_idx)} ({100*len(test_idx)/n_total_samples:.1f}%)")
-    
-    # Save split information immediately (so downstream scripts know which samples are train/test)
+    # Save case_ids and labels for downstream cross-validation
     split_dir = Path(args.output_dir)
     split_dir.mkdir(parents=True, exist_ok=True)
+    if train_case_ids is not None:
+        np.save(split_dir / "case_ids.npy", train_case_ids)
+    if train_labels is not None:
+        np.save(split_dir / "labels.npy", train_labels)
     
     np.save(split_dir / 'train_indices.npy', train_idx)
     np.save(split_dir / 'test_indices.npy', test_idx)

@@ -454,12 +454,72 @@ for data_type in data_types:
 
     # --- Classification report and confusion matrix on the hold-out test set ---
     try:
-        y_test_pred = pipeline.predict(X_test)
-        acc = accuracy_score(y_test, y_test_pred)
+        # Load and prepare global_test set
+        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', 'data/global_test')
+        X_test_eval, y_test_eval = None, None
+        
+        if use_pretrained:
+            test_features_dir = args.pretrained_features_dir.replace('train', 'test') if 'train' in args.pretrained_features_dir else os.path.join(global_test_dir, 'features')
+            test_emb_file = os.path.join(test_features_dir, f'{data_type}_embeddings.npy')
+            test_labels_file = os.path.join(test_features_dir, 'labels.npy')
+            test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
+            
+            log.info(f"Loading pretrained test features from {test_features_dir}")
+            try:
+                import numpy as np
+                import pandas as pd
+                embeddings_test = np.load(test_emb_file)
+                labels_raw_test = np.load(test_labels_file, allow_pickle=True)
+                case_ids_test = np.load(test_case_ids_file, allow_pickle=True)
+                
+                # Use same case_ids encoding and index
+                X_test_eval = pd.DataFrame(embeddings_test, index=case_ids_test)
+                y_categorical_test = pd.Series(labels_raw_test, index=case_ids_test)
+                
+                # Sort indices
+                X_test_eval = X_test_eval.sort_index()
+                y_categorical_test = y_categorical_test.sort_index()
+                
+                # Transform labels using the encoder fitted on train
+                y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+            except Exception as e:
+                log.warning(f"Could not load pretrained test features: {e}. Falling back to internal validation set.")
+                X_test_eval, y_test_eval = X_test, y_test
+        else:
+            file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
+            log.info(f"Loading raw test features from {file_path_test}")
+            try:
+                import pandas as pd
+                df_test = safe_load_parquet(file_path_test)
+                if df_test is not None:
+                    # Depending on module, handle ordering
+                    id_col_local = ID_COL if 'ID_COL' in globals() or 'ID_COL' in locals() else 'case_id'
+                    df_test = df_test.sort_values(id_col_local).set_index(id_col_local)
+                    
+                    if 'FEATURE_COLS' in globals() and globals()['FEATURE_COLS']:
+                        X_test_eval = df_test[FEATURE_COLS]
+                    else:
+                        lbl_col_local = LABEL_COL_NAME if 'LABEL_COL_NAME' in globals() or 'LABEL_COL_NAME' in locals() else 'label'
+                        exclude_cols = [lbl_col_local]
+                        feature_cols_test = [c for c in df_test.columns if c not in exclude_cols]
+                        X_test_eval = df_test[feature_cols_test]
+                        
+                    y_categorical_test = df_test[lbl_col_local]
+                    y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+            except Exception as e:
+                log.warning(f"Could not load raw test dataframe: {e}. Falling back to internal validation set.")
+                X_test_eval, y_test_eval = X_test, y_test
+                
+        if X_test_eval is None or y_test_eval is None:
+            log.warning("Test dataset could not be evaluated properly. Using internal validation set.")
+            X_test_eval, y_test_eval = X_test, y_test
+            
+        y_test_pred = pipeline.predict(X_test_eval)
+        acc = accuracy_score(y_test_eval, y_test_pred)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
         # Compute comprehensive metrics
-        metrics = compute_metrics(y_test, y_test_pred, n_classes)
+        metrics = compute_metrics(y_test_eval, y_test_pred, n_classes)
         log.info(f"Comprehensive Metrics for {data_type}:")
         log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
         log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
@@ -470,11 +530,11 @@ for data_type in data_types:
         log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
         log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
         
-        report = classification_report(y_test, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
+        report = classification_report(y_test_eval, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
         # Confusion matrix (raw)
-        cm = confusion_matrix(y_test, y_test_pred, labels=list(range(n_classes)))
+        cm = confusion_matrix(y_test_eval, y_test_pred, labels=list(range(n_classes)))
         log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
 
         # Save confusion matrix as CSV with class labels
@@ -484,6 +544,7 @@ for data_type in data_types:
         log.info(f"Saved confusion matrix to {cm_path}")
 
         # Normalized confusion matrix (per-row / true-class)
+        import numpy as np
         with np.errstate(all='ignore'):
             row_sums = cm.sum(axis=1, keepdims=True)
             cm_norm = np.divide(cm, row_sums, where=(row_sums != 0))
@@ -493,6 +554,7 @@ for data_type in data_types:
         log.info(f"Saved normalized confusion matrix to {cmn_path}")
         
         # Save comprehensive metrics to JSON
+        import json
         metrics_json = {
             'accuracy': float(metrics['accuracy']),
             'precision_macro': float(metrics['precision_macro']),
@@ -508,5 +570,24 @@ for data_type in data_types:
         with open(metrics_path, 'w') as f:
             json.dump(metrics_json, f, indent=2)
         log.info(f"Saved comprehensive metrics to {metrics_path}")
+
+        # Log final test metrics to wandb
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({
+                    'test/accuracy': float(metrics['accuracy']),
+                    'test/f1_macro': float(metrics['f1_macro']),
+                    'test/f1_weighted': float(metrics['f1_weighted']),
+                    'test/precision_macro': float(metrics['precision_macro']),
+                    'test/recall_macro': float(metrics['recall_macro']),
+                    'test/specificity_macro': float(metrics['specificity_macro']),
+                })
+        except Exception as e:
+            log.warning(f"Failed to log test metrics to wandb: {e}")
+            
+    except Exception as e:
+        log.warning(f"Could not compute classification report or test on global_test for {data_type}: {e}")
+
     except Exception as e:
         log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")

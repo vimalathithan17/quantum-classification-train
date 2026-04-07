@@ -422,18 +422,6 @@ for data_type in data_types:
     if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
         log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
 
-    # --- Generate Predictions on Test Set ---
-    log.info("  - Generating predictions on the hold-out test set...")
-    X_test_selected = X_test[final_selected_cols]
-    is_missing_test = X_test_selected.isnull().astype(int).values
-    X_test_filled = X_test_selected.fillna(0.0).values
-    X_test_scaled = X_test_filled
-
-    test_preds = final_model.predict_proba((X_test_scaled, is_missing_test))
-    test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
-    pd.DataFrame(test_preds, index=X_test.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
-    log.info("  - Saved test predictions.")
-
     # --- Save all components for inference ---
     joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))
     # Save a sentinel (None) for the scaler so inference can detect absence of scaling.
@@ -451,7 +439,7 @@ for data_type in data_types:
         'scaler': config.get('scaler', 'MinMax'),
         'n_classes': n_classes,
         'class_names': list(le.classes_),
-        'use_pretrained': use_pretrained,
+        'use_pretrained': args.use_pretrained_features,
         'random_state': RANDOM_STATE,
         'selected_features': list(final_selected_cols) if final_selected_cols is not None else None,
         'feature_dim': X_train.shape[1]
@@ -461,78 +449,70 @@ for data_type in data_types:
         json.dump(preprocessing_config, f, indent=2)
     log.info(f"  - Saved preprocessing config to {config_path}")
 
-    # --- Classification report on the hold-out test set ---
+    # --- Generate Predictions and Evaluatate on hold-out Test Set ---
     try:
+        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', 'data/global_test')
+        file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
+        log.info(f"Loading raw test features from {file_path_test}")
+
+        import pandas as pd
+        import numpy as np
+        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+        df_test = safe_load_parquet(file_path_test)
+        if df_test is not None:
+             id_col_local = ID_COL if 'ID_COL' in globals() or 'ID_COL' in locals() else 'case_id'
+             df_test = df_test.sort_values(id_col_local).set_index(id_col_local)
+
+             lbl_col_local = LABEL_COL if 'LABEL_COL' in globals() or 'LABEL_COL' in locals() else 'label'
+             exclude_cols = [lbl_col_local]
+             feature_cols_test = [c for c in df_test.columns if c not in exclude_cols]
+             X_test_eval = df_test[feature_cols_test]
+             y_categorical_test = df_test[lbl_col_local]
+             y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+        else:
+             X_test_eval, y_test_eval = X_test, y_test
+
+        X_test_selected = X_test_eval[final_selected_cols]
+        is_missing_test = X_test_selected.isnull().astype(int).values
+        X_test_filled = X_test_selected.fillna(0.0).values
+        X_test_scaled = X_test_filled
+
+        test_preds = final_model.predict_proba((X_test_scaled, is_missing_test))
         test_preds_labels = np.argmax(test_preds, axis=1)
-        acc = accuracy_score(y_test, test_preds_labels)
+        acc = accuracy_score(y_test_eval, test_preds_labels)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
-        
-        # Compute comprehensive metrics
-        metrics = compute_metrics(y_test, test_preds_labels, n_classes)
+
+        metrics = compute_metrics(y_test_eval, test_preds_labels, n_classes)
         log.info(f"Comprehensive Metrics for {data_type}:")
-        log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
-        log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
-        log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
-        log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
-        log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
-        log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
-        log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
-        log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
-        
-        report = classification_report(y_test, test_preds_labels, labels=list(range(n_classes)), target_names=le.classes_)
-        log.info(f"Classification Report for {data_type}:\n{report}")
+        for k, v in metrics.items():
+            if isinstance(v, float) and 'matrix' not in k:
+                log.info(f"  {k}: {v:.4f}")
 
-        # Confusion matrix (raw)
-        cm = confusion_matrix(y_test, test_preds_labels, labels=list(range(n_classes)))
-        log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
+        report = classification_report(y_test_eval, test_preds_labels, labels=list(range(n_classes)), target_names=le.classes_)
+        log.info(f"Classification Report for {data_type}:
+{report}")
 
-        cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
-        cm_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}.csv')
-        cm_df.to_csv(cm_path)
-        log.info(f"Saved confusion matrix to {cm_path}")
+        cm = confusion_matrix(y_test_eval, test_preds_labels, labels=list(range(n_classes)))
+        log.info(f"Confusion Matrix for {data_type}:
+{cm}")
 
-        # Normalized confusion matrix
-        with np.errstate(all='ignore'):
-            row_sums = cm.sum(axis=1, keepdims=True)
-            cm_norm = np.divide(cm, row_sums, where=(row_sums != 0))
-        cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
-        cmn_path = os.path.join(OUTPUT_DIR, f'confusion_matrix_{data_type}_normalized.csv')
-        cmn_df.to_csv(cmn_path)
-        log.info(f"Saved normalized confusion matrix to {cmn_path}")
-        
-        # Save comprehensive metrics to JSON
-        metrics_json = {
-            'accuracy': float(metrics['accuracy']),
-            'precision_macro': float(metrics['precision_macro']),
-            'precision_weighted': float(metrics['precision_weighted']),
-            'recall_macro': float(metrics['recall_macro']),
-            'recall_weighted': float(metrics['recall_weighted']),
-            'f1_macro': float(metrics['f1_macro']),
-            'f1_weighted': float(metrics['f1_weighted']),
-            'specificity_macro': float(metrics['specificity_macro']),
-            'specificity_weighted': float(metrics['specificity_weighted'])
-        }
-        metrics_path = os.path.join(OUTPUT_DIR, f'test_metrics_{data_type}.json')
-        with open(metrics_path, 'w') as f:
-            json.dump(metrics_json, f, indent=2)
-        log.info(f"Saved comprehensive metrics to {metrics_path}")
-        
-        # Log final test metrics to wandb
-        if modality_wandb_run:
-            try:
-                import wandb
-                wandb.log({
-                    'test/accuracy': float(metrics['accuracy']),
-                    'test/f1_macro': float(metrics['f1_macro']),
-                    'test/f1_weighted': float(metrics['f1_weighted']),
-                    'test/precision_macro': float(metrics['precision_macro']),
-                    'test/recall_macro': float(metrics['recall_macro']),
-                    'test/specificity_macro': float(metrics['specificity_macro']),
-                })
-            except Exception as e:
-                log.warning(f"Failed to log test metrics to wandb: {e}")
+        try:
+             import wandb
+             if wandb.run is not None:
+                 wandb.log({
+                     'test/accuracy': float(acc),
+                     'test/f1_macro': float(metrics.get('f1_macro', 0.0)),
+                     'test/f1_weighted': float(metrics.get('f1_weighted', 0.0)),
+                     'test/precision_macro': float(metrics.get('precision_macro', 0.0)),
+                     'test/recall_macro': float(metrics.get('recall_macro', 0.0)),
+                     'test/specificity_macro': float(metrics.get('specificity_macro', 0.0)),
+                 })
+        except Exception as e:
+             log.warning(f"Failed to log to wandb: {e}")
+
     except Exception as e:
-        log.warning(f"Could not compute classification report or confusion matrix for {data_type}: {e}")
+        log.warning(f"Could not compute classification report: {e}")
+
 
     # --- Finish wandb run for this modality ---
     if modality_wandb_run:

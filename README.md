@@ -24,7 +24,7 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 | 500+ samples | Transformer Fusion | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
 | 1000+ samples | Full Hybrid Pipeline | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) |
 
-> **⚠️ Data Leakage Prevention:** When using pretrained features from contrastive encoders, always use `--test_size 0.2` during pretraining to split data BEFORE encoder training. This prevents the encoder from seeing test samples. See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md#-data-leakage-prevention-important) for details.
+> **⚠️ Data Leakage Prevention:** With the new Global Split Data Architecture, always run `python create_global_split.py` to create `data/global_train` and `data/global_test` before running any pretraining, tuning, or base model scripts. Base learners train and tune strictly on 100% of `data/global_train`. At the end of their training scripts, they automatically calculate final hold-out test metrics on `data/global_test` and log them to W&B. The final meta-learner ensemble evaluation is still performed strictly via `inference.py`, but individual base models provide immediate test-set feedback directly to W&B. See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md#-data-leakage-prevention-important) for details.
 
 ---
 
@@ -36,7 +36,41 @@ A stacked ensemble using Quantum Machine Learning (QML) classifiers for multicla
 - All QML classifiers in `qml_models.py` now accept a `weight_decay` parameter and apply L2 regularization to the loss (controlled via `weight_decay`, **default 1e-3**).
 
 
-## 🔄 Key Feature: 2-Step Preprocessing Funnel
+## � Kaggle Production Workflow (Recommended)
+
+Our streamlined production workflow is managed through 5 sequentially numbered Kaggle notebooks located in the `kaggle_notebooks/` directory. This isolates dependencies, intermediate artifacts, and avoids Kaggle session timeouts.
+
+**The 5-Step Kaggle Pipeline:**
+
+1. **`01_Global_Data_Split_Kaggle.ipynb` (Data Prep)**
+   - **Action:** Runs global train/test splits to prevent data leakage.
+   - **Output:** Zips `global_split_data.zip`. 
+   - **Next Step:** Download this zip and upload it as a new **Kaggle Dataset** (e.g., `qml-global-split-data`).
+
+2. **`02_Contrastive_Pretraining_Kaggle.ipynb` (Representation Learning)**
+   - **Action:** Mounts the internal dataset + the dataset from Notebook 01. Pretrains contrastive encoders.
+   - **Output:** Zips `pretrained_embeddings.zip`.
+   - **Next Step:** Download and upload as a new **Kaggle Dataset** (e.g., `qml-pretrained-embeddings`).
+
+3. **`03_QML_Tuning_and_Training_Kaggle.ipynb` (Base Learners - Quantum)**
+   - **Action:** Mounts the dataset from Notebook 01. Tunes and trains the 4 QML base models.
+   - **Output:** Zips OOF predictions (`.csv`) and trained models (`.joblib`).
+   - **Next Step:** Download and upload as a new **Kaggle Dataset** (e.g., `qml-base-learner-outputs`).
+
+4. **`04_Transformer_Fusion_Kaggle.ipynb` (Base Learners - Classical)**
+   - **Action:** Mounts datasets from Notebook 01 and 02. Trains the Transformer Fusion model.
+   - **Output:** Zips OOF predictions (`.csv`) and trained models (`.joblib`).
+   - **Next Step:** Download and upload as a new **Kaggle Dataset** (e.g., `qml-transformer-outputs`).
+
+5. **`05_Meta_Learner_and_Inference_Kaggle.ipynb` (Ensemble & Evaluation)**
+   - **Action:** Brings together the original dataset and all Kaggle Datasets created in steps 1, 3, and 4.
+   - **Output:** Trains the Level-1 XGBoost Meta-Learner, runs final inference on the global holdout test set, and outputs final metrics/confusion matrices.
+
+For a detailed setup guide on Kaggle, see **[KAGGLE_SETUP.md](KAGGLE_SETUP.md)**.
+
+---
+
+## �🔄 Key Feature: 2-Step Preprocessing Funnel
 
 Training-time preprocessing for quantum circuits. If using the data notebooks, set `SOURCE_DIR=final_processed_datasets_xgb_balanced`. See [DATA_PROCESSING.md](DATA_PROCESSING.md).
 
@@ -240,6 +274,21 @@ python create_master_label_encoder.py
 
 Output: `master_label_encoder/label_encoder.joblib`
 
+### 1.5) Create the Global Data Split (create_global_split.py)
+
+To prevent data leakage during tuning, pretraining, and base model training, perform a global stratified split upfront.
+
+```bash
+python create_global_split.py --data_dir final_processed_datasets --out_train data/global_train --out_test data/global_test
+```
+
+Output: Creates `data/global_train/` and `data/global_test/` directories containing identically named parquet files.
+**Crucial Step:** From this point on, set `SOURCE_DIR=data/global_train` for all tuning, pretraining, and base model training. Base learner scripts train on the `global_train` set and at the very end automatically load `data/global_test` to calculate final hold-out metrics and immediately log them to W&B. The actual metadata ensemble step (`inference.py`) evaluates the overall final system on this held-out data.
+
+```bash
+export SOURCE_DIR=data/global_train
+```
+
 ### 2) Hyperparameter tuning (Optuna)
 
 Use `tune_models.py` to tune base learners. Repeat per data type / approach / qml_model / dim reducer as needed.
@@ -370,15 +419,11 @@ python dre_standard.py --n_qbits 8 --n_layers 4 --steps 150 --scaler m --verbose
 
 Outputs (per data type):
 - `train_oof_preds_<datatype>.csv` (used to train meta-learner)
-- `test_preds_<datatype>.csv`
 - model artifacts: `pipeline_<datatype>.joblib` or `selected_features_<datatype>.joblib`, `scaler_<datatype>.joblib`, `qml_model_<datatype>.joblib`
-- `confusion_matrix_<datatype>.csv` - raw confusion matrix
-- `confusion_matrix_<datatype>_normalized.csv` - row-normalized confusion matrix
-- `test_metrics_<datatype>.json` - comprehensive metrics (accuracy, precision, recall, F1, specificity - macro/weighted)
 
 ### 4) Curate the "best-of" predictions for the meta-learner
 
-Create a directory (for example, `final_ensemble_predictions`) and copy the `train_oof_preds_*` and `test_preds_*` files you want the meta-learner to use. Also copy `label_encoder.joblib` into this folder (the meta-learner reads the encoder to reconstruct class labels).
+Create a directory (for example, `final_ensemble_predictions`) and copy the `train_oof_preds_*` files you want the meta-learner to use. Also copy `label_encoder.joblib` into this folder (the meta-learner reads the encoder to reconstruct class labels).
 
 Example:
 
@@ -387,11 +432,9 @@ mkdir -p final_ensemble_predictions
 
 # Copy predictions for CNV from approach 1 standard
 cp base_learner_outputs_app1_standard/train_oof_preds_CNV.csv final_ensemble_predictions/
-cp base_learner_outputs_app1_standard/test_preds_CNV.csv final_ensemble_predictions/
 
 # Copy predictions for Prot from approach 2 reuploading
 cp base_learner_outputs_app2_reuploading/train_oof_preds_Prot.csv final_ensemble_predictions/
-cp base_learner_outputs_app2_reuploading/test_preds_Prot.csv final_ensemble_predictions/
 
 # Copy the master label encoder (required by meta-learner)
 cp master_label_encoder/label_encoder.joblib final_ensemble_predictions/
@@ -439,15 +482,13 @@ cp base_learner_outputs_app2_reuploading/scaler_Prot.joblib final_model_deployme
 cp base_learner_outputs_app2_reuploading/qml_model_Prot.joblib final_model_deployment/
 ```
 
-Prepare a `new_patient_data` directory that contains per-data-type parquet files following the naming convention used elsewhere (e.g., `data_CNV_.parquet`, `data_Prot_.parquet`, ...). Missing files are tolerated and handled by the inference script.
+Prepare a deployment directory and copy the meta-learner artifacts and base models you want to use. Then run inference on the held-out `global_test` data (or any other new patient data).
 
-Run inference:
-
+Run inference on the global test set:
 ```bash
-python inference.py --model_dir final_model_deployment --patient_data_dir new_patient_data
+python inference.py --model_dir final_model_deployment --patient_data_dir data/global_test
 ```
-
-The script prints the final predicted class label.
+The script will generate class predictions and evaluate final test performance if true labels are present.
 
 ---
 

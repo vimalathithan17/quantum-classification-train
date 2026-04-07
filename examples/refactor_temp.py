@@ -36,7 +36,6 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
     print(f"Random seed set to {seed}")
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 
 # Add parent directory to path for imports
@@ -973,95 +972,29 @@ def main():
     else:
         print("Warning: best_model.pt not found; evaluating last epoch weights")
     
-    # Load global_test features instead of using test_loader
-    try:
-        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', '../data/global_test')
-        if not os.path.exists(global_test_dir):
-            global_test_dir = 'data/global_test' # Fallback
-
-        test_features_dir = os.path.join(global_test_dir, 'features')
-        val_loss, val_acc, val_preds, val_labels, metrics_dict = 0, 0, None, None, None
-
-        test_emb_files = {
-            'GeneExpr': os.path.join(test_features_dir, 'GeneExpr_embeddings.npy'),
-            'Meth': os.path.join(test_features_dir, 'Meth_embeddings.npy'),
-            'miRNA': os.path.join(test_features_dir, 'miRNA_embeddings.npy')
-        }
-
-        test_labels_file = os.path.join(test_features_dir, 'labels.npy')
-        test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
-
-        feature_tensors = {}
-        for mod, path in test_emb_files.items():
-            if os.path.exists(path):
-                feature_tensors[mod] = torch.tensor(np.load(path), dtype=torch.float32)
-
-        labels_raw = np.load(test_labels_file, allow_pickle=True)
-        # Note: here we depend on `le` or hardcoded encodings... If we have test_loader, we can use fallback.
-        # This script expects simple tensor labels
-        labels_tensor = torch.tensor([list(le.classes_).index(L) for L in labels_raw], dtype=torch.long)
-
-        if len(feature_tensors) > 0:
-            test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
-            test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-            # Load global_test features instead of using test_loader
-    try:
-        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', '../data/global_test')
-        if not os.path.exists(global_test_dir):
-            global_test_dir = 'data/global_test' # Fallback
-
-        test_features_dir = os.path.join(global_test_dir, 'features')
-        val_loss, val_acc, val_preds, val_labels, metrics_dict = 0, 0, None, None, None
-
-        test_emb_files = {
-            'GeneExpr': os.path.join(test_features_dir, 'GeneExpr_embeddings.npy'),
-            'Meth': os.path.join(test_features_dir, 'Meth_embeddings.npy'),
-            'miRNA': os.path.join(test_features_dir, 'miRNA_embeddings.npy')
-        }
-
-        test_labels_file = os.path.join(test_features_dir, 'labels.npy')
-        test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
-
-        feature_tensors = {}
-        for mod, path in test_emb_files.items():
-            if os.path.exists(path):
-                feature_tensors[mod] = torch.tensor(np.load(path), dtype=torch.float32)
-
-        labels_raw = np.load(test_labels_file, allow_pickle=True)
-        # Note: here we depend on `le` or hardcoded encodings... If we have test_loader, we can use fallback.
-        # This script expects simple tensor labels
-        labels_tensor = torch.tensor([list(le.classes_).index(L) for L in labels_raw], dtype=torch.long)
-
-        if len(feature_tensors) > 0:
-            test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
-            test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-            val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
-                 model, test_loader_global, criterion, device, n_classes=num_classes
-            )
-            print("Evaluated on GLOBAL TEST SET!")
-        else:
-            raise FileNotFoundError("Global test embeddings not found.")
-
-    except Exception as e:
-        print(f"Could not evaluate on global test set: {e}. Falling back to internal test_loader.")
-        val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
-            model, test_loader, criterion, device, n_classes=num_classes
-        )
-
+    val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
+        model, test_loader, criterion, device, n_classes=num_classes
+    )
+    
     print(f"Test Loss: {val_loss:.4f}")
     print(f"Test Accuracy: {val_acc:.2f}%")
-
+    
+    # Print comprehensive metrics
     if metrics_dict is not None:
-        print(f"
-Comprehensive Metrics:")
-        for k, v in metrics_dict.items():
-            if isinstance(v, float) and 'matrix' not in k:
-                print(f"  {k}: {v:.4f}")
-
-        print(f"
-Classification Report:")
-        print(classification_report(val_labels, val_preds))
-
+        print(f"\nComprehensive Metrics:")
+        print(f"  Precision (macro): {metrics_dict['precision_macro']:.4f}")
+        print(f"  Precision (weighted): {metrics_dict['precision_weighted']:.4f}")
+        print(f"  Recall (macro): {metrics_dict['recall_macro']:.4f}")
+        print(f"  Recall (weighted): {metrics_dict['recall_weighted']:.4f}")
+        print(f"  F1 (macro): {metrics_dict['f1_macro']:.4f}")
+        print(f"  F1 (weighted): {metrics_dict['f1_weighted']:.4f}")
+        print(f"  Specificity (macro): {metrics_dict['specificity_macro']:.4f}")
+        print(f"  Specificity (weighted): {metrics_dict['specificity_weighted']:.4f}")
+    
+    print(f"\nClassification Report:")
+    print(classification_report(val_labels, val_preds))
+    
+    # Log final metrics to wandb
     if wandb_run is not None:
         wandb_log_dict = {
             'final_test_loss': val_loss,

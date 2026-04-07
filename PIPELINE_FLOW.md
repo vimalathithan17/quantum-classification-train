@@ -3,8 +3,32 @@
 ## Pipeline Overview
 
 ```
-RAW TCGA DATA → DATA PROCESSING → CONTRASTIVE PRETRAINING → PARALLEL BRANCH (QML + TRANSFORMER) → QML META-LEARNER → FINAL PREDICTIONS
+RAW TCGA DATA → DATA PROCESSING 
+       ↓ 
+KAGGLE NB 01 (GLOBAL SPLIT)
+       ↓
+KAGGLE NB 02 (CONTRASTIVE PRETRAINING)
+       ↓
+PARALLEL BRANCHES (KAGGLE NB 03: QML & KAGGLE NB 04: TRANSFORMER)
+       ↓
+KAGGLE NB 05 (QML META-LEARNER INFERENCE) 
+       ↓
+FINAL PREDICTIONS
 ```
+
+---
+
+## The 5-Step Kaggle Notebook Workflow
+
+The entire pipeline is split into a streamlined, sequential 5-step Kaggle Notebook workflow (located in `kaggle_notebooks/`). This approach avoids 12-hour session timeouts, securely isolates dependencies, and structures the workflow correctly.
+
+1. **Notebook 01 (.ipynb): Global Data Split:** Splits dataset into `data/global_train` and `data/global_test`. Output: `global_split_data.zip` (User uploads to Kaggle).
+2. **Notebook 02 (.ipynb): Contrastive Pretraining:** Learns robust representations. Output: `pretrained_embeddings.zip` (User uploads to Kaggle).
+3. **Notebook 03 (.ipynb): QML Tuning and Training:** Trains QML base models. Output: Base Learner OOF `.csv` and `.joblib` (User uploads to Kaggle). 
+4. **Notebook 04 (.ipynb): Transformer Fusion:** Trains classical Transformer model. Output: Transformer OOF `.csv` and `.pt` models (User uploads to Kaggle).
+5. **Notebook 05 (.ipynb): Meta-Learner and Inference:** Ensemble meta-learner trained on OOF predictions, outputting final metrics/confusion matrices evaluated on the `global_test` set.
+
+See **[KAGGLE_SETUP.md](KAGGLE_SETUP.md)** for detailed dataset setup instructions.
 
 ---
 
@@ -44,10 +68,12 @@ RAW TCGA DATA → DATA PROCESSING → CONTRASTIVE PRETRAINING → PARALLEL BRANC
 - Target: Select top N features where N ≤ number of qubits (e.g., 8-16)
 - Creates dimensionality-reduced feature sets
 
-**Step 2.4: Train/Test Split**
-- Stratified split preserving cancer type distribution
-- Typical: 80% train, 20% test
-- 5-fold cross-validation for out-of-fold predictions
+**Step 2.4: Global Data Split (create_global_split.py)**
+- Upfront global stratified split (e.g., 80% train, 20% test) creating `data/global_train` and `data/global_test`.
+- Base model training, tuning, and pretraining rely **strictly on 100% of the global_train data** to prevent leakage. Base models use `StratifiedKFold` CV for generating OOF predictions.
+- At the very end of their training scripts, base models automatically load `data/global_test/` to calculate final hold-out test metrics and immediately log them to W&B.
+- `inference.py` is still used for the final Meta-Learner (ensemble) evaluation, but individual base models provide immediate test-set feedback directly to W&B.
+- **Why this works:** Completely prevents validation and unsupervised data leakage (encoders, scalers, imputers only ever see train data).
 
 **Output:** 
 - Processed parquet files: data_GeneExpr_.parquet, data_miRNA_.parquet, etc.
@@ -268,8 +294,8 @@ This stage has TWO parallel paths that process data simultaneously:
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                              DATA CLEANING & PREPROCESSING                               │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
-│  │ Missing Value    │→ │ Normalization    │→ │ Feature Selection│→ │ Train/Test Split│  │
-│  │ Handling         │  │ (log, z-score)   │  │ (LightGBM/XGBoost)│  │ (Stratified)    │  │
+│  │ Missing Value    │→ │ Normalization    │→ │ Feature Selection│→ │ Upfront Global  │  │
+│  │ Handling         │  │ (log, z-score)   │  │ (LightGBM/XGBoost)│  │ Split(Train/Test)│  │
 │  └──────────────────┘  └──────────────────┘  └──────────────────┘  └─────────────────┘  │
 └─────────────────────────────────────┬───────────────────────────────────────────────────┘
                                       │

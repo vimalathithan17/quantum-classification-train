@@ -6,8 +6,6 @@ import joblib
 import json
 import shutil
 import random
-from sklearn.model_selection import train_test_split
-# No feature scaling required for meta-learner (base learner outputs are probabilities)
 from sklearn.metrics import (
     accuracy_score, 
     classification_report,
@@ -830,10 +828,8 @@ def main():
     if args.mode == 'tune':
         log.info(f"--- Starting Hyperparameter Tuning for Meta-Learner ({args.n_trials} trials) ---")
 
-        # Split training data for validation during tuning (stratified)
-        X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-            X_meta_train, y_meta_train, test_size=0.25, random_state=RANDOM_STATE, stratify=y_meta_train
-        )
+        from sklearn.model_selection import StratifiedKFold
+        import numpy as np
 
         study_name = 'qml_metalearner_tuning'
 
@@ -844,8 +840,23 @@ def main():
         storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
         study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
 
-        # Use a fixed learning rate for tuning if provided via CLI; objective will read args.learning_rate
-        study.optimize(lambda t: objective(t, X_train_split, y_train_split, X_val_split, y_val_split, n_classes, args, indicator_cols), n_trials=args.n_trials)
+        def cv_objective(trial):
+            skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=RANDOM_STATE)
+            scores = []
+            for train_idx, val_idx in skf.split(X_meta_train, y_meta_train):
+                # We use .iloc because X_meta_train might be a DataFrame, but y_meta_train could be a Series
+                X_train_fold = X_meta_train.iloc[train_idx]
+                y_train_fold = y_meta_train.iloc[train_idx]
+                X_val_fold = X_meta_train.iloc[val_idx]
+                y_val_fold = y_meta_train.iloc[val_idx]
+                
+                fold_score = objective(trial, X_train_fold, y_train_fold, X_val_fold, y_val_fold, n_classes, args, indicator_cols)
+                scores.append(fold_score)
+            
+            return np.mean(scores)
+
+        # Use the CV objective
+        study.optimize(cv_objective, n_trials=args.n_trials)
 
         log.info("--- Tuning Complete ---")
         log.info(f"Best hyperparameters found: {study.best_params}")
@@ -961,76 +972,79 @@ def main():
         # Note: we do not save a scaler for the meta-learner because inputs are
         # already probabilities (0..1) from base learners plus indicator features.
 
-        # Evaluate and save final predictions (no scaler applied)
-        log.info("--- Evaluating on Test Set ---")
-        base_cols = [c for c in X_meta_test.columns if c not in indicator_cols]
-        X_base_test = X_meta_test[base_cols].values
-        X_mask_test = _build_mask_from_indicators(X_meta_test, base_cols, indicator_cols)
-        log.info(f"Final evaluation: X_base_test shape={X_base_test.shape}, X_mask_test shape={X_mask_test.shape}")
-        if X_base_test.shape != X_mask_test.shape:
-            raise ValueError(f"Shape mismatch before final predict: base_preds {X_base_test.shape} vs mask {X_mask_test.shape}")
-        test_predictions = final_model.predict((X_base_test, X_mask_test))
-        test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
-        log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
+        if not X_meta_test.empty:
+            # Evaluate and save final predictions (no scaler applied)
+            log.info("--- Evaluating on Test Set ---")
+            base_cols = [c for c in X_meta_test.columns if c not in indicator_cols]
+            X_base_test = X_meta_test[base_cols].values
+            X_mask_test = _build_mask_from_indicators(X_meta_test, base_cols, indicator_cols)
+            log.info(f"Final evaluation: X_base_test shape={X_base_test.shape}, X_mask_test shape={X_mask_test.shape}")
+            if X_base_test.shape != X_mask_test.shape:
+                raise ValueError(f"Shape mismatch before final predict: base_preds {X_base_test.shape} vs mask {X_mask_test.shape}")
+            test_predictions = final_model.predict((X_base_test, X_mask_test))
+            test_accuracy = accuracy_score(y_meta_test.values, test_predictions)
+            log.info(f"Final Test Accuracy: {test_accuracy:.4f}")
 
-        # Compute comprehensive metrics
-        metrics = compute_metrics(y_meta_test.values, test_predictions, n_classes)
-        log.info("Comprehensive Metrics:")
-        log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
-        log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
-        log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
-        log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
-        log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
-        log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
-        log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
-        log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
+            # Compute comprehensive metrics
+            metrics = compute_metrics(y_meta_test.values, test_predictions, n_classes)
+            log.info("Comprehensive Metrics:")
+            log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
+            log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
+            log.info(f"  Recall (macro): {metrics['recall_macro']:.4f}")
+            log.info(f"  Recall (weighted): {metrics['recall_weighted']:.4f}")
+            log.info(f"  F1 (macro): {metrics['f1_macro']:.4f}")
+            log.info(f"  F1 (weighted): {metrics['f1_weighted']:.4f}")
+            log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
+            log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
 
-        # Generate and print classification report
-        report = classification_report(y_meta_test.values, test_predictions, labels=list(range(n_classes)), target_names=le.classes_)
-        log.info("Classification Report:\n" + report)
+            # Generate and print classification report
+            report = classification_report(y_meta_test.values, test_predictions, labels=list(range(n_classes)), target_names=le.classes_)
+            log.info("Classification Report:\n" + report)
 
-        # Save confusion matrix
-        cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
-        cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
-        cm_path = os.path.join(OUTPUT_DIR, 'confusion_matrix.csv')
-        cm_df.to_csv(cm_path)
-        log.info(f"Saved confusion matrix to {cm_path}")
+            # Save confusion matrix
+            cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
+            cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
+            cm_path = os.path.join(OUTPUT_DIR, 'confusion_matrix.csv')
+            cm_df.to_csv(cm_path)
+            log.info(f"Saved confusion matrix to {cm_path}")
 
-        # Normalized confusion matrix (per-row / true-class)
-        with _np.errstate(all='ignore'):
-            row_sums = cm.sum(axis=1, keepdims=True)
-            cm_norm = _np.divide(cm, row_sums, where=(row_sums != 0))
-        cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
-        cmn_path = os.path.join(OUTPUT_DIR, 'confusion_matrix_normalized.csv')
-        cmn_df.to_csv(cmn_path)
-        log.info(f"Saved normalized confusion matrix to {cmn_path}")
+            # Normalized confusion matrix (per-row / true-class)
+            with _np.errstate(all='ignore'):
+                row_sums = cm.sum(axis=1, keepdims=True)
+                cm_norm = _np.divide(cm, row_sums, where=(row_sums != 0))
+            cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
+            cmn_path = os.path.join(OUTPUT_DIR, 'confusion_matrix_normalized.csv')
+            cmn_df.to_csv(cmn_path)
+            log.info(f"Saved normalized confusion matrix to {cmn_path}")
 
-        # Save comprehensive metrics to JSON
-        metrics_json = {
-            'accuracy': float(metrics['accuracy']),
-            'precision_macro': float(metrics['precision_macro']),
-            'precision_weighted': float(metrics['precision_weighted']),
-            'recall_macro': float(metrics['recall_macro']),
-            'recall_weighted': float(metrics['recall_weighted']),
-            'f1_macro': float(metrics['f1_macro']),
-            'f1_weighted': float(metrics['f1_weighted']),
-            'specificity_macro': float(metrics['specificity_macro']),
-            'specificity_weighted': float(metrics['specificity_weighted'])
-        }
-        metrics_path = os.path.join(OUTPUT_DIR, 'test_metrics.json')
-        with open(metrics_path, 'w') as f:
-            json.dump(metrics_json, f, indent=2)
-        log.info(f"Saved comprehensive metrics to {metrics_path}")
+            # Save comprehensive metrics to JSON
+            metrics_json = {
+                'accuracy': float(metrics['accuracy']),
+                'precision_macro': float(metrics['precision_macro']),
+                'precision_weighted': float(metrics['precision_weighted']),
+                'recall_macro': float(metrics['recall_macro']),
+                'recall_weighted': float(metrics['recall_weighted']),
+                'f1_macro': float(metrics['f1_macro']),
+                'f1_weighted': float(metrics['f1_weighted']),
+                'specificity_macro': float(metrics['specificity_macro']),
+                'specificity_weighted': float(metrics['specificity_weighted'])
+            }
+            metrics_path = os.path.join(OUTPUT_DIR, 'test_metrics.json')
+            with open(metrics_path, 'w') as f:
+                json.dump(metrics_json, f, indent=2)
+            log.info(f"Saved comprehensive metrics to {metrics_path}")
 
-        # Save predictions to a file
-        preds_df = pd.DataFrame({
-            'case_id': X_meta_test.index,
-            'true_class': le.inverse_transform(y_meta_test.values),
-            'predicted_class': le.inverse_transform(test_predictions)
-        })
-        preds_file = os.path.join(OUTPUT_DIR, 'final_predictions.csv')
-        preds_df.to_csv(preds_file, index=False)
-        log.info(f"Final predictions saved to '{preds_file}'")
+            # Save predictions to a file
+            preds_df = pd.DataFrame({
+                'case_id': X_meta_test.index,
+                'true_class': le.inverse_transform(y_meta_test.values),
+                'predicted_class': le.inverse_transform(test_predictions)
+            })
+            preds_file = os.path.join(OUTPUT_DIR, 'final_predictions.csv')
+            preds_df.to_csv(preds_file, index=False)
+            log.info(f"Final predictions saved to '{preds_file}'")
+        else:
+            log.info("--- Skipping Evaluation: Testing is delegated to inference.py ---")
 
 if __name__ == "__main__":
     main()

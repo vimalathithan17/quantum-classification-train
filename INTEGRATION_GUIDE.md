@@ -34,28 +34,29 @@ This guide explains **how to integrate** the QML pipeline with performance exten
 
 ### ⚠️ Data Leakage Prevention (IMPORTANT)
 
-When using pretrained features from contrastive encoders, **always split data BEFORE pretraining**:
+With the **Global Split Data Architecture**, you must **always split data BEFORE any pretraining** using `create_global_split.py`.
 
 ```bash
-# ✓ CORRECT: Split before pretraining (--test_size 0.2)
-python examples/pretrain_contrastive.py --test_size 0.2 ...
+# ✓ CORRECT: Create global split first
+python create_global_split.py --data_dir final_processed_datasets --output_dir data
 
-# ✗ WRONG: No split (encoder sees ALL data, including test samples)
-python examples/pretrain_contrastive.py ...  # F1=1.0 is FAKE!
+# Then use the global_train directory for pretraining
+python examples/pretrain_contrastive.py --data_dir data/global_train ...
 ```
 
 **Why this matters:**
-- Without split: Encoder trains on ALL samples → test samples "leak" into encoder → artificially perfect F1=1.0
-- With split: Encoder trains on 80% → honest evaluation on unseen 20% → realistic metrics
+- Without split: Encoder or base models train on ALL samples → test samples "leak" into encoders/imputers/scalers → artificially perfect F1=1.0
+- With global split: All tuning, base models (using `StratifiedKFold` for OOF predictions), and pretraining use **100% of global_train**.
+- At the very end of their training scripts, base models automatically load `data/global_test/` to calculate final hold-out test metrics and immediately log them to W&B. `inference.py` evaluates the final ensemble.
 
 **Pipeline with proper split:**
 ```
-pretrain_contrastive.py     extract_pretrained_features.py     QML/Transformer scripts
-────────────────────────    ───────────────────────────────    ────────────────────────
-1. Split data (80/20)       1. Load train/test indices         1. Load *_train_embeddings.npy
-2. Standardize (fit train)  2. Apply scalers                   2. Load *_test_embeddings.npy  
-3. Train on TRAIN only      3. Extract train/test separately   3. Use directly (no re-split)
-4. Save indices, scalers    4. Save split files
+create_global_split.py      pretrain_contrastive.py     extract_pretrained_features.py     QML/Transformer scripts
+───────────────────────     ───────────────────────     ───────────────────────────────    ────────────────────────
+1. Load datasets            1. Use data/global_train    1. Load train/test data            1. Base models train on global_train
+2. Create 80/20 split       2. Train encoder on TRAIN   2. Extract train/test separately   2. Generate CV OOF predictions
+3. Save to global_train/    3. Save encoder model       3. Save embeddings                 3. Log final test metrics to W&B
+   and global_test/                                                                        4. Final evaluate via inference.py
 ```
 
 **Split output files:**

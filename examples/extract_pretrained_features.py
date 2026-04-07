@@ -81,6 +81,7 @@ def extract_features(
     encoder_dir: str,
     data_dir: str,
     output_dir: str,
+    global_test_dir: str = None,
     batch_size: int = 256,
     device: str = 'auto'
 ):
@@ -120,21 +121,9 @@ def extract_features(
     test_indices_file = split_dir / 'test_indices.npy'
     scalers_file = split_dir / 'scalers.joblib'
     
-    has_split = train_indices_file.exists() and test_indices_file.exists()
+    has_split = False
     train_indices = None
     test_indices = None
-    
-    if has_split:
-        train_indices = np.load(train_indices_file)
-        test_indices = np.load(test_indices_file)
-        print(f"\\n✓ Found train/test split info (no data leakage)")
-        print(f"  Train samples: {len(train_indices)}")
-        print(f"  Test samples: {len(test_indices)}")
-        print(f"  Will save train/test embeddings separately")
-    else:
-        print(f"\\n⚠️  WARNING: No train/test split info found!")
-        print(f"   Encoder may have been trained on ALL data (potential leakage)")
-        print(f"   Recommend re-running pretrain_contrastive.py with --test_size 0.2")
     
     # Load scalers if available (required if encoder was trained on standardized data)
     scalers = None
@@ -154,9 +143,7 @@ def extract_features(
         'embed_dim': metadata['embed_dim'],
         'modalities_extracted': [],
         'samples_per_modality': {},
-        'has_train_test_split': has_split,
-        'n_train_samples': len(train_indices) if train_indices is not None else None,
-        'n_test_samples': len(test_indices) if test_indices is not None else None,
+        'has_split': False,
         'scalers_applied': scalers is not None
     }
     
@@ -208,7 +195,53 @@ def extract_features(
         # Concatenate all embeddings
         embeddings = np.vstack(all_embeddings)
         
-        if has_split:
+        has_global_test = global_test_dir is not None
+
+        if has_global_test:
+            # Save train embeddings from the data_dir
+            train_emb = embeddings
+            train_file = output_dir / f"{modality}_train_embeddings.npy"
+            np.save(train_file, train_emb)
+            print(f"  Saved train embeddings: {train_emb.shape} -> {train_file}")
+            
+            # Now extract test features if global_test_dir is provided
+            test_data_file = Path(global_test_dir) / f"data_{modality}_.parquet"
+            if test_data_file.exists():
+                test_features, test_labels, test_case_ids = load_modality_data(Path(global_test_dir), modality)
+                
+                # Apply scaler if it was available
+                if scalers is not None and modality in scalers:
+                    test_features = scalers[modality].transform(test_features).astype(np.float32)
+                
+                all_test_embeddings = []
+                with torch.no_grad():
+                    for i in range(0, test_features.shape[0], batch_size):
+                        batch = test_features[i:i + batch_size]
+                        batch_tensor = torch.from_numpy(batch).float().to(device)
+                        result = encoder(batch_tensor)
+                        emb = result[0] if isinstance(result, tuple) else result
+                        all_test_embeddings.append(emb.cpu().numpy())
+                
+                test_emb = np.vstack(all_test_embeddings)
+                test_file = output_dir / f"{modality}_test_embeddings.npy"
+                np.save(test_file, test_emb)
+                print(f"  Saved test embeddings: {test_emb.shape} -> {test_file}")
+                
+            if labels is not None and not labels_saved:
+                np.save(output_dir / "train_labels.npy", labels)
+                if test_data_file.exists():
+                    np.save(output_dir / "test_labels.npy", test_labels)
+                print(f"  Saved labels")
+                labels_saved = True
+            
+            if case_ids is not None and not case_ids_saved:
+                np.save(output_dir / "train_case_ids.npy", case_ids)
+                if test_data_file.exists():
+                    np.save(output_dir / "test_case_ids.npy", test_case_ids)
+                print(f"  Saved case_ids")
+                case_ids_saved = True
+
+        elif has_split:
             # Save train/test embeddings separately
             train_emb = embeddings[train_indices]
             test_emb = embeddings[test_indices]
@@ -268,12 +301,10 @@ def extract_features(
     print(f"Extracted {len(extraction_info['modalities_extracted'])} modalities")
     print(f"Output directory: {output_dir}")
     print(f"Embedding dimension: {metadata['embed_dim']}")
-    if has_split:
-        print(f"\\n✓ Train/test split preserved (no leakage)")
-        print(f"  Use *_train_embeddings.npy for training")
-        print(f"  Use *_test_embeddings.npy for evaluation")
-    else:
-        print(f"\\n⚠️  No split - ALL samples were encoded (potential leakage)")
+    
+    print(f"\n✓ 100% Dataset Unified Encoder Evaluation mode completed")
+    print(f"  Validation folds (K-Fold + Test Data split) MUST be handled by downstream Base Learners!")
+    
     print(f"{'='*60}")
     print(f"{'='*60}")
     
@@ -313,7 +344,9 @@ Output files:
     parser.add_argument('--encoder_dir', type=str, required=True,
                         help='Directory containing pretrained encoders (with metadata.json)')
     parser.add_argument('--data_dir', type=str, required=True,
-                        help='Directory containing parquet data files (data_*.parquet)')
+                        help='Directory containing parquet data files (data_*.parquet) for training')
+    parser.add_argument('--global_test_dir', type=str, default=None,
+                        help='Directory containing global test parquet files. If provided, creates separate _train_ and _test_ embeddings')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Output directory for extracted features')
     parser.add_argument('--batch_size', type=int, default=256,
@@ -328,6 +361,7 @@ Output files:
         encoder_dir=args.encoder_dir,
         data_dir=args.data_dir,
         output_dir=args.output_dir,
+        global_test_dir=args.global_test_dir,
         batch_size=args.batch_size,
         device=args.device
     )
