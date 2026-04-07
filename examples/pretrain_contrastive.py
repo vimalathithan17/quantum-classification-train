@@ -352,7 +352,7 @@ def main():
     
     print(f"   Total Pretraining samples: {n_total_samples}")
     
-    # Save case_ids and labels for downstream cross-validation
+    # Save case_ids and labels for downstream tracking
     split_dir = Path(args.output_dir)
     split_dir.mkdir(parents=True, exist_ok=True)
     if train_case_ids is not None:
@@ -360,17 +360,7 @@ def main():
     if train_labels is not None:
         np.save(split_dir / "labels.npy", train_labels)
     
-    np.save(split_dir / 'train_indices.npy', train_idx)
-    np.save(split_dir / 'test_indices.npy', test_idx)
-    if train_case_ids is not None:
-        np.save(split_dir / 'train_case_ids.npy', train_case_ids)
-        np.save(split_dir / 'test_case_ids.npy', test_case_ids)
-    if labels is not None:
-        np.save(split_dir / 'labels.npy', labels)  # All labels for reference
-        np.save(split_dir / 'train_labels.npy', train_labels)
-        np.save(split_dir / 'test_labels.npy', test_labels)
-    
-    print(f"   Saved split info to {split_dir}/")
+    print(f"   Saved metadata info to {split_dir}/")
     
     # Standardize features (fit on train only to prevent leakage)
     from sklearn.preprocessing import StandardScaler
