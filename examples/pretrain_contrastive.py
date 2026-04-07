@@ -369,9 +369,8 @@ def main():
     scalers = {}
     for modality in train_data.keys():
         scaler = StandardScaler()
-        # Fit on training data, transform both train and test
+        # Fit and transform training data
         train_data[modality] = scaler.fit_transform(train_data[modality]).astype(np.float32)
-        test_data[modality] = scaler.transform(test_data[modality]).astype(np.float32)
         scalers[modality] = scaler
         
         # Log scale info
@@ -388,7 +387,7 @@ def main():
     val_dataloader = None
     
     if args.val_size > 0:
-        n_train = len(train_idx)
+        n_train = n_total_samples
         val_indices = np.arange(n_train)
         
         # Simple random split of already-split training indices
