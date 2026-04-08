@@ -297,9 +297,14 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
         try:
             del model
             del optimizer
+            del scheduler
             del loss_fn
             del train_loader
             del val_loader
+            del train_dataset
+            del val_dataset
+            del train_data
+            del val_data
         except NameError:
             pass
         gc.collect()
