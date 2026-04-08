@@ -293,7 +293,7 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
             
     # Report best val_loss (contrastive loss on validation set)
     trial.set_user_attr('best_val_loss', float(best_val_loss))
-    trial.set_user_attr('epochs_run', len(metrics['losses']))
+    trial.set_user_attr('epochs_run', len(metrics.get('epoch_losses', [])))
     
     log.info(f"--- Trial {trial.number} Finished: best_val_loss = {best_val_loss:.4f} ---")
     
