@@ -170,7 +170,7 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
     log.info(f"--- Starting Trial {trial.number} ---")
     
     # HYPERPARAMETERS
-    temperature = trial.suggest_float('temperature', 0.01, 0.2, log=True)
+    temperature = trial.suggest_categorical('temperature', [0.02, 0.03, 0.04, 0.05])
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-1, log=True)
     
@@ -288,8 +288,22 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
         return float('inf')
     finally:
         import shutil
+        import gc
         if trial_ckpt_dir.exists():
             shutil.rmtree(trial_ckpt_dir, ignore_errors=True)
+            
+        # Clean up PyTorch memory so subsequent trials don't OOM
+        try:
+            del model
+            del optimizer
+            del loss_fn
+            del train_loader
+            del val_loader
+        except NameError:
+            pass
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
             
     # Report best val_loss (contrastive loss on validation set)
     trial.set_user_attr('best_val_loss', float(best_val_loss))
