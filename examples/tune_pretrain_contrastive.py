@@ -219,21 +219,21 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
     val_data = {k: v[val_idx] for k, v in data.items()}
     
     from torch.utils.data import DataLoader
-    train_dataset = MultiOmicsDataset(train_data)
-    val_dataset = MultiOmicsDataset(val_data)
+    train_dataset = MultiOmicsDataset(train_data, apply_augmentation=True, num_augmented_views=2)
+    val_dataset = MultiOmicsDataset(val_data, apply_augmentation=True, num_augmented_views=2)
     
     actual_batch_size = len(train_dataset) if batch_size == -1 else batch_size
     train_loader = DataLoader(
         train_dataset, 
         batch_size=actual_batch_size, 
         shuffle=True, 
-        collate_fn=lambda batch: collate_augmented_multiomics(batch, p_mask=0.3, p_noise=0.3, noise_std=0.1)
+        collate_fn=collate_augmented_multiomics
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=actual_batch_size,
         shuffle=False,
-        collate_fn=lambda batch: collate_augmented_multiomics(batch, p_mask=0.0, p_noise=0.0, noise_std=0.0) # Validation unmasked view 
+        collate_fn=collate_augmented_multiomics
     )
 
     # Initialize Model
