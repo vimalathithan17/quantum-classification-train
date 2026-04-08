@@ -200,7 +200,7 @@ def objective(trial, args, data, modality_dims, labels, case_ids, device):
     if args.full_batch:
         batch_size = -1
     else:
-        batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
+        batch_size = trial.suggest_categorical('batch_size', [32, 64])
     
     log.info(f"Trial {trial.number} params: temp={temperature:.4f}, lr={lr:.6f}, "
              f"wd={weight_decay:.6f}, proj_dim={projection_dim}, embed_dim={embed_dim}")
