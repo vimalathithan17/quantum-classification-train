@@ -1021,14 +1021,12 @@ def main():
     print(f"Test Accuracy: {val_acc:.2f}%")
 
     if metrics_dict is not None:
-        print(f"
-Comprehensive Metrics:")
+        print(f"\nComprehensive Metrics:")
         for k, v in metrics_dict.items():
             if isinstance(v, float) and 'matrix' not in k:
                 print(f"  {k}: {v:.4f}")
 
-        print(f"
-Classification Report:")
+        print(f"\nClassification Report:")
         print(classification_report(val_labels, val_preds))
 
     if wandb_run is not None:
