@@ -1004,37 +1004,6 @@ def main():
         if len(feature_tensors) > 0:
             test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
             test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-            # Load global_test features instead of using test_loader
-    try:
-        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', '../data/global_test')
-        if not os.path.exists(global_test_dir):
-            global_test_dir = 'data/global_test' # Fallback
-
-        test_features_dir = os.path.join(global_test_dir, 'features')
-        val_loss, val_acc, val_preds, val_labels, metrics_dict = 0, 0, None, None, None
-
-        test_emb_files = {
-            'GeneExpr': os.path.join(test_features_dir, 'GeneExpr_embeddings.npy'),
-            'Meth': os.path.join(test_features_dir, 'Meth_embeddings.npy'),
-            'miRNA': os.path.join(test_features_dir, 'miRNA_embeddings.npy')
-        }
-
-        test_labels_file = os.path.join(test_features_dir, 'labels.npy')
-        test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
-
-        feature_tensors = {}
-        for mod, path in test_emb_files.items():
-            if os.path.exists(path):
-                feature_tensors[mod] = torch.tensor(np.load(path), dtype=torch.float32)
-
-        labels_raw = np.load(test_labels_file, allow_pickle=True)
-        # Note: here we depend on `le` or hardcoded encodings... If we have test_loader, we can use fallback.
-        # This script expects simple tensor labels
-        labels_tensor = torch.tensor([list(le.classes_).index(L) for L in labels_raw], dtype=torch.long)
-
-        if len(feature_tensors) > 0:
-            test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
-            test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
             val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
                  model, test_loader_global, criterion, device, n_classes=num_classes
             )
