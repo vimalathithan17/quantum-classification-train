@@ -973,65 +973,73 @@ def main():
     else:
         print("Warning: best_model.pt not found; evaluating last epoch weights")
     
-    # Load global_test features instead of using test_loader
-    try:
-        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', None)
-        
-        # If GLOBAL_TEST_DIR isn't perfectly set, dynamically find it based on the training data_dir
-        if global_test_dir is None or not os.path.exists(global_test_dir):
-            if 'global_train' in args.data_dir:
-                global_test_dir = args.data_dir.replace('global_train', 'global_test')
-            else:
-                global_test_dir = os.path.join(os.path.dirname(args.data_dir), 'global_test')
-            
-            if not os.path.exists(global_test_dir):
-                global_test_dir = '../data/global_test' # Last resort fallback
-
-        val_loss, val_acc, val_preds, val_labels, metrics_dict = 0, 0, None, None, None
-
-        if args.use_pretrained_features:
-            test_features_dir = os.path.join(global_test_dir, 'features')
-            test_emb_files = {
-                'GeneExpr': os.path.join(test_features_dir, 'GeneExpr_embeddings.npy'),
-                'Meth': os.path.join(test_features_dir, 'Meth_embeddings.npy'),
-                'miRNA': os.path.join(test_features_dir, 'miRNA_embeddings.npy')
-            }
-            test_labels_file = os.path.join(test_features_dir, 'labels.npy')
-            feature_tensors = {}
-            for mod, path in test_emb_files.items():
-                if os.path.exists(path):
-                    feature_tensors[mod] = torch.tensor(np.load(path), dtype=torch.float32)
-            
-            labels_raw = np.load(test_labels_file, allow_pickle=True)
-            if label_encoder is not None:
-                labels_tensor = torch.tensor(label_encoder.transform(labels_raw), dtype=torch.long)
-            else:
-                raise ValueError("No label encoder available for global test.")
-        else:
-            print("Loading RAW global_test parquet files...")
-            test_data_dict, raw_test_labels, _ = load_multiomics_data(global_test_dir, modalities=args.modalities, label_encoder=label_encoder)
-            feature_tensors = {}
-            for mod, data in test_data_dict.items():
-                if not args.no_standardize:
-                    data = scalers[mod].transform(data).astype(np.float32)
-                feature_tensors[mod] = torch.tensor(data, dtype=torch.float32)
-            labels_tensor = torch.tensor(raw_test_labels, dtype=torch.long)
-
-        if len(feature_tensors) > 0:
-            test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
-            test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-            val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
-                 model, test_loader_global, criterion, device, n_classes=num_classes
-            )
-            print("Evaluated on GLOBAL TEST SET!")
-        else:
-            raise FileNotFoundError("Global test embeddings/data not found.")
-
-    except Exception as e:
-        print(f"Could not evaluate on global test set: {e}. Falling back to internal test_loader.")
+    # Check if we already have the global test set from split pretrained features
+    if args.use_pretrained_features and is_pretrained_split:
+        print("Pre-split features detected. Evaluation on internal test_loader (which represents global_test).")
         val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
             model, test_loader, criterion, device, n_classes=num_classes
         )
+        print("Evaluated on GLOBAL TEST SET!")
+    else:
+        # Load global_test features instead of using test_loader
+        try:
+            global_test_dir = os.environ.get('GLOBAL_TEST_DIR', None)
+            
+            # If GLOBAL_TEST_DIR isn't perfectly set, dynamically find it based on the training data_dir
+            if global_test_dir is None or not os.path.exists(global_test_dir):
+                if 'global_train' in args.data_dir:
+                    global_test_dir = args.data_dir.replace('global_train', 'global_test')
+                else:
+                    global_test_dir = os.path.join(os.path.dirname(args.data_dir), 'global_test')
+                
+                if not os.path.exists(global_test_dir):
+                    global_test_dir = '../data/global_test' # Last resort fallback
+
+            val_loss, val_acc, val_preds, val_labels, metrics_dict = 0, 0, None, None, None
+
+            if args.use_pretrained_features:
+                test_features_dir = os.path.join(global_test_dir, 'features')
+                test_emb_files = {
+                    'GeneExpr': os.path.join(test_features_dir, 'GeneExpr_embeddings.npy'),
+                    'Meth': os.path.join(test_features_dir, 'Meth_embeddings.npy'),
+                    'miRNA': os.path.join(test_features_dir, 'miRNA_embeddings.npy')
+                }
+                test_labels_file = os.path.join(test_features_dir, 'labels.npy')
+                feature_tensors = {}
+                for mod, path in test_emb_files.items():
+                    if os.path.exists(path):
+                        feature_tensors[mod] = torch.tensor(np.load(path), dtype=torch.float32)
+                
+                labels_raw = np.load(test_labels_file, allow_pickle=True)
+                if label_encoder is not None:
+                    labels_tensor = torch.tensor(label_encoder.transform(labels_raw), dtype=torch.long)
+                else:
+                    raise ValueError("No label encoder available for global test.")
+            else:
+                print("Loading RAW global_test parquet files...")
+                test_data_dict, raw_test_labels, _ = load_multiomics_data(global_test_dir, modalities=args.modalities, label_encoder=label_encoder)
+                feature_tensors = {}
+                for mod, data in test_data_dict.items():
+                    if not args.no_standardize:
+                        data = scalers[mod].transform(data).astype(np.float32)
+                    feature_tensors[mod] = torch.tensor(data, dtype=torch.float32)
+                labels_tensor = torch.tensor(raw_test_labels, dtype=torch.long)
+
+            if len(feature_tensors) > 0:
+                test_dataset = MultiModalDataset(feature_tensors, labels_tensor)
+                test_loader_global = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+                val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
+                     model, test_loader_global, criterion, device, n_classes=num_classes
+                )
+                print("Evaluated on GLOBAL TEST SET!")
+            else:
+                raise FileNotFoundError("Global test embeddings/data not found.")
+
+        except Exception as e:
+            print(f"Could not evaluate on global test set: {e}. Falling back to internal test_loader.")
+            val_loss, val_acc, val_preds, val_labels, metrics_dict = evaluate(
+                model, test_loader, criterion, device, n_classes=num_classes
+            )
 
     print(f"Test Loss: {val_loss:.4f}")
     print(f"Test Accuracy: {val_acc:.2f}%")
