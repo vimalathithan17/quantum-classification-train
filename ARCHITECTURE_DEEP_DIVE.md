@@ -2518,7 +2518,7 @@ LR │     ╱─────╲
 │                                                                          │
 │  VALIDATION (every validation_frequency steps):                         │
 │   Compute: accuracy, precision, recall, F1, specificity                 │
-│   Track: best model by selection_metric (default: f1_weighted)          │
+│   Track: best model by selection_metric                                 │
 │                                                                          │
 │  EARLY STOPPING:                                                        │
 │   if patience > 0 and no improvement for patience steps:                │

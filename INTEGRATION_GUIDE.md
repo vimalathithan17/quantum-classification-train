@@ -237,7 +237,7 @@ python examples/train_transformer_fusion.py \
 # The script now applies class weights (inverse of class frequency) to handle imbalance
 # Label smoothing (0.05) prevents overconfident predictions on training data
 # ReduceLROnPlateau reduces learning rate if validation loss plateaus
-# Early stopping (patience=10) prevents overfitting when val_f1_weighted stops improving
+# Early stopping (patience=25) prevents overfitting when the composite validation metric stops improving
 # Dropout (0.2) applied to all layers for regularization
 
 # Step 3: Extract transformer predictions as features (CSV format for metalearner)

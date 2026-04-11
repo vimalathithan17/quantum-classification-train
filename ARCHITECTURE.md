@@ -41,7 +41,7 @@ Code default: `final_processed_datasets/` (set `SOURCE_DIR=final_processed_datas
 **Stage 2: Hyperparameter Tuning (`tune_models.py`)**
 - **Purpose:** To find the optimal set of hyperparameters for each base-learner configuration.
 - **Process:** Using Optuna, this script runs a series of trials for a specified data type (`--datatype`), architectural approach (`--approach`), and QML model (`--qml_model`). It uses `StratifiedKFold` cross-validation to robustly evaluate each parameter set.
-- **Optimization Metric:** Trials are optimized using **weighted F1 score** instead of accuracy. This provides better handling of class imbalance and more robust model selection.
+- **Optimization Metric:** Trials are optimized using a **composite average metric** (Weighted F1, Weighted Precision, Weighted Recall, Weighted Specificity, and Accuracy). This provides better handling of class imbalance and more robust model selection.
 - **Comprehensive Metrics:** For each fold in each trial, the following metrics are computed and saved:
   - Accuracy
   - Precision (macro and weighted)
@@ -189,7 +189,7 @@ We made several coordinated changes to how preprocessing and missingness are han
 - **Process:**
     1. **Assembles Meta-Features:** The script loads the OOF predictions generated in Stage 3. It also loads an `indicator_file`, which contains supplementary classical features (e.g., clinical data like age or tumor stage). These are concatenated to form the feature set for the meta-learner.
     2. **Trains Meta-Learner:** It trains a QML model on this combined feature set, using the true labels from the training data.
-- **Optimization Metric:** Trials are optimized using **weighted F1 score** instead of accuracy for better handling of class imbalance.
+- **Optimization Metric:** Trials are optimized using a **composite average metric** (Weighted F1, Weighted Precision, Weighted Recall, Weighted Specificity, and Accuracy) for better handling of class imbalance.
 - **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
 - **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location, ensuring training can proceed in restricted environments.
 - **Output:** 
@@ -1116,7 +1116,7 @@ python cfe_relupload.py --max_training_time 8 --checkpoint_frequency 25
    - PNG format, saved to model directory
 
 **Model Selection:**
-- Configurable selection metric (default: weighted F1)
+- Configurable selection metric (default: composite average metric)
 - Best model determined by validation performance, not training loss
 - Prevents overfitting to training data
 
@@ -1160,7 +1160,7 @@ python dre_standard.py --skip_tuning --n_qbits 8 --n_layers 4
 ```python
 model = MulticlassQuantumClassifierDR(
     validation_frac=0.2,      # Hold out 20% for validation (increased from 0.1)
-    selection_metric='f1_weighted',  # Use weighted F1 for model selection
+    selection_metric='composite_metric',  # Use composite metric for model selection
     patience=25               # Stop if no improvement for 25 steps (increased from 20)
 )
 ```
@@ -1182,7 +1182,7 @@ python dre_standard.py \
 # - Trains for 11 hours with periodic checkpoints
 # - Tracks comprehensive metrics in history.csv
 # - Generates automatic plots
-# - Saves best model based on validation F1
+# - Saves best model based on validation composite metric
 # - Can be resumed if interrupted
 
 # Complete integration: All advanced features combined
@@ -1205,7 +1205,7 @@ python dre_standard.py \
 # - Logs all metrics to Weights & Biases for visualization
 # - Tracks comprehensive metrics in history.csv
 # - Generates automatic plots locally
-# - Saves best model based on validation F1
+# - Saves best model based on validation composite metric
 # - Can be resumed if interrupted with full optimizer state
 # - Provides complete experiment reproducibility and tracking
 ```
@@ -1335,7 +1335,7 @@ python tune_models.py --datatype CNV --approach 1 --use_wandb --wandb_project tu
 
 ## ⚡ Configurable Validation Frequency
 
-The training system now supports configurable validation frequency via the `validation_frequency` parameter (default: 10).
+The training system now supports configurable validation frequency via the `validation_frequency` parameter (default: 25).
 
 ### Motivation
 

@@ -755,7 +755,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--max_layers` (int, default 5): Maximum number of layers for tuning.
 	- `--steps` (int, default 100): Number of training steps for tuning.
 	- `--verbose` (flag): Enable verbose logging for QML model training steps.
-	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frequency` (int, default 25): Compute validation metrics every N steps.
 	- `--use_wandb` (flag): Enable Weights & Biases logging during tuning.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name (auto-generated if not provided).
@@ -778,7 +778,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
 	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
-	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frequency` (int, default 25): Compute validation metrics every N steps.
 	- `--validation_frac` (float, default 0.2): Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection.
 	- `--patience` (int, default 25): Early stopping patience in steps. Reduced from 50 for faster convergence.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
@@ -808,7 +808,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
 	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
-	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frequency` (int, default 25): Compute validation metrics every N steps.
 	- `--validation_frac` (float, default 0.2): Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection.
 	- `--patience` (int, default 25): Early stopping patience in steps. Reduced from 50 for faster convergence.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
@@ -834,7 +834,7 @@ Below are the CLI arguments for each script (if not listed, script uses defaults
 	- `--keep_last_n` (int, default 3): Keep last N checkpoints.
 	- `--checkpoint_fallback_dir` (str, optional): Fallback directory for checkpoints if primary is read-only.
 	- `--resume` (str, optional): Resume from checkpoint. Choices: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). Example: `--resume auto`.
-	- `--validation_frequency` (int, default 10): Compute validation metrics every N steps.
+	- `--validation_frequency` (int, default 25): Compute validation metrics every N steps.
 	- `--use_wandb` (flag): Enable Weights & Biases logging.
 	- `--wandb_project` (str, optional): W&B project name.
 	- `--wandb_run_name` (str, optional): W&B run name.
@@ -874,7 +874,7 @@ Environment variables relevant to CLI behavior
 | `--steps` | int | No | `100` | - | Number of training steps for tuning. |
 | `--scalers` | str | No | `smr` | - | String indicating which scalers to try (s: Standard, m: MinMax, r: Robust). |
 | `--verbose` | flag | No | `False` | - | Enable verbose logging for QML model training steps. |
-| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
+| `--validation_frequency` | int | No | `25` | - | Compute validation metrics every N steps. |
 | `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging during tuning. |
 | `--wandb_project` | str | No | `None` | - | W&B project name. |
 | `--wandb_run_name` | str | No | `None` | - | W&B run name (auto-generated if not provided). |
@@ -910,7 +910,7 @@ python tune_models.py --datatype CNV --approach 1 --qml_model standard --total_t
 | `--keep_last_n` | int | No | `3` | - | Keep last N checkpoints. |
 | `--checkpoint_fallback_dir` | str | No | `None` | - | Fallback directory for checkpoints if primary is read-only. |
 | `--resume` | str | No | `None` | `best`, `latest`, `auto` | Resume from checkpoint: `best` (best validation), `latest` (most recent), `auto` (try best, fallback to latest). |
-| `--validation_frequency` | int | No | `10` | - | Compute validation metrics every N steps. |
+| `--validation_frequency` | int | No | `25` | - | Compute validation metrics every N steps. |
 | `--validation_frac` | float | No | `0.2` | - | Fraction of training data for internal validation during QML training. Increased from 0.1 for better overfitting detection. |
 | `--patience` | int | No | `25` | - | Early stopping patience in steps. Reduced from 50 for faster convergence. |
 | `--use_wandb` | flag | No | `False` | - | Enable Weights & Biases logging. |
