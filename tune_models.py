@@ -693,8 +693,8 @@ def main():
     log_args = parser.add_argument_group('logging and monitoring')
     log_args.add_argument('--verbose', action='store_true',
                          help='Enable detailed training logs')
-    log_args.add_argument('--validation_frequency', type=int, default=10,
-                         help='Validation metric frequency in steps (default: 10)')
+    log_args.add_argument('--validation_frequency', type=int, default=25,
+                         help='Validation metric frequency in steps (default: 25)')
     log_args.add_argument('--use_wandb', action='store_true',
                          help='Enable Weights & Biases experiment tracking')
     log_args.add_argument('--wandb_project', type=str, default=None,

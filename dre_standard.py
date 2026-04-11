@@ -150,8 +150,8 @@ mode_args.add_argument('--cv_only', action='store_true',
 train_args = parser.add_argument_group('training configuration')
 train_args.add_argument('--max_training_time', type=float, default=None,
                        help='Maximum training hours (overrides --steps). Example: 11.5')
-train_args.add_argument('--validation_frequency', type=int, default=10,
-                       help='Validation metric frequency in steps (default: 10)')
+train_args.add_argument('--validation_frequency', type=int, default=25,
+                       help='Validation frequency in steps (default: 25)')
 train_args.add_argument('--validation_frac', type=float, default=0.2,
                        help='Fraction of training data for validation during QML training (default: 0.2)')
 train_args.add_argument('--patience', type=int, default=25,

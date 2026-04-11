@@ -159,7 +159,7 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -553,9 +553,16 @@ class MulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                             'val_prec_weighted': history['val_prec_weighted'][-1],
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights = self.weights.copy()
                         self.best_weights_classical = {
@@ -708,7 +715,7 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
     def __init__(self, n_qubits=None, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         # n_qubits may be None here; we will infer it from the base_preds shape during fit if so
         self.n_qubits = n_qubits
@@ -1094,9 +1101,16 @@ class GatedMulticlassQuantumClassifierDR(BaseEstimator, ClassifierMixin):
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
 
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights = self.weights.copy()
                         self.best_weights_classical = {
@@ -1227,7 +1241,7 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
     def __init__(self, n_qubits=None, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3,
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -1599,9 +1613,16 @@ class GatedMulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, Classifie
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
 
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights = self.weights.copy()
                         self.best_weights_classical = {
@@ -1749,7 +1770,7 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -2132,9 +2153,16 @@ class MulticlassQuantumClassifierDataReuploadingDR(BaseEstimator, ClassifierMixi
                             'val_prec_weighted': history['val_prec_weighted'][-1],
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights = self.weights.copy()
                         self.best_weights_classical = {
@@ -2299,7 +2327,7 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -2739,9 +2767,16 @@ class ConditionalMulticlassQuantumClassifierFS(BaseEstimator, ClassifierMixin):
                             'val_prec_weighted': history['val_prec_weighted'][-1],
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights_ansatz = self.weights_ansatz.copy()
                         self.best_weights_missing = self.weights_missing.copy()
@@ -2905,7 +2940,7 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
     def __init__(self, n_qubits=8, n_layers=3, n_classes=3, learning_rate=0.1, steps=50, verbose=False,
                  checkpoint_dir=None, checkpoint_fallback_dir=None, checkpoint_frequency=10, keep_last_n=3, 
                  max_training_time=None, hidden_size=16, readout_activation='tanh', selection_metric='f1_weighted',
-                 resume=None, validation_frac=0.1, validation_frequency=10, patience=None,
+                 resume=None, validation_frac=0.1, validation_frequency=25, patience=None,
                  use_wandb=False, wandb_project=None, wandb_run_name=None, n_jobs=-1, weight_decay=0.0):
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -3331,9 +3366,16 @@ class ConditionalMulticlassQuantumClassifierDataReuploadingFS(BaseEstimator, Cla
                             'val_prec_weighted': history['val_prec_weighted'][-1],
                             'val_rec_weighted': history['val_rec_weighted'][-1]
                         })
-                    # Check if this is the best model based on selection metric
-                    current_metric = val_metrics[self.selection_metric]
-                    if current_metric > self.best_metric:
+                    # Check if this is the best model based on composite metric
+                    current_metric = (
+                        val_metrics["f1_weighted"] + 
+                        val_metrics["accuracy"] + 
+                        val_metrics["precision_weighted"] + 
+                        val_metrics["recall_weighted"] +
+                        val_metrics["specificity_weighted"]
+                    ) / 5.0
+                    
+                    if current_metric >= self.best_metric:
                         self.best_metric = current_metric
                         self.best_weights_ansatz = self.weights_ansatz.copy()
                         self.best_weights_missing = self.weights_missing.copy()
