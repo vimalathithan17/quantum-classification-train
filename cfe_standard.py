@@ -441,8 +441,8 @@ for data_type in data_types:
     final_model.fit((X_train_scaled, is_missing_train), y_train.values)
 
     # Log best weights step if available
-    if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_loss'):
-        log.info(f"  - Best weights were obtained at step {final_model.best_step} with loss: {final_model.best_loss:.4f}")
+    if hasattr(final_model, 'best_step') and hasattr(final_model, 'best_metric'):
+        log.info(f"  - Best weights were obtained at step {final_model.best_step} with metric ({getattr(final_model, 'selection_metric', 'composite')}): {final_model.best_metric:.4f}")
 
     # --- Save all components for inference ---
     joblib.dump(final_selected_cols, os.path.join(OUTPUT_DIR, f'selected_features_{data_type}.joblib'))

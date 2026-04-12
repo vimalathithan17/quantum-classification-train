@@ -438,8 +438,8 @@ for data_type in data_types:
     
     # Log best weights step if available
     qml_model = pipeline.named_steps['qml']
-    if hasattr(qml_model, 'best_step') and hasattr(qml_model, 'best_loss'):
-        log.info(f"  - Best weights were obtained at step {qml_model.best_step} with loss: {qml_model.best_loss:.4f}")
+    if hasattr(qml_model, 'best_step') and hasattr(qml_model, 'best_metric'):
+        log.info(f"  - Best weights were obtained at step {qml_model.best_step} with metric ({getattr(qml_model, 'selection_metric', 'composite')}): {qml_model.best_metric:.4f}")
     
     joblib.dump(pipeline, os.path.join(OUTPUT_DIR, f'pipeline_{data_type}.joblib'))
     log.info(f"  - Saved final pipeline for {data_type}.")
