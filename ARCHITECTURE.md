@@ -1476,23 +1476,28 @@ This section provides concrete, step-by-step examples of how to use the 2-step f
 # Step 1: Create master label encoder (one-time setup)
 python create_master_label_encoder.py
 
-# Step 2: Tune hyperparameters with LightGBM feature selection (Approach 2)
+# Step 2: Create Global Holdout Test Split
+python create_global_split.py
+
+# Step 3: Tune hyperparameters with LightGBM feature selection (Approach 2)
 # Note: Approach 2 uses LightGBM's built-in feature importance for selection
 python tune_models.py \
+    --source_dir data/global_train \
     --datatype CNV \
     --approach 2 \
     --qml_model standard \
     --n_trials 30 \
     --verbose
 
-# Step 3: Train base learners with LightGBM feature selection
+# Step 4: Train base learners with LightGBM feature selection
 python cfe_standard.py \
+    --source_dir data/global_train \
     --datatypes CNV Prot Meth \
     --verbose
 
 # Output: Base learner predictions with LightGBM-selected features
-# - train_oof_preds_CNV.csv
-# - test_preds_CNV.csv
+# - training out-of-fold predictions: train_oof_preds_CNV.csv
+# - holdout test predictions: test_preds_CNV.csv
 # - selected_features_CNV.joblib (contains LightGBM-selected feature indices)
 # - qml_model_CNV.joblib
 ```

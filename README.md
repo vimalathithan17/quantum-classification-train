@@ -528,7 +528,8 @@ This repository provides two families of base-learner designs. The mapping below
 
 ## 🔄 Deep Dive: The 2-Step Preprocessing Funnel
 
-This section provides additional context on how the 2-step funnel works in practice.
+This section provides additional context on how the 2-step funnel works in practice during the base model training loops.
+> **Note:** This funnel occurs *after* the Global Split. The `X_train` referenced below is sourced exclusively from 80% `data/global_train`, while the remaining 20% `data/global_test` is fiercely protected until the evaluation block at the very end of the training scripts.
 
 ### Understanding the Two Approaches
 

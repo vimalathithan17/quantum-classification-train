@@ -38,34 +38,50 @@ This document provides a comprehensive explanation of every architectural decisi
 │  └── Current quantum circuits: 8-14 qubits maximum                              │
 │      Cannot directly encode 26K features!                                       │
 │                                                                                  │
+│  CHALLENGE 5: Data Leakage Vulnerability                                        │
+│  └── Complex multi-stage prep risks exposing test data to training loops        │
+│                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Our Solution: A Multi-Stage Pipeline
+### Our Solution: A Multi-Stage Pipeline with Global Split Architecture
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════════╗
 ║                        COMPLETE SYSTEM ARCHITECTURE                                ║
 ╠═══════════════════════════════════════════════════════════════════════════════════╣
 ║                                                                                    ║
-║   RAW DATA                           LEARNED REPRESENTATIONS                       ║
-║   ────────                           ────────────────────────                      ║
+║   RAW DATA                      PRE-PROCESSING (FUNNEL 1)                          ║
+║   ────────                      ─────────────────────────                          ║
 ║                                                                                    ║
-║   GeneExpr (17176) ──┐                                                            ║
-║   miRNA     (425)  ──┼──► CONTRASTIVE     ┌──► QML Branch ──────┐                 ║
-║   Meth27   (3000)  ──┤    ENCODERS        │    (per-modality    │                 ║
-║   Meth450  (5000)  ──┤    ────────        │    quantum circuits)│                 ║
-║   Protein   (198)  ──┘    Compress each   │                     ├──► META-QML     ║
-║                           modality to     │                     │    ENSEMBLE     ║
-║                           256 dimensions  └──► Transformer ─────┘    ────────     ║
-║                                               Fusion Branch         Combine all   ║
-║                                               (cross-modal          predictions   ║
-║                                               attention)            with missing  ║
-║                                                                     indicators    ║
-║                                                                          │        ║
-║                                                                          ▼        ║
-║                                                                    FINAL CLASS    ║
-║                                                                    PREDICTION     ║
+║   GeneExpr (17176) ─►          1. Mutual Information (Top 50K)                     ║
+║   miRNA     (425)  ─►       2. XGBoost Importance (Top 500/modality)               ║
+║                                                                                    ║
+║                                         ▼                                          ║
+║                                                                                    ║
+║                              THE GLOBAL SPLIT (CRITICAL)                           ║
+║                       Splits 80% global_train / 20% global_test                    ║
+║                                                                                    ║
+║                                         ▼                                          ║
+║                                                                                    ║
+║                            LEARNED REPRESENTATIONS (FUNNEL 2)                      ║
+║   ──────────────────────────────────────────────────────────────────────────────   ║
+║                                                                                    ║
+║   Global Train (500) ──┐                                                           ║
+║   miRNA        (500) ──┼──► CONTRASTIVE     ┌──► QML Branch ──────┐                ║
+║   Meth27       (500) ──┤    ENCODERS        │    (per-modality    │                ║
+║   Meth450      (500) ──┤    ────────        │    quantum circuits)│                ║
+║   Protein      (500) ──┘    Compress each   │                     ├──► META-QML    ║
+║                             modality to     │                     │    ENSEMBLE    ║
+║                             256 dimensions  └──► Transformer ─────┘    ────────    ║
+║                                                 Fusion Branch         Combine all  ║
+║                                                 (cross-modal          predictions  ║
+║                                                 attention)            with missing ║
+║                                                                       indicators   ║
+║                                                                            │       ║
+║                                                                            ▼       ║
+║                                                                      FINAL CLASS   ║
+║                                                                      PREDICTION    ║
 ║                                                                                    ║
 ╚═══════════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -74,9 +90,11 @@ This document provides a comprehensive explanation of every architectural decisi
 
 | Problem | Solution Component | How It Helps |
 |---------|-------------------|--------------|
-| 26K features → 8 qubits | Contrastive Encoders | Compress 26K → 256 → 8 dims while preserving signal |
+| 26K features → 8 qubits | Two-Stage Funnel + Contrastive | Sieve to 500 features first, compress to 256, then route to 8 qubits |
+| Model Overfitting & Data Leakage | The Global Holdout Split | Data split directly isolated before downstream base-model pipelines touch it |
 | 500 samples, high dims | Self-supervised pretraining | Learn from data structure without labels |
-| Missing modalities | Gated meta-learner | Learn which modalities to trust when others missing |
+| Noisy quantum gradients | Checkpointing & Early Stopping | Tracks `best_weights.joblib` across validation epochs; halts if metrics plateau |
+| Missing modalities | Gated meta-learner | Learn which modalities to trust when others missing via Indicator Masks |
 | Different modality scales | Per-modality scalers | Normalize each data type independently |
 | Need cross-modal patterns | Transformer fusion | Attention finds relationships between modalities |
 
@@ -84,19 +102,28 @@ This document provides a comprehensive explanation of every architectural decisi
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│   TIER 1: DIMENSIONALITY REDUCTION (Contrastive Learning)                        │
+│   TIER 0: TWO-STAGE PREPROCESSING FUNNEL & GLOBAL SPLIT                          │
+│   ═══════════════════════════════════════════════════════                        │
+│   Purpose: Rapidly reduce noise while preventing global test leakage.            │
+│   Step A: Mutual Information (fast filter) → Top 50k features                    │
+│   Step B: XGBoost (interaction filter) → Top 500 features per modality           │
+│   Step C: Global Split → 80% data/global_train, 20% data/global_test             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│   TIER 1: DIMENSIONALITY REDUCTION (Contrastive Learning on global_train)        │
 │   ═══════════════════════════════════════════════════════                        │
 │   Purpose: Transform raw high-dimensional omics into compact embeddings          │
 │                                                                                   │
 │   ┌─────────────┐      ┌─────────────┐      ┌─────────────┐                      │
-│   │ Raw GeneExpr│      │ Raw miRNA   │      │ Raw Protein │                      │
-│   │  (17,176)   │      │   (425)     │      │   (198)     │                      │
+│   │ Top GeneExpr│      │ Top miRNA   │      │ Top Protein │                      │
+│   │  (500 dims) │      │  (500 dims) │      │  (500 dims) │                      │
 │   └──────┬──────┘      └──────┬──────┘      └──────┬──────┘                      │
 │          │                    │                    │                              │
 │          ▼                    ▼                    ▼                              │
 │   ┌─────────────┐      ┌─────────────┐      ┌─────────────┐                      │
 │   │  Encoder    │      │  Encoder    │      │  Encoder    │                      │
-│   │ 17K→512→256 │      │ 425→512→256 │      │ 198→512→256 │                      │
+│   │ 500→512→256 │      │ 500→512→256 │      │ 500→512→256 │                      │
 │   └──────┬──────┘      └──────┬──────┘      └──────┬──────┘                      │
 │          │                    │                    │                              │
 │          └────────────────────┼────────────────────┘                              │
@@ -2519,13 +2546,17 @@ LR │     ╱─────╲
 │  VALIDATION (every validation_frequency steps):                         │
 │   Compute: accuracy, precision, recall, F1, specificity                 │
 │   Track: best model by selection_metric                                 │
+│   Action: If validation improves, updates `best_weights.joblib`,        │
+│           `best_step`, and `best_loss` in QML model memory              │
 │                                                                          │
 │  EARLY STOPPING:                                                        │
-│   if patience > 0 and no improvement for patience steps:                │
-│      terminate and restore best weights                                 │
+│   if patience > 0 and no improvement for patience steps (e.g. 25):      │
+│      terminate training automatically                                   │
 │                                                                          │
 │  TERMINATION:                                                           │
 │   Either: steps reached OR max_training_time exceeded OR early stopped  │
+│   Action: Load `best_weights.joblib` to guarantee base models           │
+│           don't use overfitted terminal epoch weights                   │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```

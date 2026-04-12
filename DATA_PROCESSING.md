@@ -119,14 +119,20 @@ Each modality parquet contains:
 
 ## Using the Output
 
-### Set SOURCE_DIR for Training Scripts
+> **⚠️ CRITICAL: Global Data Split**
+> Once the Two-Stage Funnel is complete, these `final_processed_datasets` cannot be used directly for training. You **must** create a global train/test holdout split first to enforce zero data leakage across the meta-learner architecture.
+> ```bash
+> python create_global_split.py --data_dir final_processed_datasets_xgb_balanced
+> ```
+> This creates `data/global_train/` and `data/global_test/` which will be targeted by downstream pipeline scripts.
+
+### Set Variables for Training Scripts
 
 ```bash
-# If using XGBoost-selected features (recommended):
-export SOURCE_DIR=final_processed_datasets_xgb_balanced
-
-# If using full features:
-export SOURCE_DIR=final_processed_datasets
+# Point to your newly computed global training split (not the direct processed sets!):
+export SOURCE_DIR=data/global_train
+export GLOBAL_TEST_DIR=data/global_test
+export INDICATOR_FILE=final_processed_datasets_xgb_balanced/indicator_features.parquet
 ```
 
 ### Load Data in Python
@@ -134,12 +140,12 @@ export SOURCE_DIR=final_processed_datasets
 ```python
 import pandas as pd
 
-# Load all modalities
+# Load all modalities from the global train split
 modalities = ['CNV', 'GeneExpr', 'miRNA', 'Meth', 'Prot', 'SNV']
 data = {m: pd.read_parquet(f'{SOURCE_DIR}/data_{m}_.parquet') for m in modalities}
 
-# Load indicators for missing modality handling
-indicators = pd.read_parquet(f'{SOURCE_DIR}/indicator_features.parquet')
+# Load the single indicator file for missing modality handling
+indicators = pd.read_parquet(f'final_processed_datasets_xgb_balanced/indicator_features.parquet')
 
 # Get features and labels
 X = np.hstack([data[m].iloc[:, 2:].values for m in modalities])  # 312 × 3000

@@ -13,6 +13,7 @@ Quick reference to find information and choose your approach.
 | **Team collaboration** | [TEAM_TASKS.md](TEAM_TASKS.md) | 5 min |
 | **Need to choose approach** | [Decision Tree](#decision-tree) below | 5 min |
 | **Ready to integrate extensions** | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) | 20 min |
+| **Want to understand design/architecture** | [ARCHITECTURE_DEEP_DIVE.md](ARCHITECTURE_DEEP_DIVE.md) & [ARCHITECTURE.md](ARCHITECTURE.md) | 20 min |
 | **Memory-constrained (30GB RAM)** | [RESOURCE_OPTIMIZED_WORKFLOW.md](RESOURCE_OPTIMIZED_WORKFLOW.md) | 15 min |
 | **Understand data pipeline** | [DATA_PROCESSING.md](DATA_PROCESSING.md) | 15 min |
 
