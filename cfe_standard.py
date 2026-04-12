@@ -473,25 +473,30 @@ for data_type in data_types:
     # --- Generate Predictions and Evaluatate on hold-out Test Set ---
     try:
         global_test_dir = os.environ.get('GLOBAL_TEST_DIR', 'data/global_test')
-        file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
-        log.info(f"Loading raw test features from {file_path_test}")
-
-        import pandas as pd
-        import numpy as np
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-        df_test = safe_load_parquet(file_path_test)
-        if df_test is not None:
-             id_col_local = ID_COL if 'ID_COL' in globals() or 'ID_COL' in locals() else 'case_id'
-             df_test = df_test.sort_values(id_col_local).set_index(id_col_local)
-
-             lbl_col_local = LABEL_COL if 'LABEL_COL' in globals() or 'LABEL_COL' in locals() else 'label'
-             exclude_cols = [lbl_col_local]
-             feature_cols_test = [c for c in df_test.columns if c not in exclude_cols]
-             X_test_eval = df_test[feature_cols_test]
-             y_categorical_test = df_test[lbl_col_local]
-             y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
-        else:
+        
+        # If we are using correctly split pretrained features, skip the extra load step
+        if args.use_pretrained_features and args.pretrained_features_dir is not None:
              X_test_eval, y_test_eval = X_test, y_test
+        else:
+             file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
+             log.info(f"Loading raw test features from {file_path_test}")
+
+             import pandas as pd
+             import numpy as np
+             from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+             df_test = safe_load_parquet(file_path_test)
+             if df_test is not None:
+                  id_col_local = ID_COL if 'ID_COL' in globals() or 'ID_COL' in locals() else 'case_id'
+                  df_test = df_test.sort_values(id_col_local).set_index(id_col_local)
+
+                  lbl_col_local = LABEL_COL if 'LABEL_COL' in globals() or 'LABEL_COL' in locals() else 'label'
+                  exclude_cols = [lbl_col_local]
+                  feature_cols_test = [c for c in df_test.columns if c not in exclude_cols]
+                  X_test_eval = df_test[feature_cols_test]
+                  y_categorical_test = df_test[lbl_col_local]
+                  y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+             else:
+                  X_test_eval, y_test_eval = X_test, y_test
 
         X_test_selected = X_test_eval[final_selected_cols]
         is_missing_test = X_test_selected.isnull().astype(int).values
@@ -499,6 +504,12 @@ for data_type in data_types:
         X_test_scaled = X_test_filled
 
         test_preds = final_model.predict_proba((X_test_scaled, is_missing_test))
+        
+        # Save predictions based strictly on the global test set evaluations for MetaLearner
+        test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
+        pd.DataFrame(test_preds, index=X_test_eval.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
+        log.info(f"Saved true global test predictions for {data_type} to test_preds_{data_type}.csv")
+
         test_preds_labels = np.argmax(test_preds, axis=1)
         acc = accuracy_score(y_test_eval, test_preds_labels)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")

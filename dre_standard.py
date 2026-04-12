@@ -441,13 +441,8 @@ for data_type in data_types:
     if hasattr(qml_model, 'best_step') and hasattr(qml_model, 'best_loss'):
         log.info(f"  - Best weights were obtained at step {qml_model.best_step} with loss: {qml_model.best_loss:.4f}")
     
-    log.info("  - Generating predictions on the hold-out test set...")
-    test_preds = pipeline.predict_proba(X_test)
-    test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
-    pd.DataFrame(test_preds, index=X_test.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
-    
     joblib.dump(pipeline, os.path.join(OUTPUT_DIR, f'pipeline_{data_type}.joblib'))
-    log.info(f"  - Saved test predictions and final pipeline for {data_type}.")
+    log.info(f"  - Saved final pipeline for {data_type}.")
     
     # --- Save preprocessing config for inference ---
     preprocessing_config = {
@@ -470,12 +465,51 @@ for data_type in data_types:
 
     # --- Classification report and confusion matrix on the hold-out test set ---
     try:
-        y_test_pred = pipeline.predict(X_test)
-        acc = accuracy_score(y_test, y_test_pred)
+        # Load and prepare global_test set
+        global_test_dir = os.environ.get('GLOBAL_TEST_DIR', 'data/global_test')
+        
+        # If we are using correctly split pretrained features, skip the extra load step
+        if args.use_pretrained_features and args.pretrained_features_dir is not None:
+             X_test_eval, y_test_eval = X_test, y_test
+        else:
+             file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
+             log.info(f"Loading raw test features from {file_path_test}")
+
+             import pandas as pd
+             import numpy as np
+             from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+             
+             try:
+                 df_test = safe_load_parquet(file_path_test)
+                 if df_test is not None:
+                      id_col_local = ID_COL if 'ID_COL' in globals() or 'ID_COL' in locals() else 'case_id'
+                      df_test = df_test.sort_values(id_col_local).set_index(id_col_local)
+
+                      lbl_col_local = LABEL_COL if 'LABEL_COL' in globals() or 'LABEL_COL' in locals() else 'label'
+                      exclude_cols = [lbl_col_local]
+                      feature_cols_test = [c for c in df_test.columns if c not in exclude_cols]
+                      X_test_eval = df_test[feature_cols_test]
+                      y_categorical_test = df_test[lbl_col_local]
+                      y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+                 else:
+                      X_test_eval, y_test_eval = X_test, y_test
+             except Exception as e:
+                 log.warning(f"Could not load raw test dataframe: {e}. Falling back to internal validation set.")
+                 X_test_eval, y_test_eval = X_test, y_test
+
+        y_test_pred = pipeline.predict(X_test_eval)
+        
+        # Save predictions based strictly on the global test set evaluations for MetaLearner
+        test_preds = pipeline.predict_proba(X_test_eval)
+        test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
+        pd.DataFrame(test_preds, index=X_test_eval.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
+        log.info(f"Saved true global test predictions for {data_type} to test_preds_{data_type}.csv")
+
+        acc = accuracy_score(y_test_eval, y_test_pred)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
         # Compute comprehensive metrics
-        metrics = compute_metrics(y_test, y_test_pred, n_classes)
+        metrics = compute_metrics(y_test_eval, y_test_pred, n_classes)
         log.info(f"Comprehensive Metrics for {data_type}:")
         log.info(f"  Precision (macro): {metrics['precision_macro']:.4f}")
         log.info(f"  Precision (weighted): {metrics['precision_weighted']:.4f}")
@@ -486,11 +520,11 @@ for data_type in data_types:
         log.info(f"  Specificity (macro): {metrics['specificity_macro']:.4f}")
         log.info(f"  Specificity (weighted): {metrics['specificity_weighted']:.4f}")
         
-        report = classification_report(y_test, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
+        report = classification_report(y_test_eval, y_test_pred, labels=list(range(n_classes)), target_names=le.classes_)
         log.info(f"Classification Report for {data_type}:\n{report}")
 
         # Confusion matrix (raw)
-        cm = confusion_matrix(y_test, y_test_pred, labels=list(range(n_classes)))
+        cm = confusion_matrix(y_test_eval, y_test_pred, labels=list(range(n_classes)))
         log.info(f"Confusion Matrix for {data_type} (rows=true, cols=pred):\n{cm}")
 
         # Save confusion matrix as CSV with class labels

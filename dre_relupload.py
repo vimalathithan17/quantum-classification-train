@@ -425,13 +425,8 @@ for data_type in data_types:
     if hasattr(qml_model, 'best_step') and hasattr(qml_model, 'best_loss'):
         log.info(f"  - Best weights were obtained at step {qml_model.best_step} with loss: {qml_model.best_loss:.4f}")
     
-    log.info("  - Generating predictions on the hold-out test set...")
-    test_preds = pipeline.predict_proba(X_test)
-    test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
-    pd.DataFrame(test_preds, index=X_test.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
-    
     joblib.dump(pipeline, os.path.join(OUTPUT_DIR, f'pipeline_{data_type}.joblib'))
-    log.info(f"  - Saved test predictions and final pipeline for {data_type}.")
+    log.info(f"  - Saved final pipeline for {data_type}.")
     
     # --- Save preprocessing config for inference ---
     preprocessing_config = {
@@ -459,32 +454,37 @@ for data_type in data_types:
         X_test_eval, y_test_eval = None, None
         
         if use_pretrained:
-            test_features_dir = args.pretrained_features_dir.replace('train', 'test') if 'train' in args.pretrained_features_dir else os.path.join(global_test_dir, 'features')
-            test_emb_file = os.path.join(test_features_dir, f'{data_type}_embeddings.npy')
-            test_labels_file = os.path.join(test_features_dir, 'labels.npy')
-            test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
-            
-            log.info(f"Loading pretrained test features from {test_features_dir}")
-            try:
-                import numpy as np
-                import pandas as pd
-                embeddings_test = np.load(test_emb_file)
-                labels_raw_test = np.load(test_labels_file, allow_pickle=True)
-                case_ids_test = np.load(test_case_ids_file, allow_pickle=True)
-                
-                # Use same case_ids encoding and index
-                X_test_eval = pd.DataFrame(embeddings_test, index=case_ids_test)
-                y_categorical_test = pd.Series(labels_raw_test, index=case_ids_test)
-                
-                # Sort indices
-                X_test_eval = X_test_eval.sort_index()
-                y_categorical_test = y_categorical_test.sort_index()
-                
-                # Transform labels using the encoder fitted on train
-                y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
-            except Exception as e:
-                log.warning(f"Could not load pretrained test features: {e}. Falling back to internal validation set.")
+            if pretrained_has_split:
+                # If we're using properly split pre-extracted features, X_test already contains the global test set.
                 X_test_eval, y_test_eval = X_test, y_test
+                log.info(f"Using previously loaded split test features as the global test set.")
+            else:
+                test_features_dir = args.pretrained_features_dir.replace('train', 'test') if 'train' in args.pretrained_features_dir else os.path.join(global_test_dir, 'features')
+                test_emb_file = os.path.join(test_features_dir, f'{data_type}_embeddings.npy')
+                test_labels_file = os.path.join(test_features_dir, 'labels.npy')
+                test_case_ids_file = os.path.join(test_features_dir, 'case_ids.npy')
+                
+                log.info(f"Loading pretrained test features from {test_features_dir}")
+                try:
+                    import numpy as np
+                    import pandas as pd
+                    embeddings_test = np.load(test_emb_file)
+                    labels_raw_test = np.load(test_labels_file, allow_pickle=True)
+                    case_ids_test = np.load(test_case_ids_file, allow_pickle=True)
+                    
+                    # Use same case_ids encoding and index
+                    X_test_eval = pd.DataFrame(embeddings_test, index=case_ids_test)
+                    y_categorical_test = pd.Series(labels_raw_test, index=case_ids_test)
+                    
+                    # Sort indices
+                    X_test_eval = X_test_eval.sort_index()
+                    y_categorical_test = y_categorical_test.sort_index()
+                    
+                    # Transform labels using the encoder fitted on train
+                    y_test_eval = pd.Series(le.transform(y_categorical_test), index=y_categorical_test.index)
+                except Exception as e:
+                    log.warning(f"Could not load pretrained test features: {e}. Falling back to internal validation set.")
+                    X_test_eval, y_test_eval = X_test, y_test
         else:
             file_path_test = os.path.join(global_test_dir, f'data_{data_type}_.parquet')
             log.info(f"Loading raw test features from {file_path_test}")
@@ -515,6 +515,13 @@ for data_type in data_types:
             X_test_eval, y_test_eval = X_test, y_test
             
         y_test_pred = pipeline.predict(X_test_eval)
+        
+        # Save predictions based strictly on the global test set evaluations for MetaLearner
+        test_preds = pipeline.predict_proba(X_test_eval)
+        test_cols = [f"pred_{data_type}_{cls}" for cls in le.classes_]
+        pd.DataFrame(test_preds, index=X_test_eval.index, columns=test_cols).to_csv(os.path.join(OUTPUT_DIR, f'test_preds_{data_type}.csv'))
+        log.info(f"Saved true global test predictions for {data_type} to test_preds_{data_type}.csv")
+
         acc = accuracy_score(y_test_eval, y_test_pred)
         log.info(f"Test Accuracy for {data_type}: {acc:.4f}")
         
