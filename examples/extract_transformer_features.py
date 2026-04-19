@@ -63,17 +63,19 @@ sys.path.append(str(Path(__file__).parent.parent))
 from performance_extensions.transformer_fusion import MultimodalFusionClassifier
 
 
-def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
+def load_multiomics_data(data_dir, modalities: list = None) -> tuple:
     """
     Load multi-omics data from parquet files.
     
     Args:
-        data_dir: Directory containing parquet files
+        data_dir: Directory containing parquet files (can be string or Path)
         modalities: List of modalities to load (default: all available)
         
     Returns:
         Tuple of (data_dict, labels, modality_dims, case_ids)
     """
+    data_dir = Path(data_dir)
+    
     if modalities is None:
         modalities = ['GeneExpr', 'miRNA', 'Meth', 'CNV', 'Prot', 'SNV']
     
@@ -351,7 +353,9 @@ def extract_features(
                 print(f"Auto-resolved global_test_dir by directory guessing: {global_test_dir}")
                 
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    if global_test_dir:
+        global_test_dir = Path(global_test_dir)
+        
     # Determine device
     if device == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -427,33 +431,24 @@ def extract_features(
         n_samples = list(data.values())[0].shape[0]
         logits, probabilities, predictions, embeddings = extract_from_data(data, "all samples")
         
-        # Process global test split explicitly if requested (and available)
-        global_test_probs = None
+        # Unified Global Test Processing
+        t_probs = None
+        t_preds = None
         global_test_case_ids = None
-        global_test_preds = None
         global_test_labels = None
         
         if global_test_dir and not use_pretrained_features:
-            print(f"\\n✓ Processing GLOBAL TEST SPLIT from {global_test_dir}")
-            test_data, test_labels, _, test_case_ids = load_multiomics_data(global_test_dir, modalities)
-            test_logits, global_test_probs, global_test_preds, test_embeds = extract_from_data(test_data, "global test set")
-            global_test_case_ids = test_case_ids
-            global_test_labels = test_labels
-        
-        # Load and process global test set if provided
-        global_test_data = None
-        global_test_labels = None
-        global_test_case_ids = None
-        if global_test_dir:
             global_test_dir_path = Path(global_test_dir)
             print(f"\n--- Loading global test data from: {global_test_dir_path} ---")
+            
             if not global_test_dir_path.exists():
                 print(f"  Warning: global_test_dir {global_test_dir_path} does not exist.")
             else:
-                global_test_data, global_test_labels, _, global_test_case_ids = load_multiomics_data(global_test_dir_path, modalities)
-                
-                if global_test_data and len(global_test_data) > 0:
-                    t_logits, t_probs, t_preds, t_embeds = extract_from_data(global_test_data, "global test set")
+                test_data, test_labels, _, test_case_ids = load_multiomics_data(global_test_dir_path, modalities)
+                if test_data and len(test_data) > 0:
+                    _, t_probs, t_preds, _ = extract_from_data(test_data, "global test set")
+                    global_test_case_ids = test_case_ids
+                    global_test_labels = test_labels
     
     # Save outputs based on extract_type
     extraction_info = {
@@ -564,17 +559,17 @@ def extract_features(
                 save_npy(case_ids, "case_ids.npy")
         
         if output_format in ['csv', 'both']:
-            print("\n--- Generating metalearner-compatible CSV files ---")
+            print("\\n--- Generating metalearner-compatible CSV files ---")
             save_metalearner_csv(probabilities, case_ids, 'train_oof_preds_Transformer.csv')
             
             # If global test data was evaluated, save it too
-            if global_test_dir and 't_probs' in locals():
+            if t_probs is not None:
                 save_metalearner_csv(t_probs, global_test_case_ids, 'test_preds_Transformer.csv')
                 
                 if global_test_labels is not None:
                     test_accuracy = np.mean(t_preds == global_test_labels)
                     extraction_info['global_test_accuracy'] = float(test_accuracy)
-                    print(f"\nGlobal Test accuracy: {test_accuracy:.4f}")
+                    print(f"\\nGlobal Test accuracy: {test_accuracy:.4f}")
         
         # Compute accuracy
         if labels is not None:
