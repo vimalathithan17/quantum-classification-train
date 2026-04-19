@@ -253,19 +253,27 @@ def main():
         if model_type == 'lightgbm':
             # Map LightGBM optuna params
             model_params = {k.replace('lgb_', ''): v for k,v in best_params.items() if k.startswith('lgb_')}
+            if 'lr' in model_params:
+                model_params['learning_rate'] = model_params.pop('lr')
             model_params['random_state'] = RANDOM_STATE
             model = LGBMClassifier(**model_params)
         elif model_type == 'xgboost':
             model_params = {k.replace('xgb_', ''): v for k,v in best_params.items() if k.startswith('xgb_')}
+            if 'lr' in model_params:
+                model_params['learning_rate'] = model_params.pop('lr')
             model_params['random_state'] = RANDOM_STATE
             model = XGBClassifier(**model_params)
         elif model_type == 'catboost':
             model_params = {k.replace('cb_', ''): v for k,v in best_params.items() if k.startswith('cb_')}
+            if 'lr' in model_params:
+                model_params['learning_rate'] = model_params.pop('lr')
             model_params['random_seed'] = RANDOM_STATE
             model_params['verbose'] = False
             model = CatBoostClassifier(**model_params)
         elif model_type == 'mlp':
             model_params = {k.replace('mlp_', ''): v for k,v in best_params.items() if k.startswith('mlp_')}
+            if 'lr' in model_params:
+                model_params['learning_rate_init'] = model_params.pop('lr')
             if 'layers' in model_params:
                 layer_choice = model_params.pop('layers')
                 layer_mapping = {
