@@ -395,11 +395,11 @@ def assemble_meta_data(preds_dirs, indicator_file):
         pct = (len(X_meta_train) / original_train_count) * 100.0
         log.warning(f"Meta-join alignment reduced training samples significantly: {len(X_meta_train)}/{original_train_count} ({pct:.1f}%). Check case_id consistency across files.")
 
-    # Drop any rows with missing values after the join (conservative)
+    # Replace missing base predictions with 0.0 (the indicator mask handles missingness logic)
     if not X_meta_train.empty:
-        X_meta_train = X_meta_train.dropna()
+        X_meta_train = X_meta_train.fillna(0.0)
     if not X_meta_test.empty:
-        X_meta_test = X_meta_test.dropna()
+        X_meta_test = X_meta_test.fillna(0.0)
 
     # Validate resulting datasets
     if X_meta_train.empty:
