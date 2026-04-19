@@ -665,34 +665,10 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     predictions = model.predict((X_base_val, X_mask_val))
     
     # Compute comprehensive metrics
-    accuracy = float(accuracy_score(y_val.values, predictions))
-    prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(y_val.values, predictions, average='macro', zero_division=0)
-    prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(y_val.values, predictions, average='weighted', zero_division=0)
-    cm = confusion_matrix(y_val.values, predictions)
+    from utils.metrics_utils import compute_metrics
+    metrics = compute_metrics(y_val.values, predictions, n_classes)
     
-    # Per-class specificity
-    per_class_spec = _per_class_specificity(cm)
-    spec_macro = float(_np.mean(per_class_spec))
-    # Weighted specificity (by support)
-    support = _np.bincount(y_val.values)
-    spec_weighted = float(_np.sum(per_class_spec * support) / support.sum()) if support.sum() > 0 else spec_macro
-    
-    # Pack comprehensive metrics
-    metrics = {
-        'accuracy': accuracy,
-        'precision_macro': float(prec_macro),
-        'recall_macro': float(rec_macro),
-        'f1_macro': float(f1_macro),
-        'precision_weighted': float(prec_weighted),
-        'recall_weighted': float(rec_weighted),
-        'f1_weighted': float(f1_weighted),
-        'specificity_macro': spec_macro,
-        'specificity_weighted': spec_weighted,
-        'confusion_matrix': cm.tolist(),
-        'classification_report': classification_report(y_val.values, predictions, zero_division=0)
-    }
-    
-    log.info(f"Trial {trial.number}: metrics: f1_weighted={f1_weighted:.4f}, acc={accuracy:.4f}")
+    log.info(f"Trial {trial.number}: metrics: f1_weighted={metrics['f1_weighted']:.4f}, acc={metrics['accuracy']:.4f}")
     
     # Save comprehensive metrics to disk
     trial_dir = os.path.join(OUTPUT_DIR, f"trial_{trial.number}")
@@ -703,8 +679,8 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, args, indicator_
     # Attach metrics to the Optuna trial for later inspection
     trial.set_user_attr('metrics', metrics)
     
-    log.info(f"--- Trial {trial.number} Finished: f1_weighted = {f1_weighted:.4f} ---")
-    return float(f1_weighted)  # Optimize for weighted F1 instead of accuracy
+    log.info(f"--- Trial {trial.number} Finished: f1_weighted = {metrics['f1_weighted']:.4f} ---")
+    return float(metrics['f1_weighted'])  # Optimize for weighted F1 instead of accuracy
 
 def main():
     parser = argparse.ArgumentParser(

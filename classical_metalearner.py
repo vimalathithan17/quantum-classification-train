@@ -91,7 +91,6 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
             'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
             'random_state': RANDOM_STATE,
             'max_iter': 10000,
-            'early_stopping': True,
         }
         model = MLPClassifier(**params)
     elif detector == 'svc':
@@ -114,7 +113,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
     else:
         params = {
             'C': trial.suggest_float('lr_C', 1e-4, 10.0, log=True),
-            'max_iter': 10000,
+            'max_iter': 1000,
             'random_state': RANDOM_STATE,
             'n_jobs': -1,
         }
@@ -308,7 +307,6 @@ def main():
                     model_params['hidden_layer_sizes'] = (64, 32)
             model_params['random_state'] = RANDOM_STATE
             model_params['max_iter'] = 10000
-            model_params['early_stopping'] = True
             model = MLPClassifier(**model_params)
         elif model_type == 'svc':
             model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
