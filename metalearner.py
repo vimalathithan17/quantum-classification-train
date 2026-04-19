@@ -962,6 +962,15 @@ def main():
         joblib.dump(final_model, model_path)
         log.info(f"Final meta-learner model saved to '{model_path}'")
         
+        # Save training confusion matrix
+        log.info("--- Generating Training Set Confusion Matrix ---")
+        train_predictions = final_model.predict((X_base, X_mask))
+        train_cm = confusion_matrix(y_meta_train.values, train_predictions, labels=list(range(n_classes)))
+        train_cm_df = pd.DataFrame(train_cm, index=le.classes_, columns=le.classes_)
+        train_cm_path = os.path.join(OUTPUT_DIR, 'train_confusion_matrix.csv')
+        train_cm_df.to_csv(train_cm_path)
+        log.info(f"Saved training confusion matrix to {train_cm_path}")
+
         # Save column order for inference (inference.py expects this file)
         columns_path = os.path.join(OUTPUT_DIR, 'meta_learner_columns.json')
         all_columns = list(X_meta_train.columns)  # base predictions + indicators in training order

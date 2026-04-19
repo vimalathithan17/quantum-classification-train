@@ -184,13 +184,16 @@ We made several coordinated changes to how preprocessing and missingness are han
 - Tests: An end-to-end integration test (`tests/test_conditional_e2e.py`) was added to validate the entire train→save→inference path for conditional models (it uses a small synthetic artifact set and monkeypatches parquet reading to CSV during tests to avoid optional parquet engine dependencies).
 
 
-**Stage 4: Meta-Learner Training (`metalearner.py`)**
+**Stage 4: Meta-Learner Training (`metalearner.py` & `classical_metalearner.py`)**
 - **Purpose:** To train a single, powerful "manager" model that learns from the predictions of the expert base-learners.
+- **Variants:**
+    - **Quantum (`metalearner.py`):** Trains a Quantum Meta-Learner (VQC) to stack probabilities. Provides natively gated circuits handling indicator masks.
+    - **Classical (`classical_metalearner.py`):** Trains classical algorithms (LightGBM, Random Forest, Logistic Regression) using Optuna tuning. A highly parallelizable and fast alternative to the QML counterpart.
 - **Process:**
     1. **Assembles Meta-Features:** The script loads the OOF predictions generated in Stage 3. It also loads an `indicator_file`, which contains supplementary classical features (e.g., clinical data like age or tumor stage). These are concatenated to form the feature set for the meta-learner.
-    2. **Trains Meta-Learner:** It trains a QML model on this combined feature set, using the true labels from the training data.
+    2. **Trains Meta-Learner:** It trains the meta-model on this combined feature set, using the true labels from the training data.
 - **Optimization Metric:** Trials are optimized using a **composite average metric** (Weighted F1, Weighted Precision, Weighted Recall, Weighted Specificity, and Accuracy) for better handling of class imbalance.
-- **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report.
+- **Comprehensive Metrics:** Each trial tracks accuracy, precision, recall, F1 (macro/weighted), specificity (macro/weighted), confusion matrix, and classification report (now with W&B logging for both variants).
 - **Automatic Directory Management:** If the journal file or output directory is read-only, the system automatically copies them to a writable location, ensuring training can proceed in restricted environments.
 - **Output:** 
     - Final trained meta-learner model (`meta_learner_final.joblib`)

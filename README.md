@@ -444,6 +444,10 @@ The meta-learner training script (`metalearner.py`) accepts one or more predicti
 
 ### 5) Tune and train the meta-learner
 
+You can choose to run the Quantum Meta-Learner (QML) or the Classical Meta-Learner. The Classical Meta-Learner uses classical tree-based models and logistic regression (LightGBM, Random Forest, Logistic Regression) to stack the base learner probabilities.
+
+**Option A: Quantum Meta-Learner**
+
 Tune (optional):
 
 ```bash
@@ -457,9 +461,25 @@ Train final meta-learner (uses best parameters from tuning stored in the output 
 python metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --verbose
 ```
 
+**Option B: Classical Meta-Learner**
+
+The classical meta-learner acts as an extremely fast stacked-ensemble alternative to the QML meta-learner and fully supports Weights and Biases (W&B) logging.
+
+Tune classical algorithms (LightGBM, Random Forest, Logistic Regression) using Optuna:
+
+```bash
+python classical_metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode tune --n_trials 50 --use_wandb --wandb_project my_classical_meta
+```
+
+Train classical meta-learner (uses best tuned tree/linear configuration):
+
+```bash
+python classical_metalearner.py --preds_dir final_ensemble_predictions --indicator_file indicator_features.parquet --mode train --use_wandb --wandb_project my_classical_meta
+```
+
 Outputs:
-- `meta_learner_final.joblib`
-- `meta_learner_columns.json` (exact column order used for training)
+- `classical_meta_learner_final.joblib` (or `meta_learner_final.joblib`)
+- `classical_meta_learner_columns.json` (exact column order used for training)
 
 ### 6) Prepare deployment directory and run inference on a new patient
 
