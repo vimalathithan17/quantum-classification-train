@@ -34,6 +34,27 @@ import torch
 import torch.nn.functional as F
 from pathlib import Path
 import json
+import joblib
+
+ENCODER_DIR = os.environ.get('ENCODER_DIR', 'master_label_encoder')
+
+def _load_label_encoder():
+    encoder_path = os.path.join(ENCODER_DIR, 'label_encoder.joblib')
+    possible_paths = [
+        encoder_path,
+        'master_label_encoder/label_encoder.joblib',
+        '../master_label_encoder/label_encoder.joblib',
+        '/kaggle/working/master_label_encoder/label_encoder.joblib',
+        '/kaggle/input/tcga-global-data-split/master_label_encoder/label_encoder.joblib'
+    ]
+    for p in possible_paths:
+        if os.path.exists(p):
+            try:
+                le = joblib.load(p)
+                return le
+            except Exception:
+                pass
+    return None
 
 # Add parent directory to path for imports
 import sys
@@ -77,6 +98,19 @@ def load_multiomics_data(data_dir: Path, modalities: list = None) -> tuple:
             # Extract features (exclude metadata columns)
             feature_cols = [col for col in df.columns if col not in METADATA_COLS]
             features = df[feature_cols].values.astype(np.float32)
+            
+            # Handling NaN/Inf
+            nan_count = np.isnan(features).sum()
+            inf_count = np.isinf(features).sum()
+            if nan_count > 0 or inf_count > 0:
+                print(f"  Warning in {modality}: {nan_count} NaNs, {inf_count} Infs. Imputing with column means.")
+                col_means = np.nanmean(features, axis=0)
+                col_means = np.nan_to_num(col_means, nan=0.0)  # Safe fallback if entire column is NaN
+                for col_idx in range(features.shape[1]):
+                    mask_nan = np.isnan(features[:, col_idx])
+                    mask_inf = np.isinf(features[:, col_idx])
+                    features[mask_nan, col_idx] = col_means[col_idx]
+                    features[mask_inf, col_idx] = col_means[col_idx]
             
             data[modality] = features
             modality_dims[modality] = features.shape[1]
@@ -278,6 +312,7 @@ def extract_features(
     model_dir: str,
     data_dir: str,
     output_dir: str,
+    global_test_dir: str = None,
     extract_type: str = 'both',
     batch_size: int = 64,
     device: str = 'auto',
@@ -300,6 +335,21 @@ def extract_features(
     model_dir = Path(model_dir)
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
+    
+    # Auto-resolve global_test_dir if not explicitly provided
+    if not global_test_dir:
+        env_test_dir = os.environ.get('GLOBAL_TEST_DIR')
+        if env_test_dir and os.path.exists(env_test_dir):
+            global_test_dir = env_test_dir
+            print(f"Auto-resolved global_test_dir from GOBLAL_TEST_DIR env: {global_test_dir}")
+        else:
+            # Generic fallback: parent_dir/global_test
+            base_data_path = os.path.dirname(os.path.dirname(str(data_dir)))
+            guess_dir = os.path.join(base_data_path, 'global_test')
+            if os.path.exists(guess_dir):
+                global_test_dir = guess_dir
+                print(f"Auto-resolved global_test_dir by directory guessing: {global_test_dir}")
+                
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Determine device
@@ -353,6 +403,8 @@ def extract_features(
                     embeddings = model.get_embeddings(batch_data) if hasattr(model, 'get_embeddings') else logits
                     if hasattr(embeddings, 'cpu'):
                         all_embeddings.append(embeddings.cpu().numpy())
+                    else:
+                        all_embeddings.append(embeddings)
         
         logits = np.vstack(all_logits)
         probabilities = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
@@ -363,7 +415,7 @@ def extract_features(
     
     # Process based on split vs non-split
     if is_split:
-        print("\n✓ Processing SPLIT data (train and test separately)")
+        print("\\n✓ Processing SPLIT data (train and test separately)")
         train_logits, train_probs, train_preds, train_embeds = extract_from_data(data['train'], "train set")
         test_logits, test_probs, test_preds, test_embeds = extract_from_data(data['test'], "test set")
         
@@ -374,6 +426,34 @@ def extract_features(
     else:
         n_samples = list(data.values())[0].shape[0]
         logits, probabilities, predictions, embeddings = extract_from_data(data, "all samples")
+        
+        # Process global test split explicitly if requested (and available)
+        global_test_probs = None
+        global_test_case_ids = None
+        global_test_preds = None
+        global_test_labels = None
+        
+        if global_test_dir and not use_pretrained_features:
+            print(f"\\n✓ Processing GLOBAL TEST SPLIT from {global_test_dir}")
+            test_data, test_labels, _, test_case_ids = load_multiomics_data(global_test_dir, modalities)
+            test_logits, global_test_probs, global_test_preds, test_embeds = extract_from_data(test_data, "global test set")
+            global_test_case_ids = test_case_ids
+            global_test_labels = test_labels
+        
+        # Load and process global test set if provided
+        global_test_data = None
+        global_test_labels = None
+        global_test_case_ids = None
+        if global_test_dir:
+            global_test_dir_path = Path(global_test_dir)
+            print(f"\n--- Loading global test data from: {global_test_dir_path} ---")
+            if not global_test_dir_path.exists():
+                print(f"  Warning: global_test_dir {global_test_dir_path} does not exist.")
+            else:
+                global_test_data, global_test_labels, _, global_test_case_ids = load_multiomics_data(global_test_dir_path, modalities)
+                
+                if global_test_data and len(global_test_data) > 0:
+                    t_logits, t_probs, t_preds, t_embeds = extract_from_data(global_test_data, "global test set")
     
     # Save outputs based on extract_type
     extraction_info = {
@@ -397,9 +477,22 @@ def extract_features(
     def save_metalearner_csv(probabilities, case_ids, filename):
         """Save predictions in format compatible with metalearner.py"""
         # Create column names for each class probability
-        prob_cols = [f'class_{i}_prob' for i in range(probabilities.shape[1])]
+        le = _load_label_encoder()
+        
+        if le is not None and len(getattr(le, 'classes_', [])) == probabilities.shape[1]:
+            prob_cols = [f'pred_Transformer_{c}' for c in le.classes_]
+            print(f"  Using labels from master encoder: {prob_cols}")
+        elif 'class_names' in config and len(config['class_names']) == probabilities.shape[1]:
+            prob_cols = [f'pred_Transformer_{c}' for c in config['class_names']]
+            print(f"  Using labels from config: {prob_cols}")
+        else:
+            prob_cols = [f'pred_Transformer_{i}' for i in range(probabilities.shape[1])]
+            print(f"  Fallback: using default columns {prob_cols}")
         
         # Create DataFrame with case_id and probabilities
+        if probabilities.size == 0 or np.isnan(probabilities).all():
+            print(f"  CRITICAL WARNING: Probabilities are fully NaN or empty! Model output might be corrupt.")
+            
         df = pd.DataFrame(probabilities, columns=prob_cols)
         df.insert(0, 'case_id', case_ids)
         
@@ -473,6 +566,15 @@ def extract_features(
         if output_format in ['csv', 'both']:
             print("\n--- Generating metalearner-compatible CSV files ---")
             save_metalearner_csv(probabilities, case_ids, 'train_oof_preds_Transformer.csv')
+            
+            # If global test data was evaluated, save it too
+            if global_test_dir and 't_probs' in locals():
+                save_metalearner_csv(t_probs, global_test_case_ids, 'test_preds_Transformer.csv')
+                
+                if global_test_labels is not None:
+                    test_accuracy = np.mean(t_preds == global_test_labels)
+                    extraction_info['global_test_accuracy'] = float(test_accuracy)
+                    print(f"\nGlobal Test accuracy: {test_accuracy:.4f}")
         
         # Compute accuracy
         if labels is not None:
@@ -527,7 +629,7 @@ Output files (NPY format):
 Output files (CSV format - metalearner compatible):
   <output_dir>/
   ├── train_oof_preds_Transformer.csv  # Training set probabilities
-  ├── test_preds_Transformer.csv       # Test set probabilities
+  ├── test_preds_Transformer.csv       # Test set probabilities (if --global_test_dir is provided)
   └── extraction_metadata.json         # Extraction configuration
 
 Meta-learner usage:
@@ -540,7 +642,9 @@ Meta-learner usage:
     parser.add_argument('--model_dir', type=str, required=True,
                         help='Directory containing trained transformer model')
     parser.add_argument('--data_dir', type=str, required=True,
-                        help='Directory containing parquet data files')
+                        help='Directory containing trained dataset parquet files')
+    parser.add_argument('--global_test_dir', type=str, default=None,
+                        help='Directory containing global test dataset parquet files (to generate test_preds_Transformer.csv). If not provided, tests will try to load from GLOBAL_TEST_DIR env variable.')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Output directory for extracted features')
     parser.add_argument('--extract_type', type=str, default='both',
@@ -564,6 +668,7 @@ Meta-learner usage:
     extract_features(
         model_dir=args.model_dir,
         data_dir=args.data_dir,
+        global_test_dir=args.global_test_dir,
         output_dir=args.output_dir,
         extract_type=args.extract_type,
         batch_size=args.batch_size,
