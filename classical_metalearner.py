@@ -78,8 +78,15 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
         }
         model = CatBoostClassifier(**params)
     elif detector == 'mlp':
+        layer_choice = trial.suggest_categorical('mlp_layers', ['64', '128', '64_32', '128_64'])
+        layer_mapping = {
+            '64': (64,),
+            '128': (128,),
+            '64_32': (64, 32),
+            '128_64': (128, 64)
+        }
         params = {
-            'hidden_layer_sizes': trial.suggest_categorical('mlp_layers', [(64,), (128,), (64, 32), (128, 64)]),
+            'hidden_layer_sizes': layer_mapping[layer_choice],
             'learning_rate_init': trial.suggest_float('mlp_lr', 1e-4, 1e-1, log=True),
             'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
             'random_state': RANDOM_STATE,
@@ -259,6 +266,23 @@ def main():
             model = CatBoostClassifier(**model_params)
         elif model_type == 'mlp':
             model_params = {k.replace('mlp_', ''): v for k,v in best_params.items() if k.startswith('mlp_')}
+            if 'layers' in model_params:
+                layer_choice = model_params.pop('layers')
+                layer_mapping = {
+                    '64': (64,),
+                    '128': (128,),
+                    '64_32': (64, 32),
+                    '128_64': (128, 64)
+                }
+                if isinstance(layer_choice, list):
+                    model_params['hidden_layer_sizes'] = tuple(layer_choice)
+                elif isinstance(layer_choice, tuple):
+                    model_params['hidden_layer_sizes'] = layer_choice
+                elif layer_choice in layer_mapping:
+                    model_params['hidden_layer_sizes'] = layer_mapping[layer_choice]
+                else:
+                    # Default fallback
+                    model_params['hidden_layer_sizes'] = (64, 32)
             model_params['random_state'] = RANDOM_STATE
             model_params['max_iter'] = 500
             model = MLPClassifier(**model_params)
