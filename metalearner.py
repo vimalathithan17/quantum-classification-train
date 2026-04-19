@@ -961,15 +961,6 @@ def main():
         model_path = os.path.join(OUTPUT_DIR, 'meta_learner_final.joblib')
         joblib.dump(final_model, model_path)
         log.info(f"Final meta-learner model saved to '{model_path}'")
-        
-        # Save training confusion matrix
-        log.info("--- Generating Training Set Confusion Matrix ---")
-        train_predictions = final_model.predict((X_base, X_mask))
-        train_cm = confusion_matrix(y_meta_train.values, train_predictions, labels=list(range(n_classes)))
-        train_cm_df = pd.DataFrame(train_cm, index=le.classes_, columns=le.classes_)
-        train_cm_path = os.path.join(OUTPUT_DIR, 'train_confusion_matrix.csv')
-        train_cm_df.to_csv(train_cm_path)
-        log.info(f"Saved training confusion matrix to {train_cm_path}")
 
         # Save column order for inference (inference.py expects this file)
         columns_path = os.path.join(OUTPUT_DIR, 'meta_learner_columns.json')
@@ -1010,21 +1001,39 @@ def main():
             report = classification_report(y_meta_test.values, test_predictions, labels=list(range(n_classes)), target_names=le.classes_)
             log.info("Classification Report:\n" + report)
 
-            # Save confusion matrix
-            cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
-            cm_df = pd.DataFrame(cm, index=le.classes_, columns=le.classes_)
-            cm_path = os.path.join(OUTPUT_DIR, 'confusion_matrix.csv')
-            cm_df.to_csv(cm_path)
-            log.info(f"Saved confusion matrix to {cm_path}")
+            import matplotlib.pyplot as plt
+            import seaborn as sns
 
-            # Normalized confusion matrix (per-row / true-class)
+            # Save confusion matrix diagram
+            cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                        xticklabels=le.classes_, yticklabels=le.classes_)
+            plt.title('Test Set Confusion Matrix')
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.tight_layout()
+            cm_path = os.path.join(OUTPUT_DIR, 'test_confusion_matrix.png')
+            plt.savefig(cm_path)
+            plt.close()
+            log.info(f"Saved test confusion matrix diagram to {cm_path}")
+
+            # Normalized confusion matrix diagram (per-row / true-class)
             with _np.errstate(all='ignore'):
                 row_sums = cm.sum(axis=1, keepdims=True)
                 cm_norm = _np.divide(cm, row_sums, where=(row_sums != 0))
-            cmn_df = pd.DataFrame(cm_norm, index=le.classes_, columns=le.classes_)
-            cmn_path = os.path.join(OUTPUT_DIR, 'confusion_matrix_normalized.csv')
-            cmn_df.to_csv(cmn_path)
-            log.info(f"Saved normalized confusion matrix to {cmn_path}")
+            
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='Blues', 
+                        xticklabels=le.classes_, yticklabels=le.classes_)
+            plt.title('Normalized Test Set Confusion Matrix')
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.tight_layout()
+            cmn_path = os.path.join(OUTPUT_DIR, 'test_confusion_matrix_normalized.png')
+            plt.savefig(cmn_path)
+            plt.close()
+            log.info(f"Saved normalized test confusion matrix diagram to {cmn_path}")
 
             # Save comprehensive metrics to JSON
             metrics_json = {

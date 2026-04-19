@@ -220,21 +220,29 @@ def main():
         joblib.dump(model, model_path)
         log.info(f"Final classical meta-learner saved to {model_path}!")
 
-        # Save training confusion matrix
-        log.info("--- Generating Training Set Confusion Matrix ---")
-        from sklearn.metrics import confusion_matrix
-        train_predictions = model.predict(X_meta_train)
-        train_cm = confusion_matrix(y_meta_train, train_predictions, labels=list(range(n_classes)))
-        train_cm_df = pd.DataFrame(train_cm, index=le.classes_, columns=le.classes_)
-        train_cm_path = os.path.join(OUTPUT_DIR, 'train_confusion_matrix.csv')
-        train_cm_df.to_csv(train_cm_path)
-        log.info(f"Saved training confusion matrix to {train_cm_path}")
-
         # Perform evaluation on inference test set if provided
         if not X_meta_test.empty and not y_meta_test.empty:
             test_preds = model.predict(X_meta_test)
             acc = accuracy_score(y_meta_test, test_preds)
             
+            # Save test confusion matrix diagram
+            log.info("--- Generating Test Set Confusion Matrix Diagram ---")
+            from sklearn.metrics import confusion_matrix
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            test_cm = confusion_matrix(y_meta_test, test_preds, labels=list(range(n_classes)))
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(test_cm, annot=True, fmt='d', cmap='Blues', 
+                        xticklabels=le.classes_, yticklabels=le.classes_)
+            plt.title('Test Set Confusion Matrix')
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.tight_layout()
+            test_cm_path = os.path.join(OUTPUT_DIR, 'test_confusion_matrix.png')
+            plt.savefig(test_cm_path)
+            plt.close()
+            log.info(f"Saved test confusion matrix diagram to {test_cm_path}")
+
             from sklearn.metrics import precision_recall_fscore_support
             precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
                 y_meta_test, test_preds, average='macro', zero_division=0)
