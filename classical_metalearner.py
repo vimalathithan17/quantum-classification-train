@@ -7,10 +7,14 @@ import numpy as np
 import optuna
 import pandas as pd
 from lightgbm import LGBMClassifier
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import StratifiedKFold
 
@@ -37,7 +41,10 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
     # We don't drop the indicator columns for classical models, we let the trees/logistic learn them directly
     # So X_train is passed directly
     
-    detector = trial.suggest_categorical('meta_model', ['lightgbm', 'random_forest', 'logistic_regression'])
+    detector = trial.suggest_categorical('meta_model', [
+        'lightgbm', 'random_forest', 'logistic_regression', 
+        'xgboost', 'catboost', 'mlp', 'svc'
+    ])
     
     if detector == 'lightgbm':
         params = {
@@ -50,6 +57,43 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
             'verbosity': -1,
         }
         model = LGBMClassifier(**params)
+    elif detector == 'xgboost':
+        params = {
+            'n_estimators': trial.suggest_int('xgb_n_estimators', 50, 500),
+            'learning_rate': trial.suggest_float('xgb_lr', 1e-4, 0.5, log=True),
+            'max_depth': trial.suggest_int('xgb_max_depth', 3, 10),
+            'subsample': trial.suggest_float('xgb_subsample', 0.5, 1.0),
+            'random_state': RANDOM_STATE,
+            'n_jobs': 1,
+            'verbosity': 0,
+        }
+        model = XGBClassifier(**params)
+    elif detector == 'catboost':
+        params = {
+            'iterations': trial.suggest_int('cb_iterations', 50, 500),
+            'learning_rate': trial.suggest_float('cb_lr', 1e-4, 0.5, log=True),
+            'depth': trial.suggest_int('cb_depth', 3, 10),
+            'random_seed': RANDOM_STATE,
+            'verbose': False,
+        }
+        model = CatBoostClassifier(**params)
+    elif detector == 'mlp':
+        params = {
+            'hidden_layer_sizes': trial.suggest_categorical('mlp_layers', [(64,), (128,), (64, 32), (128, 64)]),
+            'learning_rate_init': trial.suggest_float('mlp_lr', 1e-4, 1e-1, log=True),
+            'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
+            'random_state': RANDOM_STATE,
+            'max_iter': 500,
+        }
+        model = MLPClassifier(**params)
+    elif detector == 'svc':
+        params = {
+            'C': trial.suggest_float('svc_C', 1e-2, 100.0, log=True),
+            'gamma': trial.suggest_categorical('svc_gamma', ['scale', 'auto']),
+            'random_state': RANDOM_STATE,
+            'probability': True,
+        }
+        model = SVC(**params)
     elif detector == 'random_forest':
         params = {
             'n_estimators': trial.suggest_int('rf_n_estimators', 50, 500),
@@ -204,6 +248,25 @@ def main():
             model_params = {k.replace('lgb_', ''): v for k,v in best_params.items() if k.startswith('lgb_')}
             model_params['random_state'] = RANDOM_STATE
             model = LGBMClassifier(**model_params)
+        elif model_type == 'xgboost':
+            model_params = {k.replace('xgb_', ''): v for k,v in best_params.items() if k.startswith('xgb_')}
+            model_params['random_state'] = RANDOM_STATE
+            model = XGBClassifier(**model_params)
+        elif model_type == 'catboost':
+            model_params = {k.replace('cb_', ''): v for k,v in best_params.items() if k.startswith('cb_')}
+            model_params['random_seed'] = RANDOM_STATE
+            model_params['verbose'] = False
+            model = CatBoostClassifier(**model_params)
+        elif model_type == 'mlp':
+            model_params = {k.replace('mlp_', ''): v for k,v in best_params.items() if k.startswith('mlp_')}
+            model_params['random_state'] = RANDOM_STATE
+            model_params['max_iter'] = 500
+            model = MLPClassifier(**model_params)
+        elif model_type == 'svc':
+            model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
+            model_params['random_state'] = RANDOM_STATE
+            model_params['probability'] = True
+            model = SVC(**model_params)
         elif model_type == 'random_forest':
             model_params = {k.replace('rf_', ''): v for k,v in best_params.items() if k.startswith('rf_')}
             model_params['random_state'] = RANDOM_STATE
