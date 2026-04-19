@@ -90,7 +90,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
             'learning_rate_init': trial.suggest_float('mlp_lr', 1e-4, 1e-1, log=True),
             'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
             'random_state': RANDOM_STATE,
-            'max_iter': 500,
+            'max_iter': 1000,
         }
         model = MLPClassifier(**params)
     elif detector == 'svc':
@@ -123,13 +123,27 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
     predictions = model.predict(X_val)
     
     # Compute metrics
-    from sklearn.metrics import precision_recall_fscore_support
-    _, _, f1_weighted, _ = precision_recall_fscore_support(
-        y_val, predictions, average='weighted', zero_division=0)
+    from utils.metrics_utils import compute_metrics
+    m = compute_metrics(y_val, predictions, n_classes)
+    
+    # Combined metric averaging across F1, Precision, Recall, Specificity and Accuracy
+    avg_f1 = (m['f1_macro'] + m['f1_weighted']) / 2.0
+    avg_prec = (m['precision_macro'] + m['precision_weighted']) / 2.0
+    avg_rec = (m['recall_macro'] + m['recall_weighted']) / 2.0
+    avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
+    
+    # Each pillar given an equal 20% weight representation in the fitness combined score
+    combined_metric = (0.2 * avg_f1) + (0.2 * avg_prec) + (0.2 * avg_rec) + (0.2 * avg_spec) + (0.2 * m['accuracy'])
     
     # Save trial results
-    log.info(f"Trial {trial.number}: meta_model={detector}, f1_weighted={f1_weighted:.4f}")
-    return float(f1_weighted)
+    log.info(f"Trial {trial.number}: meta_model={detector}, combined={combined_metric:.4f} (f1={avg_f1:.4f}, prec={avg_prec:.4f}, rec={avg_rec:.4f}, spec={avg_spec:.4f}, acc={m['accuracy']:.4f})")
+    
+    # Also log other metrics if they are being recorded using the WandB callback (WandB can track everything we drop into trial user_attrs)
+    for k, v in m.items():
+        if isinstance(v, (int, float)):
+            trial.set_user_attr(k, float(v))
+            
+    return float(combined_metric)
 
 
 def main():
@@ -207,7 +221,7 @@ def main():
                 from optuna.integration.wandb import WeightsAndBiasesCallback
                 # Optuna callback tracks each trial natively in WandB
                 wandb_callback = WeightsAndBiasesCallback(
-                    metric_name="f1_weighted",
+                    metric_name="combined_metric",
                     wandb_kwargs={"project": args.wandb_project, "name": args.wandb_run_name}
                 )
                 callbacks.append(wandb_callback)
@@ -292,7 +306,7 @@ def main():
                     # Default fallback
                     model_params['hidden_layer_sizes'] = (64, 32)
             model_params['random_state'] = RANDOM_STATE
-            model_params['max_iter'] = 500
+            model_params['max_iter'] = 1000
             model = MLPClassifier(**model_params)
         elif model_type == 'svc':
             model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
