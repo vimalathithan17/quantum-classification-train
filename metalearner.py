@@ -737,6 +737,9 @@ def main():
                             help='Min layers for tuning search space (default: 3)')
     tuning_args.add_argument('--maxlayers', type=int, default=6,
                             help='Max layers for tuning search space (default: 6)')
+                            
+    # Add verbose missing param
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose output from QML models')
     
     # Training configuration
     train_args = parser.add_argument_group('training configuration')
@@ -891,6 +894,7 @@ def main():
             n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else n_base
         else:
             n_qubits = args.meta_n_qubits if args.meta_n_qubits is not None else X_meta_train.shape[1]
+            
         checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints_metalearner') if (args.max_training_time or args.resume) else None
         model_params = {
             'n_qubits': n_qubits,
@@ -898,7 +902,7 @@ def main():
             'learning_rate': params['learning_rate'],
             'steps': params['steps'],
             'n_classes': n_classes,
-            'verbose': args.verbose,
+            'verbose': True,
             'checkpoint_dir': checkpoint_dir,
             'checkpoint_fallback_dir': args.checkpoint_fallback_dir,
             'checkpoint_frequency': args.checkpoint_frequency,
@@ -981,6 +985,7 @@ def main():
             import seaborn as sns
 
             # Save confusion matrix diagram
+            import numpy as _np
             cm = confusion_matrix(y_meta_test.values, test_predictions, labels=list(range(n_classes)))
             plt.figure(figsize=(10, 8))
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 

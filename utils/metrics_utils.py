@@ -43,7 +43,7 @@ def compute_metrics(y_true, y_pred, n_classes):
     metrics = {}
     
     # Basic accuracy
-    metrics['accuracy'] = accuracy_score(y_true, y_pred)
+    metrics['accuracy'] = float(accuracy_score(y_true, y_pred))
     
     # Precision, recall, F1 (macro and weighted)
     prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(
@@ -53,23 +53,26 @@ def compute_metrics(y_true, y_pred, n_classes):
         y_true, y_pred, average='weighted', zero_division=0
     )
     
-    metrics['precision_macro'] = prec_macro
-    metrics['precision_weighted'] = prec_weighted
-    metrics['recall_macro'] = rec_macro
-    metrics['recall_weighted'] = rec_weighted
-    metrics['f1_macro'] = f1_macro
-    metrics['f1_weighted'] = f1_weighted
+    metrics['precision_macro'] = float(prec_macro)
+    metrics['precision_weighted'] = float(prec_weighted)
+    metrics['recall_macro'] = float(rec_macro)
+    metrics['recall_weighted'] = float(rec_weighted)
+    metrics['f1_macro'] = float(f1_macro)
+    metrics['f1_weighted'] = float(f1_weighted)
     
     # Specificity
     specificities = compute_specificity(y_true, y_pred, n_classes)
-    metrics['specificity_macro'] = np.mean(specificities)
-    metrics['specificity_weighted'] = np.average(
+    metrics['specificity_macro'] = float(np.mean(specificities))
+    metrics['specificity_weighted'] = float(np.average(
         specificities,
         weights=np.bincount(y_true, minlength=n_classes)
-    )
+    ))
     
     # Confusion matrix
-    metrics['confusion_matrix'] = confusion_matrix(y_true, y_pred, labels=range(n_classes))
+    metrics['confusion_matrix'] = confusion_matrix(y_true, y_pred, labels=range(n_classes)).tolist()
+    
+    # Classification Report
+    metrics['classification_report'] = classification_report(y_true, y_pred, zero_division=0)
     
     return metrics
 
