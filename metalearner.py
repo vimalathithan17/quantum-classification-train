@@ -738,9 +738,6 @@ def main():
     tuning_args.add_argument('--maxlayers', type=int, default=6,
                             help='Max layers for tuning search space (default: 6)')
                             
-    # Add verbose missing param
-    parser.add_argument('--verbose', action='store_true', help='Enable verbose output from QML models')
-    
     # Training configuration
     train_args = parser.add_argument_group('training configuration')
     train_args.add_argument('--max_training_time', type=float, default=None,
