@@ -90,45 +90,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
             'learning_rate_init': trial.suggest_float('mlp_lr', 1e-4, 1e-1, log=True),
             'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
             'random_state': RANDOM_STATE,
-            # max_iter is not used when using partial_fit, but we manage iterations manually
+            'max_iter': 20000,
         }
         model = MLPClassifier(**params)
-        
-        # Custom training loop for early stopping on combined_metric
-        from utils.metrics_utils import compute_metrics
-        classes = np.unique(y_train)
-        best_combined = -1
-        patience = 10
-        patience_counter = 0
-        max_epochs = 30000
-        
-        for epoch in range(max_epochs):
-            model.partial_fit(X_train, y_train, classes=classes)
-            
-            # Evaluate on validation set
-            predictions = model.predict(X_val)
-            m = compute_metrics(y_val, predictions, n_classes)
-            
-            avg_f1 = (m['f1_macro'] + m['f1_weighted']) / 2.0
-            avg_prec = (m['precision_macro'] + m['precision_weighted']) / 2.0
-            avg_rec = (m['recall_macro'] + m['recall_weighted']) / 2.0
-            avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
-            
-            combined_metric = (0.30 * avg_f1) + (0.20 * avg_prec) + (0.20 * avg_rec) + (0.15 * avg_spec) + (0.15 * m['accuracy'])
-            
-            if combined_metric > best_combined:
-                best_combined = combined_metric
-                patience_counter = 0
-                # Optionally save the best weights here using copy.deepcopy(model)
-            else:
-                patience_counter += 1
-                
-            if patience_counter >= patience:
-                log.info(f"MLP Early stopping at epoch {epoch} with best combined metric: {best_combined:.4f}")
-                break
-                
-        # To strictly use the best combination metric found, you would return best_combined
-        return float(best_combined)
     elif detector == 'svc':
         params = {
             'C': trial.suggest_float('svc_C', 1e-2, 100.0, log=True),
@@ -343,37 +307,8 @@ def main():
                     # Default fallback
                     model_params['hidden_layer_sizes'] = (64, 32)
             model_params['random_state'] = RANDOM_STATE
-            # Setup MLP without max_iter
+            model_params['max_iter'] = 20000
             model = MLPClassifier(**model_params)
-            best_combined = -1
-            patience = 15
-            patience_counter = 0
-            classes = np.unique(y_tr)
-            
-            for epoch in range(30000): # max epochs
-                model.partial_fit(X_tr, y_tr, classes=classes)
-                preds = model.predict(X_val)
-                m = compute_metrics(y_val, preds, n_classes)
-                
-                avg_f1 = (m['f1_macro'] + m['f1_weighted']) / 2.0
-                avg_prec = (m['precision_macro'] + m['precision_weighted']) / 2.0
-                avg_rec = (m['recall_macro'] + m['recall_weighted']) / 2.0
-                avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
-                combined_metric = (0.30 * avg_f1) + (0.20 * avg_prec) + (0.20 * avg_rec) + (0.15 * avg_spec) + (0.15 * m['accuracy'])
-                
-                if combined_metric > best_combined:
-                    best_combined = combined_metric
-                    patience_counter = 0
-                    # Save best weights
-                    import copy
-                    best_model = copy.deepcopy(model)
-                else:
-                    patience_counter += 1
-                    
-                if patience_counter >= patience:
-                    log.info(f"MLP converged at epoch {epoch} with combined metric {best_combined:.4f}")
-                    break
-            model = best_model # Restore the best weights
         elif model_type == 'svc':
             model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
             model_params['random_state'] = RANDOM_STATE
