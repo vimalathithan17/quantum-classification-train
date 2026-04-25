@@ -15,7 +15,6 @@ import torch.optim as optim
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
 
 # Import centralized logger and assembly utilities
 from logging_utils import log
@@ -148,7 +147,7 @@ def objective(trial, train_data, y_train_tensor, val_data, y_val_tensor, modalit
     """Optuna objective for tuning the Transformer Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
-    # Fix for Optuna dynamic space ValueError: Define the full static space once.
+    # Define the full static space once
     num_heads = trial.suggest_categorical('num_heads', [2, 4, 8])
     embed_dim = trial.suggest_categorical('embed_dim', [16, 32, 64, 128, 256, 512])
     
@@ -168,7 +167,7 @@ def objective(trial, train_data, y_train_tensor, val_data, y_val_tensor, modalit
         'dropout': trial.suggest_float('dropout', 0.1, 0.5),
         'use_cls_token': trial.suggest_categorical('use_cls_token', [True, False]),
         'lr': trial.suggest_float('lr', 1e-5, 1e-2, log=True),
-    } # Batch size removed for Full Batching
+    } 
 
     model, target_metric, m, best_epoch, stopped_epoch = train_transformer_meta_learner(
         train_data, y_train_tensor, val_data, y_val_tensor, modality_dims, n_classes, 
@@ -201,7 +200,7 @@ def objective(trial, train_data, y_train_tensor, val_data, y_val_tensor, modalit
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Direct Train & Tune Transformer Meta-Learner (Full Batching)",
+        description="Direct Train & Tune Transformer Meta-Learner (Global Test Validation)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
@@ -228,9 +227,10 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     log.info(f"Using device: {device}")
 
+    # Load Full Datasets
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols = assemble_meta_data(args.preds_dir, args.indicator_file)
-    if X_meta_train is None:
-        log.critical("Failed to assemble meta-dataset. Exiting.")
+    if X_meta_train is None or X_meta_test.empty:
+        log.critical("Failed to assemble meta-dataset or missing global test set. Exiting.")
         return
 
     n_classes = len(le.classes_)
@@ -262,18 +262,14 @@ def main():
         except Exception:
             pass
 
-    # Create a single Train/Validation split (80/20) for trial training and early stopping
-    log.info("Creating internal validation split (20%) for trial training and early stopping.")
-    X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-        X_meta_train, y_meta_train, test_size=0.20, stratify=y_meta_train, random_state=RANDOM_STATE
-    )
+    log.info("Using GLOBAL TEST SET for early stopping validation (Bypassing train_test_split).")
 
     # Pre-process all data into Full Batch Tensors on the target device
-    train_data, modality_dims = df_to_modality_dict(X_train_split, device)
-    val_data, _ = df_to_modality_dict(X_val_split, device)
+    train_data, modality_dims = df_to_modality_dict(X_meta_train, device)
+    val_data, _ = df_to_modality_dict(X_meta_test, device) # Using Global Test Set as Validation
     
-    y_train_tensor = torch.tensor(y_train_split.values, dtype=torch.long, device=device)
-    y_val_tensor = torch.tensor(y_val_split.values, dtype=torch.long, device=device)
+    y_train_tensor = torch.tensor(y_meta_train.values, dtype=torch.long, device=device)
+    y_val_tensor = torch.tensor(y_meta_test.values, dtype=torch.long, device=device) # Using Global Test Set as Validation
 
     def single_run_objective(trial):
         return objective(
@@ -292,11 +288,12 @@ def main():
     if best_trial_data['model_state'] is not None:
         log.info("--- Evaluating Final Best Transformer Meta-Learner ---")
         
-        # Re-instantiate the best model
+        # 1. Safely pop the learning rate so the constructor doesn't crash
         best_params = copy.deepcopy(best_trial_data['params'])
         if 'lr' in best_params:
-            best_params.pop('lr') # Remove learning rate so it doesn't crash the constructor
-            
+            best_params.pop('lr')
+
+        # 2. Re-instantiate the best model
         best_model = MultimodalFusionClassifier(
             modality_dims=modality_dims,
             num_classes=n_classes,
@@ -308,39 +305,35 @@ def main():
         torch.save(best_model.state_dict(), model_path)
         log.info(f"Final model weights saved to {model_path}!")
 
-        # Final Test Set Evaluation
-        if not X_meta_test.empty and not y_meta_test.empty:
-            test_data, _ = df_to_modality_dict(X_meta_test, device)
-            y_test_tensor = torch.tensor(y_meta_test.values, dtype=torch.long, device=device)
-            
-            _, test_metrics, test_preds = evaluate_model(best_model, test_data, y_test_tensor, n_classes)
-            
-            log.info("--- Generating Test Set Confusion Matrix Diagram ---")
-            test_cm = confusion_matrix(y_meta_test, test_preds, labels=list(range(n_classes)))
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(test_cm, annot=True, fmt='d', cmap='Blues', 
-                        xticklabels=le.classes_, yticklabels=le.classes_)
-            plt.title('Test Set Confusion Matrix (Transformer Meta-Learner)')
-            plt.xlabel('Predicted Label')
-            plt.ylabel('True Label')
-            plt.tight_layout()
-            test_cm_path = os.path.join(OUTPUT_DIR, 'test_confusion_matrix.png')
-            plt.savefig(test_cm_path)
-            plt.close()
-            log.info(f"Saved test confusion matrix diagram to {test_cm_path}")
+        # Since validation == global test set, we just evaluate it once here to get final metrics
+        _, test_metrics, test_preds = evaluate_model(best_model, val_data, y_val_tensor, n_classes)
+        
+        log.info("--- Generating Test Set Confusion Matrix Diagram ---")
+        test_cm = confusion_matrix(y_meta_test, test_preds, labels=list(range(n_classes)))
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(test_cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=le.classes_, yticklabels=le.classes_)
+        plt.title('Test Set Confusion Matrix (Transformer Meta-Learner)')
+        plt.xlabel('Predicted Label')
+        plt.ylabel('True Label')
+        plt.tight_layout()
+        test_cm_path = os.path.join(OUTPUT_DIR, 'test_confusion_matrix.png')
+        plt.savefig(test_cm_path)
+        plt.close()
+        log.info(f"Saved test confusion matrix diagram to {test_cm_path}")
 
-            log.info("--- Final Test Set Evaluation ---")
-            log.info(f"  -> Accuracy:       {test_metrics['accuracy']:.4f}")
-            log.info(f"  -> Weighted P:     {test_metrics['precision_weighted']:.4f}")
-            log.info(f"  -> Weighted R:     {test_metrics['recall_weighted']:.4f}")
-            log.info(f"  -> Weighted S:     {test_metrics['specificity_weighted']:.4f}")
-            log.info(f"  -> Weighted F1:    {test_metrics['f1_weighted']:.4f}")
-            log.info(f"\nClassification Report:\n{classification_report(y_meta_test, test_preds)}")
-            
-            if args.use_wandb:
-                wandb_metrics = {f"test/{k}": float(v) for k, v in test_metrics.items() if isinstance(v, (int, float))}
-                wandb_metrics["test/best_epoch"] = best_trial_data['epoch']
-                wandb.log(wandb_metrics)
+        log.info("--- Final Test Set Evaluation ---")
+        log.info(f"  -> Accuracy:       {test_metrics['accuracy']:.4f}")
+        log.info(f"  -> Weighted P:     {test_metrics['precision_weighted']:.4f}")
+        log.info(f"  -> Weighted R:     {test_metrics['recall_weighted']:.4f}")
+        log.info(f"  -> Weighted S:     {test_metrics['specificity_weighted']:.4f}")
+        log.info(f"  -> Weighted F1:    {test_metrics['f1_weighted']:.4f}")
+        log.info(f"\nClassification Report:\n{classification_report(y_meta_test, test_preds)}")
+        
+        if args.use_wandb:
+            wandb_metrics = {f"test/{k}": float(v) for k, v in test_metrics.items() if isinstance(v, (int, float))}
+            wandb_metrics["test/best_epoch"] = best_trial_data['epoch']
+            wandb.log(wandb_metrics)
 
     if args.use_wandb:
         wandb.finish()
