@@ -32,6 +32,8 @@ from metalearner import (
     ensure_writable_results_dir,
     set_seed,
 )
+# Added the missing import here
+from utils.metrics_utils import compute_metrics
 
 # Shared local constants
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
@@ -180,7 +182,6 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
     predictions = model.predict(X_val_mod)
     
     # Compute metrics
-    from utils.metrics_utils import compute_metrics
     m = compute_metrics(y_val, predictions, n_classes)
     
     # Exclusively tracking f1_weighted to ensure maximum performance
