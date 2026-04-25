@@ -13,7 +13,6 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
 
 # Import centralized logger and assembly utilities
 from logging_utils import log
@@ -165,7 +164,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Direct Train & Tune MLP Meta-Learner for ensemble stacking",
+        description="Direct Train & Tune MLP Meta-Learner (Global Test Validation)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
@@ -206,8 +205,8 @@ def main():
     set_seed(RANDOM_STATE)
     X_meta_train, y_meta_train, X_meta_test, y_meta_test, le, indicator_cols = assemble_meta_data(args.preds_dir, args.indicator_file)
     
-    if X_meta_train is None:
-        log.critical("Failed to assemble meta-dataset. Exiting.")
+    if X_meta_train is None or X_meta_test.empty:
+        log.critical("Failed to assemble meta-dataset or missing global test set. Exiting.")
         return
 
     n_classes = len(le.classes_)
@@ -259,15 +258,11 @@ def main():
         except Exception as e:
             pass
 
-    # Create a single Train/Validation split to be used for all trials
-    log.info("Creating internal validation split (20%) for trial training and early stopping.")
-    X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-        X_meta_train, y_meta_train, test_size=0.20, stratify=y_meta_train, random_state=RANDOM_STATE
-    )
+    log.info("Using GLOBAL TEST SET for trial training and early stopping validation.")
 
     def single_run_objective(trial):
         return objective(
-            trial, X_train_split, y_train_split, X_val_split, y_val_split, n_classes,
+            trial, X_meta_train, y_meta_train, X_meta_test, y_meta_test, n_classes,
             patience=args.patience, tol=args.tol, max_epochs=args.max_epochs
         )
 
