@@ -7,11 +7,13 @@ import sys
 import numpy as np
 import optuna
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, classification_report
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 
 # Import centralized logger and assembly utilities
 from logging_utils import log
@@ -30,15 +32,17 @@ from utils.metrics_utils import compute_metrics
 # Shared local constants
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 
+# Global dictionary to track the best model during tuning
+best_trial_data = {
+    'score': -np.inf,
+    'model': None,
+    'epoch': 0
+}
+
 def get_custom_metric(y_true, y_pred, n_classes):
     """Calculates the weighted custom metric used for early stopping and evaluation."""
     m = compute_metrics(y_true, y_pred, n_classes)
-    avg_f1 = (m['f1_macro'] + m['f1_weighted']) / 2.0
-    avg_prec = (m['precision_macro'] + m['precision_weighted']) / 2.0
-    avg_rec = (m['recall_macro'] + m['recall_weighted']) / 2.0
-    avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
-    
-    # 0.20/0.20/0.30/0.30 weighting
+    # Exclusively tracking f1_weighted to ensure maximum performance
     combined = m['f1_weighted']
     return combined, m
 
@@ -133,15 +137,21 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
         patience=patience, tol=tol, max_epochs=max_epochs
     )
     
+    # Save the absolute best model globally
+    global best_trial_data
+    if combined_metric > best_trial_data['score']:
+        best_trial_data['score'] = combined_metric
+        best_trial_data['model'] = copy.deepcopy(model)
+        best_trial_data['epoch'] = best_epoch
+
     # Print out all key weighted metrics and epoch data for this trial
     log.info(f"Trial {trial.number} Results:")
-    log.info(f"  -> Combined Score: {combined_metric:.4f}")
+    log.info(f"  -> Combined Score (F1 Weighted): {combined_metric:.4f}")
     log.info(f"  -> Stopped Epoch:  {stopped_epoch} | Best Epoch: {best_epoch}")
     log.info(f"  -> Accuracy:       {m['accuracy']:.4f}")
     log.info(f"  -> Weighted P:     {m['precision_weighted']:.4f}")
     log.info(f"  -> Weighted R:     {m['recall_weighted']:.4f}")
     log.info(f"  -> Weighted S:     {m['specificity_weighted']:.4f}")
-    log.info(f"  -> Weighted F1:    {m['f1_weighted']:.4f}")
     
     # Log other metrics to WandB via trial user_attrs
     for k, v in m.items():
@@ -155,7 +165,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train or tune an MLP Meta-Learner for ensemble stacking",
+        description="Direct Train & Tune MLP Meta-Learner for ensemble stacking",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
@@ -166,11 +176,9 @@ def main():
     required.add_argument('--indicator_file', type=str, required=True,
                           help='Parquet file with indicator features and labels')
     
-    # Operation mode
-    mode_args = parser.add_argument_group('operation mode')
-    mode_args.add_argument('--mode', type=str, default='train', choices=['train', 'tune'],
-                           help='Mode: train final model or tune hyperparameters (default: train)')
-    mode_args.add_argument('--n_trials', type=int, default=50,
+    # Tuning config
+    tune_args = parser.add_argument_group('tuning configuration')
+    tune_args.add_argument('--n_trials', type=int, default=50,
                            help='Number of Optuna trials for tuning (default: 50)')
 
     # Training parameters
@@ -232,132 +240,62 @@ def main():
             log.warning(f"Failed to initialize WandB: {e}")
             args.use_wandb = False
     
-    if args.mode == 'tune':
-        log.info(f"--- Starting Hyperparameter Tuning for MLP Meta-Learner ({args.n_trials} trials) ---")
+    log.info(f"--- Starting Direct Training & Tuning for MLP Meta-Learner ({args.n_trials} trials) ---")
+    study_name = 'mlp_metalearner_tuning'
+    writable_journal_path = ensure_writable_db('mlp_' + TUNING_JOURNAL_FILE)
+    
+    storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
+    study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
 
-        study_name = 'mlp_metalearner_tuning'
-        writable_journal_path = ensure_writable_db('mlp_' + TUNING_JOURNAL_FILE)
-        log.info(f"Using journal file: {writable_journal_path}")
-
-        storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
-        study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
-
-        callbacks = []
-        if args.use_wandb:
-            try:
-                from optuna.integration.wandb import WeightsAndBiasesCallback
-                wandb_callback = WeightsAndBiasesCallback(
-                    metric_name="combined_metric",
-                    wandb_kwargs={"project": args.wandb_project, "name": args.wandb_run_name}
-                )
-                callbacks.append(wandb_callback)
-            except Exception as e:
-                log.warning(f"Failed to setup WandB callback: {e}")
-
-        def cv_objective(trial):
-            skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=RANDOM_STATE)
-            scores = []
-            for train_idx, val_idx in skf.split(X_meta_train, y_meta_train):
-                X_train_fold = X_meta_train.iloc[train_idx]
-                y_train_fold = y_meta_train.iloc[train_idx]
-                X_val_fold = X_meta_train.iloc[val_idx]
-                y_val_fold = y_meta_train.iloc[val_idx]
-                
-                # Pass CLI args directly to objective
-                fold_score = objective(
-                    trial, X_train_fold, y_train_fold, X_val_fold, y_val_fold, n_classes,
-                    patience=args.patience, tol=args.tol, max_epochs=args.max_epochs
-                )
-                scores.append(fold_score)
-            
-            return np.mean(scores)
-
-        study.optimize(cv_objective, n_trials=args.n_trials, callbacks=callbacks)
-
-        log.info("--- Tuning Complete ---")
-        log.info(f"Best hyperparameters found: {study.best_params}")
-        
-        params_file = os.path.join(OUTPUT_DIR, 'best_mlp_metalearner_params.json')
-        with open(params_file, 'w') as f:
-            json.dump(study.best_params, f, indent=4)
-            
-    elif args.mode == 'train':
-        log.info("--- Training Final MLP Meta-Learner ---")
-        params_path = os.path.join(OUTPUT_DIR, 'best_mlp_metalearner_params.json')
+    callbacks = []
+    if args.use_wandb:
         try:
-            with open(params_path, 'r') as f:
-                best_params = json.load(f)
-            log.info(f"Loaded best parameters: {best_params}")
-        except FileNotFoundError:
-            best_params = {}
-            log.warning("Tuned parameters not found. Using defaults.")
-            
-        # Parse params
-        model_params = {k.replace('mlp_', ''): v for k,v in best_params.items() if k.startswith('mlp_')}
-        if 'lr' in model_params:
-            model_params['learning_rate_init'] = model_params.pop('lr')
-        
-        # Parse Layers including 256 neuron variations
-        if 'layers' in model_params:
-            layer_choice = model_params.pop('layers')
-            layer_mapping = {
-                '64': (64,), '128': (128,), '256': (256,),
-                '64_32': (64, 32), '128_64': (128, 64), '128_64_32': (128, 64, 32),
-                '256_128': (256, 128), '256_128_64': (256, 128, 64),
-                '64_64': (64, 64), '128_128': (128, 128), '256_256': (256, 256),
-                '32_64': (32, 64), '64_128': (64, 128), '128_256': (128, 256)
-            }
-            if isinstance(layer_choice, list):
-                model_params['hidden_layer_sizes'] = tuple(layer_choice)
-            elif isinstance(layer_choice, tuple):
-                model_params['hidden_layer_sizes'] = layer_choice
-            elif layer_choice in layer_mapping:
-                model_params['hidden_layer_sizes'] = layer_mapping[layer_choice]
-            else:
-                model_params['hidden_layer_sizes'] = (64, 32)
-                
-        model_params['random_state'] = RANDOM_STATE
-        
-        # To use our custom metric early stopping, we must split the training set
-        # to have a validation set. We use a 90/10 split here.
-        log.info("Creating internal validation split (10%) for final model early stopping.")
-        X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
-            X_meta_train, y_meta_train, test_size=0.10, stratify=y_meta_train, random_state=RANDOM_STATE
+            from optuna.integration.wandb import WeightsAndBiasesCallback
+            wandb_callback = WeightsAndBiasesCallback(
+                metric_name="combined_metric",
+                wandb_kwargs={"project": args.wandb_project, "name": args.wandb_run_name}
+            )
+            callbacks.append(wandb_callback)
+        except Exception as e:
+            pass
+
+    # Create a single Train/Validation split to be used for all trials
+    log.info("Creating internal validation split (10%) for trial training and early stopping.")
+    X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
+        X_meta_train, y_meta_train, test_size=0.10, stratify=y_meta_train, random_state=RANDOM_STATE
+    )
+
+    def single_run_objective(trial):
+        return objective(
+            trial, X_train_split, y_train_split, X_val_split, y_val_split, n_classes,
+            patience=args.patience, tol=args.tol, max_epochs=args.max_epochs
         )
 
-        model, final_score, val_metrics, best_epoch, stopped_epoch = train_mlp_with_custom_early_stopping(
-            X_train_final, y_train_final, X_val_final, y_val_final, 
-            n_classes, model_params, 
-            patience=args.patience, 
-            tol=args.tol, 
-            max_epochs=args.max_epochs
-        )
+    study.optimize(single_run_objective, n_trials=args.n_trials, callbacks=callbacks)
+
+    log.info("--- Tuning Complete ---")
+    log.info(f"Best hyperparameters found: {study.best_params}")
+    
+    params_file = os.path.join(OUTPUT_DIR, 'best_mlp_metalearner_params.json')
+    with open(params_file, 'w') as f:
+        json.dump(study.best_params, f, indent=4)
         
+    # --- Final Test Set Evaluation using the absolutely best model ---
+    global best_trial_data
+    best_model = best_trial_data['model']
+    
+    if best_model is not None:
         import joblib
         model_path = os.path.join(OUTPUT_DIR, 'mlp_meta_learner_final.joblib')
-        joblib.dump(model, model_path)
-        log.info(f"Final MLP meta-learner saved to {model_path}!")
-        log.info("--- Internal Validation Metrics (Best Epoch) ---")
-        log.info(f"  -> Combined Score: {final_score:.4f}")
-        log.info(f"  -> Stopped Epoch:  {stopped_epoch} | Best Epoch: {best_epoch}")
-        log.info(f"  -> Accuracy:       {val_metrics['accuracy']:.4f}")
-        log.info(f"  -> Weighted P:     {val_metrics['precision_weighted']:.4f}")
-        log.info(f"  -> Weighted R:     {val_metrics['recall_weighted']:.4f}")
-        log.info(f"  -> Weighted S:     {val_metrics['specificity_weighted']:.4f}")
-        log.info(f"  -> Weighted F1:    {val_metrics['f1_weighted']:.4f}")
+        joblib.dump(best_model, model_path)
+        log.info(f"\nFinal best MLP meta-learner saved to {model_path}!")
 
-        # Perform evaluation on inference test set if provided
         if not X_meta_test.empty and not y_meta_test.empty:
-            test_preds = model.predict(X_meta_test)
-            
-            # Use compute_metrics to reliably get Specificity alongside standard metrics
+            test_preds = best_model.predict(X_meta_test)
             test_metrics = compute_metrics(y_meta_test, test_preds, n_classes)
             
             # Save test confusion matrix diagram
             log.info("--- Generating Test Set Confusion Matrix Diagram ---")
-            from sklearn.metrics import confusion_matrix
-            import matplotlib.pyplot as plt
-            import seaborn as sns
             test_cm = confusion_matrix(y_meta_test, test_preds, labels=list(range(n_classes)))
             plt.figure(figsize=(10, 8))
             sns.heatmap(test_cm, annot=True, fmt='d', cmap='Blues', 
@@ -382,21 +320,20 @@ def main():
             if args.use_wandb:
                 try:
                     import wandb
-                    # Log all test metrics straight from the dictionary with a 'test/' prefix
                     wandb_metrics = {f"test/{k}": float(v) for k, v in test_metrics.items() if isinstance(v, (int, float))}
-                    wandb_metrics["test/best_epoch"] = best_epoch
+                    wandb_metrics["test/best_epoch"] = best_trial_data['epoch']
                     wandb.log(wandb_metrics)
                     log.info("Logged all test metrics to WandB.")
                 except Exception as e:
                     log.warning(f"Failed to log test metrics to WandB: {e}")
 
-        # Finish wandb run
-        if args.use_wandb:
-            try:
-                import wandb
-                wandb.finish()
-            except Exception:
-                pass
+    # Finish wandb run
+    if args.use_wandb:
+        try:
+            import wandb
+            wandb.finish()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()
