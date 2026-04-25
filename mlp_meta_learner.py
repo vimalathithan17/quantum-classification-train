@@ -56,6 +56,7 @@ def train_mlp_with_custom_early_stopping(X_train, y_train, X_val, y_val, n_class
     best_metrics = None
     patience_counter = 0
     best_epoch = 0
+    stopped_epoch = 0
     
     for epoch in range(max_epochs):
         # Train one epoch
@@ -80,28 +81,50 @@ def train_mlp_with_custom_early_stopping(X_train, y_train, X_val, y_val, n_class
             
         # Stop if no improvement for 'patience' epochs
         if patience_counter >= patience:
-            log.debug(f"Early stopping triggered at epoch {epoch}. Restoring weights from epoch {best_epoch}.")
+            stopped_epoch = epoch
+            log.info(f"Early stopping triggered at epoch {stopped_epoch}. Restoring weights from epoch {best_epoch}.")
             break
+
+    # If it reached max_epochs without triggering early stopping
+    if stopped_epoch == 0:
+        stopped_epoch = max_epochs - 1
 
     # Restore the best model weights
     if best_weights is not None:
         model.coefs_ = best_weights
         model.intercepts_ = best_intercepts
         
-    return model, best_score, best_metrics
+    return model, best_score, best_metrics, best_epoch, stopped_epoch
 
 
 def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, max_epochs):
     """Optuna objective function for tuning the MLP Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
-    layer_choice = trial.suggest_categorical('mlp_layers', ['64', '128', '64_32', '128_64', '128_64_32'])
+    # Layer choices including 256 neuron variations
+    layer_choices = [
+        '64', '128', '256',                                 # Single layers
+        '64_32', '128_64', '128_64_32', '256_128', '256_128_64', # Funnel (Decreasing)
+        '64_64', '128_128', '256_256',                      # Constant
+        '32_64', '64_128', '128_256'                        # Expanding
+    ]
+    layer_choice = trial.suggest_categorical('mlp_layers', layer_choices)
+    
     layer_mapping = {
         '64': (64,),
         '128': (128,),
+        '256': (256,),
         '64_32': (64, 32),
         '128_64': (128, 64),
-        '128_64_32': (128, 64, 32)
+        '128_64_32': (128, 64, 32),
+        '256_128': (256, 128),
+        '256_128_64': (256, 128, 64),
+        '64_64': (64, 64),
+        '128_128': (128, 128),
+        '256_256': (256, 256),
+        '32_64': (32, 64),
+        '64_128': (64, 128),
+        '128_256': (128, 256)
     }
     
     params = {
@@ -114,17 +137,27 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
     }
 
     # Train with custom early stopping using CLI parameters
-    model, combined_metric, m = train_mlp_with_custom_early_stopping(
+    model, combined_metric, m, best_epoch, stopped_epoch = train_mlp_with_custom_early_stopping(
         X_train, y_train, X_val, y_val, n_classes, params, 
         patience=patience, tol=tol, max_epochs=max_epochs
     )
     
-    log.info(f"Trial {trial.number}: combined={combined_metric:.4f} (acc={m['accuracy']:.4f})")
+    # Print out all key weighted metrics and epoch data for this trial
+    log.info(f"Trial {trial.number} Results:")
+    log.info(f"  -> Combined Score: {combined_metric:.4f}")
+    log.info(f"  -> Stopped Epoch:  {stopped_epoch} | Best Epoch: {best_epoch}")
+    log.info(f"  -> Accuracy:       {m['accuracy']:.4f}")
+    log.info(f"  -> Weighted P:     {m['precision_weighted']:.4f}")
+    log.info(f"  -> Weighted R:     {m['recall_weighted']:.4f}")
+    log.info(f"  -> Weighted S:     {m['specificity_weighted']:.4f}")
+    log.info(f"  -> Weighted F1:    {m['f1_weighted']:.4f}")
     
     # Log other metrics to WandB via trial user_attrs
     for k, v in m.items():
         if isinstance(v, (int, float)):
             trial.set_user_attr(k, float(v))
+    trial.set_user_attr("best_epoch", best_epoch)
+    trial.set_user_attr("stopped_epoch", stopped_epoch)
             
     return float(combined_metric)
 
@@ -261,12 +294,15 @@ def main():
         if 'lr' in model_params:
             model_params['learning_rate_init'] = model_params.pop('lr')
         
-        # Parse Layers
+        # Parse Layers including 256 neuron variations
         if 'layers' in model_params:
             layer_choice = model_params.pop('layers')
             layer_mapping = {
-                '64': (64,), '128': (128,), '64_32': (64, 32), 
-                '128_64': (128, 64), '128_64_32': (128, 64, 32)
+                '64': (64,), '128': (128,), '256': (256,),
+                '64_32': (64, 32), '128_64': (128, 64), '128_64_32': (128, 64, 32),
+                '256_128': (256, 128), '256_128_64': (256, 128, 64),
+                '64_64': (64, 64), '128_128': (128, 128), '256_256': (256, 256),
+                '32_64': (32, 64), '64_128': (64, 128), '128_256': (128, 256)
             }
             if isinstance(layer_choice, list):
                 model_params['hidden_layer_sizes'] = tuple(layer_choice)
@@ -286,7 +322,7 @@ def main():
             X_meta_train, y_meta_train, test_size=0.10, stratify=y_meta_train, random_state=RANDOM_STATE
         )
 
-        model, final_score, _ = train_mlp_with_custom_early_stopping(
+        model, final_score, val_metrics, best_epoch, stopped_epoch = train_mlp_with_custom_early_stopping(
             X_train_final, y_train_final, X_val_final, y_val_final, 
             n_classes, model_params, 
             patience=args.patience, 
@@ -297,12 +333,22 @@ def main():
         import joblib
         model_path = os.path.join(OUTPUT_DIR, 'mlp_meta_learner_final.joblib')
         joblib.dump(model, model_path)
-        log.info(f"Final MLP meta-learner saved to {model_path}! (Internal Val Score: {final_score:.4f})")
+        log.info(f"Final MLP meta-learner saved to {model_path}!")
+        log.info("--- Internal Validation Metrics (Best Epoch) ---")
+        log.info(f"  -> Combined Score: {final_score:.4f}")
+        log.info(f"  -> Stopped Epoch:  {stopped_epoch} | Best Epoch: {best_epoch}")
+        log.info(f"  -> Accuracy:       {val_metrics['accuracy']:.4f}")
+        log.info(f"  -> Weighted P:     {val_metrics['precision_weighted']:.4f}")
+        log.info(f"  -> Weighted R:     {val_metrics['recall_weighted']:.4f}")
+        log.info(f"  -> Weighted S:     {val_metrics['specificity_weighted']:.4f}")
+        log.info(f"  -> Weighted F1:    {val_metrics['f1_weighted']:.4f}")
 
         # Perform evaluation on inference test set if provided
         if not X_meta_test.empty and not y_meta_test.empty:
             test_preds = model.predict(X_meta_test)
-            acc = accuracy_score(y_meta_test, test_preds)
+            
+            # Use compute_metrics to reliably get Specificity alongside standard metrics
+            test_metrics = compute_metrics(y_meta_test, test_preds, n_classes)
             
             # Save test confusion matrix diagram
             log.info("--- Generating Test Set Confusion Matrix Diagram ---")
@@ -322,28 +368,22 @@ def main():
             plt.close()
             log.info(f"Saved test confusion matrix diagram to {test_cm_path}")
 
-            from sklearn.metrics import precision_recall_fscore_support
-            precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
-                y_meta_test, test_preds, average='macro', zero_division=0)
-            precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
-                y_meta_test, test_preds, average='weighted', zero_division=0)
-            
-            log.info(f"Evaluation on supplied target tests -> Meta-Test accuracy: {acc:.4f}")
-            log.info(f"Classification Report:\n{classification_report(y_meta_test, test_preds)}")
+            log.info("--- Final Test Set Evaluation ---")
+            log.info(f"  -> Accuracy:       {test_metrics['accuracy']:.4f}")
+            log.info(f"  -> Weighted P:     {test_metrics['precision_weighted']:.4f}")
+            log.info(f"  -> Weighted R:     {test_metrics['recall_weighted']:.4f}")
+            log.info(f"  -> Weighted S:     {test_metrics['specificity_weighted']:.4f}")
+            log.info(f"  -> Weighted F1:    {test_metrics['f1_weighted']:.4f}")
+            log.info(f"\nClassification Report:\n{classification_report(y_meta_test, test_preds)}")
             
             if args.use_wandb:
                 try:
                     import wandb
-                    wandb.log({
-                        "test/accuracy": float(acc),
-                        "test/precision_macro": float(precision_macro),
-                        "test/recall_macro": float(recall_macro),
-                        "test/f1_macro": float(f1_macro),
-                        "test/precision_weighted": float(precision_weighted),
-                        "test/recall_weighted": float(recall_weighted),
-                        "test/f1_weighted": float(f1_weighted)
-                    })
-                    log.info("Logged evaluation metrics to WandB.")
+                    # Log all test metrics straight from the dictionary with a 'test/' prefix
+                    wandb_metrics = {f"test/{k}": float(v) for k, v in test_metrics.items() if isinstance(v, (int, float))}
+                    wandb_metrics["test/best_epoch"] = best_epoch
+                    wandb.log(wandb_metrics)
+                    log.info("Logged all test metrics to WandB.")
                 except Exception as e:
                     log.warning(f"Failed to log test metrics to WandB: {e}")
 
