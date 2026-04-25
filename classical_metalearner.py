@@ -199,7 +199,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
     
     # F1, precision and recall are given higher weights (0.30/0.20/0.20) to prioritise
     # classification quality, while specificity and accuracy each contribute 0.15
-    combined_metric = (0.30 * avg_f1) + (0.20 * avg_prec) + (0.20 * avg_rec) + (0.15 * avg_spec) + (0.15 * m['accuracy'])
+    combined_metric = m['f1_weighted']
     
     # Save trial results
     log.info(f"Trial {trial.number}: meta_model={detector}, combined={combined_metric:.4f} (f1={avg_f1:.4f}, prec={avg_prec:.4f}, rec={avg_rec:.4f}, spec={avg_spec:.4f}, acc={m['accuracy']:.4f})")
