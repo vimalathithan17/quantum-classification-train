@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import os
 import sys
@@ -6,6 +7,8 @@ import sys
 import numpy as np
 import optuna
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from lightgbm import LGBMClassifier
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
@@ -14,8 +17,8 @@ from optuna.storages.journal import JournalFileBackend
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, classification_report
-from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 
 # Import centralized logger and assembly utilities
 from logging_utils import log
@@ -33,6 +36,12 @@ from metalearner import (
 # Shared local constants
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 
+# Global dictionary to track the best model during tuning
+best_trial_data = {
+    'score': -np.inf,
+    'model': None
+}
+
 def apply_transformer_weighting(X_train, X_val, model_type, transformer_weight):
     """Dynamically applies Scaling, Duplication, or Weights array based on algorithm."""
     transformer_cols = [col for col in X_train.columns if 'Transformer' in str(col)]
@@ -43,7 +52,7 @@ def apply_transformer_weighting(X_train, X_val, model_type, transformer_weight):
     X_val_out = X_val.copy() if X_val is not None and not X_val.empty else X_val
     feature_weights = None
 
-    if model_type in [ 'logistic_regression', 'svc']:
+    if model_type in ['logistic_regression', 'svc']:
         # Approach 3: Feature Scaling (For gradient/weight-based models)
         for col in transformer_cols:
             X_train_out[col] = X_train_out[col] * transformer_weight
@@ -101,9 +110,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
     """Optuna objective function for tuning Classical Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
+    # We strictly enforce using Logistic Regression and XGBoost for this dataset size
     detector = trial.suggest_categorical('meta_model', [
-        'lightgbm', 'random_forest', 'logistic_regression', 
-        'xgboost', 'catboost', 'mlp', 'svc'
+        'logistic_regression', 'xgboost', 'lightgbm', 'random_forest', 'catboost', 'svc'
     ])
     
     # 1. Dynamically route and apply Feature Importance Logic
@@ -111,9 +120,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
 
     if detector == 'lightgbm':
         params = {
-            'n_estimators': trial.suggest_int('lgb_n_estimators', 50, 500),
-            'learning_rate': trial.suggest_float('lgb_lr', 1e-4, 0.5, log=True),
-            'max_depth': trial.suggest_int('lgb_max_depth', 3, 10),
+            'n_estimators': trial.suggest_int('lgb_n_estimators', 50, 200),
+            'learning_rate': trial.suggest_float('lgb_lr', 1e-3, 0.1, log=True),
+            'max_depth': trial.suggest_int('lgb_max_depth', 2, 5),
             'subsample': trial.suggest_float('lgb_subsample', 0.5, 1.0),
             'random_state': RANDOM_STATE,
             'n_jobs': 1,
@@ -122,9 +131,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
         model = LGBMClassifier(**params)
     elif detector == 'xgboost':
         params = {
-            'n_estimators': trial.suggest_int('xgb_n_estimators', 50, 500),
-            'learning_rate': trial.suggest_float('xgb_lr', 1e-4, 0.5, log=True),
-            'max_depth': trial.suggest_int('xgb_max_depth', 3, 10),
+            'n_estimators': trial.suggest_int('xgb_n_estimators', 50, 200),
+            'learning_rate': trial.suggest_float('xgb_lr', 1e-3, 0.1, log=True),
+            'max_depth': trial.suggest_int('xgb_max_depth', 2, 5),
             'subsample': trial.suggest_float('xgb_subsample', 0.5, 1.0),
             'random_state': RANDOM_STATE,
             'n_jobs': 1,
@@ -133,9 +142,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
         model = XGBClassifier(**params)
     elif detector == 'catboost':
         params = {
-            'iterations': trial.suggest_int('cb_iterations', 50, 500),
-            'learning_rate': trial.suggest_float('cb_lr', 1e-4, 0.5, log=True),
-            'depth': trial.suggest_int('cb_depth', 3, 10),
+            'iterations': trial.suggest_int('cb_iterations', 50, 200),
+            'learning_rate': trial.suggest_float('cb_lr', 1e-3, 0.1, log=True),
+            'depth': trial.suggest_int('cb_depth', 2, 5),
             'random_seed': RANDOM_STATE,
             'verbose': False,
         }
@@ -150,9 +159,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
         model = SVC(**params)
     elif detector == 'random_forest':
         params = {
-            'n_estimators': trial.suggest_int('rf_n_estimators', 50, 500),
-            'max_depth': trial.suggest_categorical('rf_max_depth', [None, 5, 10, 20]),
-            'min_samples_split': trial.suggest_int('rf_min_samples_split', 2, 20),
+            'n_estimators': trial.suggest_int('rf_n_estimators', 50, 200),
+            'max_depth': trial.suggest_categorical('rf_max_depth', [3, 5, 10]),
+            'min_samples_split': trial.suggest_int('rf_min_samples_split', 2, 10),
             'random_state': RANDOM_STATE,
             'n_jobs': -1,
         }
@@ -174,20 +183,24 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
     from utils.metrics_utils import compute_metrics
     m = compute_metrics(y_val, predictions, n_classes)
     
-    # Combined metric averaging across F1, Precision, Recall, Specificity and Accuracy
-    avg_f1 = (m['f1_macro'] + m['f1_weighted']) / 2.0
-    avg_prec = (m['precision_macro'] + m['precision_weighted']) / 2.0
-    avg_rec = (m['recall_macro'] + m['recall_weighted']) / 2.0
-    avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
-    
-    # F1, precision and recall are given higher weights (0.30/0.20/0.20) to prioritise
-    # classification quality, while specificity and accuracy each contribute 0.15
+    # Exclusively tracking f1_weighted to ensure maximum performance
     combined_metric = m['f1_weighted']
     
-    # Save trial results
-    log.info(f"Trial {trial.number}: meta_model={detector}, combined={combined_metric:.4f} (f1={avg_f1:.4f}, prec={avg_prec:.4f}, rec={avg_rec:.4f}, spec={avg_spec:.4f}, acc={m['accuracy']:.4f})")
+    # Save the absolute best model globally
+    global best_trial_data
+    if combined_metric > best_trial_data['score']:
+        best_trial_data['score'] = combined_metric
+        best_trial_data['model'] = copy.deepcopy(model)
     
-    # Also log other metrics if they are being recorded using the WandB callback (WandB can track everything we drop into trial user_attrs)
+    # Save trial results
+    log.info(f"Trial {trial.number} Results:")
+    log.info(f"  -> Model:                {detector}")
+    log.info(f"  -> Combined Score (F1):  {combined_metric:.4f}")
+    log.info(f"  -> Accuracy:             {m['accuracy']:.4f}")
+    log.info(f"  -> Weighted P:           {m['precision_weighted']:.4f}")
+    log.info(f"  -> Weighted R:           {m['recall_weighted']:.4f}")
+    log.info(f"  -> Weighted S:           {m['specificity_weighted']:.4f}")
+    
     for k, v in m.items():
         if isinstance(v, (int, float)):
             trial.set_user_attr(k, float(v))
@@ -197,7 +210,7 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train or tune a Classical Meta-Learner (LightGBM/RF/Logistic) for ensemble stacking",
+        description="Direct Train & Tune Classical Meta-Learner for ensemble stacking",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
@@ -208,13 +221,11 @@ def main():
     required.add_argument('--indicator_file', type=str, required=True,
                           help='Parquet file with indicator features and labels')
     
-    # Operation mode
-    mode_args = parser.add_argument_group('operation mode')
-    mode_args.add_argument('--mode', type=str, default='train', choices=['train', 'tune'],
-                           help='Mode: train final model or tune hyperparameters (default: train)')
-    mode_args.add_argument('--n_trials', type=int, default=50,
+    # Tuning Configuration
+    tune_args = parser.add_argument_group('tuning configuration')
+    tune_args.add_argument('--n_trials', type=int, default=50,
                            help='Number of Optuna trials for tuning (default: 50)')
-    mode_args.add_argument('--transformer_weight', type=float, default=5.0,
+    tune_args.add_argument('--transformer_weight', type=float, default=5.0,
                            help='Weight multiplier to prioritize Transformer base model predictions (default: 5.0)')
 
     # Logging config
@@ -245,7 +256,6 @@ def main():
     if args.use_wandb:
         try:
             import wandb
-            # Initialize wandb globally for this process
             wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_run_name,
@@ -256,129 +266,74 @@ def main():
             log.warning(f"Failed to initialize WandB: {e}")
             args.use_wandb = False
     
-    if args.mode == 'tune':
-        log.info(f"--- Starting Hyperparameter Tuning for Classical Meta-Learner ({args.n_trials} trials) ---")
+    log.info(f"--- Starting Direct Training & Tuning for Classical Meta-Learner ({args.n_trials} trials) ---")
 
-        study_name = 'classical_metalearner_tuning'
-        writable_journal_path = ensure_writable_db('classical_' + TUNING_JOURNAL_FILE)
-        log.info(f"Using journal file: {writable_journal_path}")
+    study_name = 'classical_metalearner_tuning'
+    writable_journal_path = ensure_writable_db('classical_' + TUNING_JOURNAL_FILE)
+    
+    storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
+    study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
 
-        storage = JournalStorage(JournalFileBackend(lock_obj=None, file_path=writable_journal_path))
-        study = optuna.create_study(direction='maximize', study_name=study_name, storage=storage, load_if_exists=True)
-
-        callbacks = []
-        if args.use_wandb:
-            try:
-                from optuna.integration.wandb import WeightsAndBiasesCallback
-                # Optuna callback tracks each trial natively in WandB
-                wandb_callback = WeightsAndBiasesCallback(
-                    metric_name="combined_metric",
-                    wandb_kwargs={"project": args.wandb_project, "name": args.wandb_run_name}
-                )
-                callbacks.append(wandb_callback)
-            except Exception as e:
-                log.warning(f"Failed to setup WandB callback: {e}")
-
-        def cv_objective(trial):
-            skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=RANDOM_STATE)
-            scores = []
-            for train_idx, val_idx in skf.split(X_meta_train, y_meta_train):
-                X_train_fold = X_meta_train.iloc[train_idx]
-                y_train_fold = y_meta_train.iloc[train_idx]
-                X_val_fold = X_meta_train.iloc[val_idx]
-                y_val_fold = y_meta_train.iloc[val_idx]
-                
-                fold_score = objective(
-                    trial, X_train_fold, y_train_fold, X_val_fold, y_val_fold, 
-                    n_classes, indicator_cols, args.transformer_weight
-                )
-                scores.append(fold_score)
-            
-            return np.mean(scores)
-
-        study.optimize(cv_objective, n_trials=args.n_trials, callbacks=callbacks)
-
-        log.info("--- Tuning Complete ---")
-        log.info(f"Best hyperparameters found: {study.best_params}")
-        
-        params_file = os.path.join(OUTPUT_DIR, 'best_classical_metalearner_params.json')
-        with open(params_file, 'w') as f:
-            json.dump(study.best_params, f, indent=4)
-            
-    elif args.mode == 'train':
-        log.info("--- Training Final Classical Meta-Learner ---")
-        params_path = os.path.join(OUTPUT_DIR, 'best_classical_metalearner_params.json')
+    callbacks = []
+    if args.use_wandb:
         try:
-            with open(params_path, 'r') as f:
-                best_params = json.load(f)
-            log.info(f"Loaded best parameters: {best_params}")
-        except FileNotFoundError:
-            best_params = {'meta_model': 'lightgbm'}
-            log.warning("Tuned parameters not found. Using LightGBM defaults.")
-            
-        model_type = best_params.pop('meta_model', 'lightgbm')
-        
-        if model_type == 'lightgbm':
-            # Map LightGBM optuna params
-            model_params = {k.replace('lgb_', ''): v for k,v in best_params.items() if k.startswith('lgb_')}
-            if 'lr' in model_params:
-                model_params['learning_rate'] = model_params.pop('lr')
-            model_params['random_state'] = RANDOM_STATE
-            model = LGBMClassifier(**model_params)
-        elif model_type == 'xgboost':
-            model_params = {k.replace('xgb_', ''): v for k,v in best_params.items() if k.startswith('xgb_')}
-            if 'lr' in model_params:
-                model_params['learning_rate'] = model_params.pop('lr')
-            model_params['random_state'] = RANDOM_STATE
-            model = XGBClassifier(**model_params)
-        elif model_type == 'catboost':
-            model_params = {k.replace('cb_', ''): v for k,v in best_params.items() if k.startswith('cb_')}
-            if 'lr' in model_params:
-                model_params['learning_rate'] = model_params.pop('lr')
-            model_params['random_seed'] = RANDOM_STATE
-            model_params['verbose'] = False
-            model = CatBoostClassifier(**model_params)
-        elif model_type == 'svc':
-            model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
-            model_params['random_state'] = RANDOM_STATE
-            model_params['probability'] = True
-            model = SVC(**model_params)
-        elif model_type == 'random_forest':
-            model_params = {k.replace('rf_', ''): v for k,v in best_params.items() if k.startswith('rf_')}
-            model_params['random_state'] = RANDOM_STATE
-            model = RandomForestClassifier(**model_params)
-        else:
-            model_params = {k.replace('lr_', ''): v for k,v in best_params.items() if k.startswith('lr_')}
-            model_params['random_state'] = RANDOM_STATE
-            model = LogisticRegression(**model_params)
-            
-        # Apply transformation strategies to Final Training/Test sets
-        X_train_mod, X_test_mod, f_weights = apply_transformer_weighting(
-            X_meta_train, X_meta_test, model_type, args.transformer_weight
+            from optuna.integration.wandb import WeightsAndBiasesCallback
+            wandb_callback = WeightsAndBiasesCallback(
+                metric_name="combined_metric",
+                wandb_kwargs={"project": args.wandb_project, "name": args.wandb_run_name}
+            )
+            callbacks.append(wandb_callback)
+        except Exception as e:
+            pass
+
+    # Create a single Train/Validation split to be used for all trials (80/20)
+    log.info("Creating internal validation split (20%) for trial training and evaluation.")
+    X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
+        X_meta_train, y_meta_train, test_size=0.20, stratify=y_meta_train, random_state=RANDOM_STATE
+    )
+
+    def single_run_objective(trial):
+        return objective(
+            trial, X_train_split, y_train_split, X_val_split, y_val_split, 
+            n_classes, indicator_cols, args.transformer_weight
         )
+
+    study.optimize(single_run_objective, n_trials=args.n_trials, callbacks=callbacks)
+
+    log.info("--- Tuning Complete ---")
+    log.info(f"Best hyperparameters found: {study.best_params}")
+    
+    params_file = os.path.join(OUTPUT_DIR, 'best_classical_metalearner_params.json')
+    with open(params_file, 'w') as f:
+        json.dump(study.best_params, f, indent=4)
         
-        fit_with_weights(model, X_train_mod, y_meta_train, model_type, f_weights)
-        
+    # --- Final Test Set Evaluation using the absolutely best model ---
+    global best_trial_data
+    best_model = best_trial_data['model']
+    
+    if best_model is not None:
         import joblib
         model_path = os.path.join(OUTPUT_DIR, 'classical_meta_learner_final.joblib')
-        joblib.dump(model, model_path)
-        log.info(f"Final classical meta-learner saved to {model_path}!")
+        joblib.dump(best_model, model_path)
+        log.info(f"\nFinal best classical meta-learner saved to {model_path}!")
 
-        # Perform evaluation on inference test set if provided
-        if not X_test_mod.empty and not y_meta_test.empty:
-            test_preds = model.predict(X_test_mod)
-            acc = accuracy_score(y_meta_test, test_preds)
+        if not X_meta_test.empty and not y_meta_test.empty:
+            
+            # Must apply the exact same transformation to the test set!
+            _, X_test_mod, _ = apply_transformer_weighting(
+                X_meta_train, X_meta_test, study.best_params['meta_model'], args.transformer_weight
+            )
+            
+            test_preds = best_model.predict(X_test_mod)
+            test_metrics = compute_metrics(y_meta_test, test_preds, n_classes)
             
             # Save test confusion matrix diagram
             log.info("--- Generating Test Set Confusion Matrix Diagram ---")
-            from sklearn.metrics import confusion_matrix
-            import matplotlib.pyplot as plt
-            import seaborn as sns
             test_cm = confusion_matrix(y_meta_test, test_preds, labels=list(range(n_classes)))
             plt.figure(figsize=(10, 8))
             sns.heatmap(test_cm, annot=True, fmt='d', cmap='Blues', 
                         xticklabels=le.classes_, yticklabels=le.classes_)
-            plt.title('Test Set Confusion Matrix')
+            plt.title(f"Test Set Confusion Matrix ({study.best_params['meta_model']})")
             plt.xlabel('Predicted Label')
             plt.ylabel('True Label')
             plt.tight_layout()
@@ -387,38 +342,30 @@ def main():
             plt.close()
             log.info(f"Saved test confusion matrix diagram to {test_cm_path}")
 
-            from sklearn.metrics import precision_recall_fscore_support
-            precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
-                y_meta_test, test_preds, average='macro', zero_division=0)
-            precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
-                y_meta_test, test_preds, average='weighted', zero_division=0)
-            
-            log.info(f"Evaluation on supplied target tests -> Meta-Test accuracy: {acc:.4f}")
-            log.info(f"Classification Report:\n{classification_report(y_meta_test, test_preds)}")
+            log.info("--- Final Test Set Evaluation ---")
+            log.info(f"  -> Accuracy:       {test_metrics['accuracy']:.4f}")
+            log.info(f"  -> Weighted P:     {test_metrics['precision_weighted']:.4f}")
+            log.info(f"  -> Weighted R:     {test_metrics['recall_weighted']:.4f}")
+            log.info(f"  -> Weighted S:     {test_metrics['specificity_weighted']:.4f}")
+            log.info(f"  -> Weighted F1:    {test_metrics['f1_weighted']:.4f}")
+            log.info(f"\nClassification Report:\n{classification_report(y_meta_test, test_preds)}")
             
             if args.use_wandb:
                 try:
                     import wandb
-                    wandb.log({
-                        "test/accuracy": float(acc),
-                        "test/precision_macro": float(precision_macro),
-                        "test/recall_macro": float(recall_macro),
-                        "test/f1_macro": float(f1_macro),
-                        "test/precision_weighted": float(precision_weighted),
-                        "test/recall_weighted": float(recall_weighted),
-                        "test/f1_weighted": float(f1_weighted)
-                    })
-                    log.info("Logged evaluation metrics to WandB.")
+                    wandb_metrics = {f"test/{k}": float(v) for k, v in test_metrics.items() if isinstance(v, (int, float))}
+                    wandb.log(wandb_metrics)
+                    log.info("Logged all test metrics to WandB.")
                 except Exception as e:
                     log.warning(f"Failed to log test metrics to WandB: {e}")
 
-        # Finish wandb run
-        if args.use_wandb:
-            try:
-                import wandb
-                wandb.finish()
-            except Exception:
-                pass
+    # Finish wandb run
+    if args.use_wandb:
+        try:
+            import wandb
+            wandb.finish()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()
