@@ -155,7 +155,7 @@ def train_transformer_meta_learner(
         else:
             patience_counter += 1
             
-        if patience_counter >= patience:
+        if patience > 0 and patience_counter >= patience:
             stopped_epoch = epoch
             log.info(f"Early stopping at epoch {stopped_epoch}. Restoring best weights from epoch {best_epoch} (F1: {best_score:.4f}).")
             break
