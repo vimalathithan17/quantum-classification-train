@@ -80,7 +80,7 @@ def train_mlp_with_custom_early_stopping(X_train, y_train, X_val, y_val, n_class
             patience_counter += 1
             
         # Stop if no improvement for 'patience' epochs
-        if patience_counter >= patience:
+        if patience > 0 and patience_counter >= patience:
             stopped_epoch = epoch
             log.info(f"Early stopping triggered at epoch {stopped_epoch}. Restoring weights from epoch {best_epoch}.")
             break
