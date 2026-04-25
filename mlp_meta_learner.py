@@ -39,7 +39,7 @@ def get_custom_metric(y_true, y_pred, n_classes):
     avg_spec = (m['specificity_macro'] + m['specificity_weighted']) / 2.0
     
     # 0.20/0.20/0.30/0.30 weighting
-    combined = (0.20 * avg_prec) + (0.20 * avg_rec) + (0.30 * avg_spec) + (0.30 * m['accuracy'])
+    combined = m['f1_weighted']
     return combined, m
 
 def train_mlp_with_custom_early_stopping(X_train, y_train, X_val, y_val, n_classes, params, patience=20, tol=1e-4, max_epochs=20000):
