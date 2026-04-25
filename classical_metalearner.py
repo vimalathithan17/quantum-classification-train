@@ -52,12 +52,27 @@ def apply_transformer_weighting(X_train, X_val, model_type, transformer_weight):
                 X_val_out[col] = X_val_out[col] * transformer_weight
 
     elif model_type in ['random_forest', 'catboost']:
-        # Approach 2: Feature Duplication (Force Trees to pick it more via subsampling)
+        # Approach 2: Feature Duplication with UNIQUE column names to prevent CatBoost crash
         num_duplications = int(transformer_weight) - 1
         if num_duplications > 0:
-            X_train_out = pd.concat([X_train_out] + [X_train_out[transformer_cols]] * num_duplications, axis=1)
+            train_dups = []
+            val_dups = []
+            
+            for i in range(num_duplications):
+                # Copy and rename train columns
+                train_dup = X_train_out[transformer_cols].copy()
+                train_dup.columns = [f"{col}_dup_{i}" for col in transformer_cols]
+                train_dups.append(train_dup)
+                
+                # Copy and rename val columns
+                if X_val_out is not None and not X_val_out.empty:
+                    val_dup = X_val_out[transformer_cols].copy()
+                    val_dup.columns = [f"{col}_dup_{i}" for col in transformer_cols]
+                    val_dups.append(val_dup)
+                    
+            X_train_out = pd.concat([X_train_out] + train_dups, axis=1)
             if X_val_out is not None and not X_val_out.empty:
-                X_val_out = pd.concat([X_val_out] + [X_val_out[transformer_cols]] * num_duplications, axis=1)
+                X_val_out = pd.concat([X_val_out] + val_dups, axis=1)
 
     elif model_type in ['xgboost', 'lightgbm']:
         # Approach 1: Explicit Feature Weighting
