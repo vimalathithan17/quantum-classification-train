@@ -120,6 +120,7 @@ def train_transformer_meta_learner(
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     
+    # In-memory Checkpointing Variables
     best_score = -np.inf
     best_weights = None
     best_metrics = None
@@ -144,6 +145,7 @@ def train_transformer_meta_learner(
         # Validation (Monitoring strictly f1_weighted)
         target_score, m_dict, _ = evaluate_model(model, val_loader, n_classes, device)
         
+        # Checkpointing: Save weights if F1 improves
         if target_score >= best_score + tol:
             best_score = target_score
             best_metrics = m_dict
@@ -161,6 +163,7 @@ def train_transformer_meta_learner(
     if stopped_epoch == 0:
         stopped_epoch = max_epochs - 1
         
+    # Restore the checkpointed weights before returning
     if best_weights is not None:
         model.load_state_dict(best_weights)
         
@@ -171,16 +174,17 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, device, patience
     """Optuna objective for tuning the Transformer Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
-    # Expanded search space for larger dimensions
+    # Fix for Optuna dynamic space ValueError: Define the full static space once.
     num_heads = trial.suggest_categorical('num_heads', [2, 4, 8])
+    embed_dim = trial.suggest_categorical('embed_dim', [16, 32, 64, 128, 256, 512])
     
-    # embed_dim must be divisible by num_heads
-    if num_heads == 8:
-        embed_dim = trial.suggest_categorical('embed_dim', [64, 128, 256, 512])
-    elif num_heads == 4:
-        embed_dim = trial.suggest_categorical('embed_dim', [32, 64, 128, 256, 512])
-    else:
-        embed_dim = trial.suggest_categorical('embed_dim', [16, 32, 64, 128, 256])
+    # Immediately prune invalid/unwanted combinations to guide Optuna
+    if embed_dim % num_heads != 0:
+        raise optuna.TrialPruned()
+    if num_heads == 8 and embed_dim < 64:
+        raise optuna.TrialPruned()
+    if num_heads == 2 and embed_dim > 256:
+        raise optuna.TrialPruned()
         
     params = {
         'embed_dim': embed_dim,
