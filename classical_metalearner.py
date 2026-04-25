@@ -34,18 +34,67 @@ from metalearner import (
 # Shared local constants
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'final_model_and_predictions')
 
-def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
+def apply_transformer_weighting(X_train, X_val, model_type, transformer_weight):
+    """Dynamically applies Scaling, Duplication, or Weights array based on algorithm."""
+    transformer_cols = [col for col in X_train.columns if 'Transformer' in str(col)]
+    if not transformer_cols or transformer_weight <= 1.0:
+        return X_train, X_val, None
+
+    X_train_out = X_train.copy()
+    X_val_out = X_val.copy() if X_val is not None and not X_val.empty else X_val
+    feature_weights = None
+
+    if model_type in ['mlp', 'logistic_regression', 'svc']:
+        # Approach 3: Feature Scaling (For gradient/weight-based models)
+        for col in transformer_cols:
+            X_train_out[col] = X_train_out[col] * transformer_weight
+            if X_val_out is not None and not X_val_out.empty:
+                X_val_out[col] = X_val_out[col] * transformer_weight
+
+    elif model_type in ['random_forest', 'catboost']:
+        # Approach 2: Feature Duplication (Force Trees to pick it more via subsampling)
+        num_duplications = int(transformer_weight) - 1
+        if num_duplications > 0:
+            X_train_out = pd.concat([X_train_out] + [X_train_out[transformer_cols]] * num_duplications, axis=1)
+            if X_val_out is not None and not X_val_out.empty:
+                X_val_out = pd.concat([X_val_out] + [X_val_out[transformer_cols]] * num_duplications, axis=1)
+
+    elif model_type in ['xgboost', 'lightgbm']:
+        # Approach 1: Explicit Feature Weighting
+        feature_weights = np.ones(X_train_out.shape[1])
+        for i, col in enumerate(X_train_out.columns):
+            if 'Transformer' in str(col):
+                feature_weights[i] = transformer_weight
+
+    return X_train_out, X_val_out, feature_weights
+
+def fit_with_weights(model, X, y, model_type, feature_weights):
+    """Handles edge cases for scikit-learn wrappers passing explicit feature weights."""
+    if feature_weights is not None:
+        if model_type == 'xgboost':
+            model.fit(X, y, feature_weights=feature_weights)
+        elif model_type == 'lightgbm':
+            try:
+                # LightGBM uses 'feature_weight' via kwargs
+                model.fit(X, y, feature_weight=feature_weights)
+            except TypeError:
+                log.warning("LightGBM version does not support explicit feature_weight kwarg. Running without it.")
+                model.fit(X, y)
+    else:
+        model.fit(X, y)
+
+def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, transformer_weight):
     """Optuna objective function for tuning Classical Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
-    
-    # We don't drop the indicator columns for classical models, we let the trees/logistic learn them directly
-    # So X_train is passed directly
     
     detector = trial.suggest_categorical('meta_model', [
         'lightgbm', 'random_forest', 'logistic_regression', 
         'xgboost', 'catboost', 'mlp', 'svc'
     ])
     
+    # 1. Dynamically route and apply Feature Importance Logic
+    X_train_mod, X_val_mod, f_weights = apply_transformer_weighting(X_train, X_val, detector, transformer_weight)
+
     if detector == 'lightgbm':
         params = {
             'n_estimators': trial.suggest_int('lgb_n_estimators', 50, 500),
@@ -119,8 +168,9 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols):
         }
         model = LogisticRegression(**params)
         
-    model.fit(X_train, y_train)
-    predictions = model.predict(X_val)
+    # 2. Fit and Predict using adapted arrays/weights
+    fit_with_weights(model, X_train_mod, y_train, detector, f_weights)
+    predictions = model.predict(X_val_mod)
     
     # Compute metrics
     from utils.metrics_utils import compute_metrics
@@ -156,25 +206,27 @@ def main():
     # Required arguments
     required = parser.add_argument_group('required arguments')
     required.add_argument('--preds_dir', nargs='+', required=True,
-                         help='Directories with base learner predictions (can specify multiple)')
+                          help='Directories with base learner predictions (can specify multiple)')
     required.add_argument('--indicator_file', type=str, required=True,
-                         help='Parquet file with indicator features and labels')
+                          help='Parquet file with indicator features and labels')
     
     # Operation mode
     mode_args = parser.add_argument_group('operation mode')
     mode_args.add_argument('--mode', type=str, default='train', choices=['train', 'tune'],
-                          help='Mode: train final model or tune hyperparameters (default: train)')
+                           help='Mode: train final model or tune hyperparameters (default: train)')
     mode_args.add_argument('--n_trials', type=int, default=50,
-                          help='Number of Optuna trials for tuning (default: 50)')
+                           help='Number of Optuna trials for tuning (default: 50)')
+    mode_args.add_argument('--transformer_weight', type=float, default=5.0,
+                           help='Weight multiplier to prioritize Transformer base model predictions (default: 5.0)')
 
     # Logging config
     log_args = parser.add_argument_group('logging')
     log_args.add_argument('--use_wandb', action='store_true',
-                         help='Enable W&B experiment tracking')
+                          help='Enable W&B experiment tracking')
     log_args.add_argument('--wandb_project', type=str, default=None,
-                         help='W&B project name')
+                          help='W&B project name')
     log_args.add_argument('--wandb_run_name', type=str, default=None,
-                         help='W&B run name')
+                          help='W&B run name')
                           
     args = parser.parse_args()
 
@@ -238,7 +290,10 @@ def main():
                 X_val_fold = X_meta_train.iloc[val_idx]
                 y_val_fold = y_meta_train.iloc[val_idx]
                 
-                fold_score = objective(trial, X_train_fold, y_train_fold, X_val_fold, y_val_fold, n_classes, indicator_cols)
+                fold_score = objective(
+                    trial, X_train_fold, y_train_fold, X_val_fold, y_val_fold, 
+                    n_classes, indicator_cols, args.transformer_weight
+                )
                 scores.append(fold_score)
             
             return np.mean(scores)
@@ -323,7 +378,12 @@ def main():
             model_params['random_state'] = RANDOM_STATE
             model = LogisticRegression(**model_params)
             
-        model.fit(X_meta_train, y_meta_train)
+        # Apply transformation strategies to Final Training/Test sets
+        X_train_mod, X_test_mod, f_weights = apply_transformer_weighting(
+            X_meta_train, X_meta_test, model_type, args.transformer_weight
+        )
+        
+        fit_with_weights(model, X_train_mod, y_meta_train, model_type, f_weights)
         
         import joblib
         model_path = os.path.join(OUTPUT_DIR, 'classical_meta_learner_final.joblib')
@@ -331,8 +391,8 @@ def main():
         log.info(f"Final classical meta-learner saved to {model_path}!")
 
         # Perform evaluation on inference test set if provided
-        if not X_meta_test.empty and not y_meta_test.empty:
-            test_preds = model.predict(X_meta_test)
+        if not X_test_mod.empty and not y_meta_test.empty:
+            test_preds = model.predict(X_test_mod)
             acc = accuracy_score(y_meta_test, test_preds)
             
             # Save test confusion matrix diagram
