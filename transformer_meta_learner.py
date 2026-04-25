@@ -293,7 +293,10 @@ def main():
         log.info("--- Evaluating Final Best Transformer Meta-Learner ---")
         
         # Re-instantiate the best model
-        best_params = best_trial_data['params']
+        best_params = copy.deepcopy(best_trial_data['params'])
+        if 'lr' in best_params:
+            best_params.pop('lr') # Remove learning rate so it doesn't crash the constructor
+            
         best_model = MultimodalFusionClassifier(
             modality_dims=modality_dims,
             num_classes=n_classes,
