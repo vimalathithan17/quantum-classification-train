@@ -260,9 +260,9 @@ def main():
             pass
 
     # Create a single Train/Validation split to be used for all trials
-    log.info("Creating internal validation split (10%) for trial training and early stopping.")
+    log.info("Creating internal validation split (20%) for trial training and early stopping.")
     X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-        X_meta_train, y_meta_train, test_size=0.10, stratify=y_meta_train, random_state=RANDOM_STATE
+        X_meta_train, y_meta_train, test_size=0.20, stratify=y_meta_train, random_state=RANDOM_STATE
     )
 
     def single_run_objective(trial):
