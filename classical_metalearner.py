@@ -14,7 +14,6 @@ from optuna.storages.journal import JournalFileBackend
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import StratifiedKFold
 
@@ -44,7 +43,7 @@ def apply_transformer_weighting(X_train, X_val, model_type, transformer_weight):
     X_val_out = X_val.copy() if X_val is not None and not X_val.empty else X_val
     feature_weights = None
 
-    if model_type in ['mlp', 'logistic_regression', 'svc']:
+    if model_type in [ 'logistic_regression', 'svc']:
         # Approach 3: Feature Scaling (For gradient/weight-based models)
         for col in transformer_cols:
             X_train_out[col] = X_train_out[col] * transformer_weight
@@ -141,22 +140,6 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, indicator_cols, 
             'verbose': False,
         }
         model = CatBoostClassifier(**params)
-    elif detector == 'mlp':
-        layer_choice = trial.suggest_categorical('mlp_layers', ['64', '128', '64_32', '128_64'])
-        layer_mapping = {
-            '64': (64,),
-            '128': (128,),
-            '64_32': (64, 32),
-            '128_64': (128, 64)
-        }
-        params = {
-            'hidden_layer_sizes': layer_mapping[layer_choice],
-            'learning_rate_init': trial.suggest_float('mlp_lr', 1e-4, 1e-1, log=True),
-            'alpha': trial.suggest_float('mlp_alpha', 1e-5, 1e-1, log=True),
-            'random_state': RANDOM_STATE,
-            'max_iter': 10000,
-        }
-        model = MLPClassifier(**params)
     elif detector == 'svc':
         params = {
             'C': trial.suggest_float('svc_C', 1e-2, 100.0, log=True),
@@ -355,30 +338,6 @@ def main():
             model_params['random_seed'] = RANDOM_STATE
             model_params['verbose'] = False
             model = CatBoostClassifier(**model_params)
-        elif model_type == 'mlp':
-            model_params = {k.replace('mlp_', ''): v for k,v in best_params.items() if k.startswith('mlp_')}
-            if 'lr' in model_params:
-                model_params['learning_rate_init'] = model_params.pop('lr')
-            if 'layers' in model_params:
-                layer_choice = model_params.pop('layers')
-                layer_mapping = {
-                    '64': (64,),
-                    '128': (128,),
-                    '64_32': (64, 32),
-                    '128_64': (128, 64)
-                }
-                if isinstance(layer_choice, list):
-                    model_params['hidden_layer_sizes'] = tuple(layer_choice)
-                elif isinstance(layer_choice, tuple):
-                    model_params['hidden_layer_sizes'] = layer_choice
-                elif layer_choice in layer_mapping:
-                    model_params['hidden_layer_sizes'] = layer_mapping[layer_choice]
-                else:
-                    # Default fallback
-                    model_params['hidden_layer_sizes'] = (64, 32)
-            model_params['random_state'] = RANDOM_STATE
-            model_params['max_iter'] = 10000
-            model = MLPClassifier(**model_params)
         elif model_type == 'svc':
             model_params = {k.replace('svc_', ''): v for k,v in best_params.items() if k.startswith('svc_')}
             model_params['random_state'] = RANDOM_STATE
