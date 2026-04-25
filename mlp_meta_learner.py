@@ -111,20 +111,11 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
     layer_choice = trial.suggest_categorical('mlp_layers', layer_choices)
     
     layer_mapping = {
-        '64': (64,),
-        '128': (128,),
-        '256': (256,),
-        '64_32': (64, 32),
-        '128_64': (128, 64),
-        '128_64_32': (128, 64, 32),
-        '256_128': (256, 128),
-        '256_128_64': (256, 128, 64),
-        '64_64': (64, 64),
-        '128_128': (128, 128),
-        '256_256': (256, 256),
-        '32_64': (32, 64),
-        '64_128': (64, 128),
-        '128_256': (128, 256)
+        '64': (64,), '128': (128,), '256': (256,),
+        '64_32': (64, 32), '128_64': (128, 64), '128_64_32': (128, 64, 32),
+        '256_128': (256, 128), '256_128_64': (256, 128, 64),
+        '64_64': (64, 64), '128_128': (128, 128), '256_256': (256, 256),
+        '32_64': (32, 64), '64_128': (64, 128), '128_256': (128, 256)
     }
     
     params = {
@@ -190,6 +181,8 @@ def main():
                             help='Number of epochs with no improvement before stopping (default: 20)')
     train_args.add_argument('--tol', type=float, default=1e-4,
                             help='Minimum interval of difference for an improvement to count (default: 0.0001)')
+    train_args.add_argument('--transformer_weight', type=float, default=5.0,
+                            help='Weight multiplier to prioritize Transformer base model predictions (default: 5.0)')
 
     # Logging config
     log_args = parser.add_argument_group('logging')
@@ -211,6 +204,16 @@ def main():
 
     n_classes = len(le.classes_)
     log.info(f"Meta-learner will be trained on {n_classes} classes.")
+
+    # --- Feature Scaling: Give More Weight to Transformer Outputs for MLP ---
+    transformer_cols = [col for col in X_meta_train.columns if 'Transformer' in str(col)]
+    if transformer_cols and args.transformer_weight > 1.0:
+        log.info(f"Scaling {len(transformer_cols)} Transformer columns by {args.transformer_weight}x to increase importance.")
+        for col in transformer_cols:
+            X_meta_train[col] = X_meta_train[col] * args.transformer_weight
+            if not X_meta_test.empty:
+                X_meta_test[col] = X_meta_test[col] * args.transformer_weight
+    # ------------------------------------------------------------------------
 
     global OUTPUT_DIR
     OUTPUT_DIR = ensure_writable_results_dir(OUTPUT_DIR)
