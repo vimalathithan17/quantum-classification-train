@@ -163,7 +163,8 @@ def objective(trial, train_data, y_train_tensor, val_data, y_val_tensor, modalit
         'embed_dim': embed_dim,
         'num_heads': num_heads,
         'num_layers': trial.suggest_int('num_layers', 1, 4),
-        'dim_feedforward': trial.suggest_categorical('dim_feedforward', [128, 256, 512, 1024]),
+        # Added 8, 16, 32, and 64 dim_feedforward options for intense bottlenecks
+        'dim_feedforward': trial.suggest_categorical('dim_feedforward', [8, 16, 32, 64, 128, 256, 512, 1024]),
         'dropout': trial.suggest_float('dropout', 0.1, 0.5),
         'use_cls_token': trial.suggest_categorical('use_cls_token', [True, False]),
         'lr': trial.suggest_float('lr', 1e-5, 1e-2, log=True),
