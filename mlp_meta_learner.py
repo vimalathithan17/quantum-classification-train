@@ -13,6 +13,7 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 
 # Import centralized logger and assembly utilities
 from logging_utils import log
@@ -104,21 +105,31 @@ def objective(trial, X_train, y_train, X_val, y_val, n_classes, patience, tol, m
     """Optuna objective function for tuning the MLP Meta-Learner."""
     log.info(f"--- Starting Trial {trial.number} ---")
     
-    # Layer choices including 256 neuron variations
+    # Expanded Layer choices including 8 and 16 neuron variations
     layer_choices = [
-        '64', '128', '256',                                 # Single layers
-        '64_32', '128_64', '128_64_32', '256_128', '256_128_64', # Funnel (Decreasing)
-        '64_64', '128_128', '256_256',                      # Constant
-        '32_64', '64_128', '128_256'                        # Expanding
+        '8', '16', '32', '64', '128', '256',                                            # Single layers
+        '128_16', '128_8', '64_16', '64_8', '32_16', '32_8', '16_8',                    # Steep Funnels
+        '64_32', '64_32_16', '64_32_8', '128_64', '128_64_32', '256_128', '256_128_64', # Gradual Funnels
+        '8_8', '16_16', '32_32', '64_64', '128_128', '256_256',                         # Constant
+        '8_16', '16_32', '32_64', '64_128', '128_256'                                   # Expanding
     ]
     layer_choice = trial.suggest_categorical('mlp_layers', layer_choices)
     
     layer_mapping = {
-        '64': (64,), '128': (128,), '256': (256,),
-        '64_32': (64, 32), '128_64': (128, 64), '128_64_32': (128, 64, 32),
+        '8': (8,), '16': (16,), '32': (32,), '64': (64,), '128': (128,), '256': (256,),
+        
+        '128_16': (128, 16), '128_8': (128, 8), '64_16': (64, 16), '64_8': (64, 8), 
+        '32_16': (32, 16), '32_8': (32, 8), '16_8': (16, 8),
+        
+        '64_32': (64, 32), '64_32_16': (64, 32, 16), '64_32_8': (64, 32, 8), 
+        '128_64': (128, 64), '128_64_32': (128, 64, 32),
         '256_128': (256, 128), '256_128_64': (256, 128, 64),
-        '64_64': (64, 64), '128_128': (128, 128), '256_256': (256, 256),
-        '32_64': (32, 64), '64_128': (64, 128), '128_256': (128, 256)
+        
+        '8_8': (8, 8), '16_16': (16, 16), '32_32': (32, 32), '64_64': (64, 64), 
+        '128_128': (128, 128), '256_256': (256, 256),
+        
+        '8_16': (8, 16), '16_32': (16, 32), '32_64': (32, 64), 
+        '64_128': (64, 128), '128_256': (128, 256)
     }
     
     params = {
@@ -225,7 +236,6 @@ def main():
     global OUTPUT_DIR
     OUTPUT_DIR = ensure_writable_results_dir(OUTPUT_DIR)
 
-    # Initialize wandb if requested
     if args.use_wandb:
         try:
             import wandb
@@ -322,7 +332,6 @@ def main():
                 except Exception as e:
                     log.warning(f"Failed to log test metrics to WandB: {e}")
 
-    # Finish wandb run
     if args.use_wandb:
         try:
             import wandb
